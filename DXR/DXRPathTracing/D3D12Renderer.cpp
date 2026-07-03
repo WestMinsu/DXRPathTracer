@@ -1,5 +1,7 @@
 #include "D3D12Renderer.h"
 
+#include "RayTracingManager.h"
+
 #include <iomanip>
 #include <sstream>
 
@@ -30,6 +32,7 @@ namespace
 D3D12Renderer::~D3D12Renderer()
 {
     WaitForGpu();
+    m_rayTracingManager.reset();
 
     if (m_fenceEvent)
     {
@@ -57,6 +60,10 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         return false;
 
     if (!CreateFence())
+        return false;
+
+    m_rayTracingManager.reset(new RayTracingManager());
+    if (!m_rayTracingManager->Initialize(m_hWnd, m_device.Get(), m_width, m_height))
         return false;
 
     return true;
@@ -122,7 +129,13 @@ void D3D12Renderer::Resize(UINT width, UINT height)
     m_width = width;
     m_height = height;
     m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
-    CreateRenderTargetViews();
+    if (!CreateRenderTargetViews())
+        return;
+
+    if (m_rayTracingManager)
+    {
+        m_rayTracingManager->Resize(m_width, m_height);
+    }
 }
 
 void D3D12Renderer::WaitForGpu()
@@ -172,8 +185,7 @@ bool D3D12Renderer::CreateDevice()
         if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
             continue;
 
-        hr = D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&m_device));
-        if (SUCCEEDED(hr))
+        if (CreateDxrDevice(adapter.Get()))
             return true;
     }
 
@@ -182,8 +194,32 @@ bool D3D12Renderer::CreateDevice()
     if (ReportFailure(hr, L"WARP adapter lookup failed."))
         return false;
 
-    hr = D3D12CreateDevice(warpAdapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&m_device));
-    return !ReportFailure(hr, L"D3D12 device creation failed.");
+    if (CreateDxrDevice(warpAdapter.Get()))
+        return true;
+
+    ReportFailure(E_FAIL, L"D3D12 raytracing tier 1.0 is not supported on this system.");
+    return false;
+}
+
+bool D3D12Renderer::CreateDxrDevice(IDXGIAdapter* adapter)
+{
+    Microsoft::WRL::ComPtr<ID3D12Device> baseDevice;
+    HRESULT hr = D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&baseDevice));
+    if (FAILED(hr))
+        return false;
+
+    Microsoft::WRL::ComPtr<ID3D12Device5> dxrDevice;
+    hr = baseDevice.As(&dxrDevice);
+    if (FAILED(hr))
+        return false;
+
+    D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5 = {};
+    hr = dxrDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &options5, sizeof(options5));
+    if (FAILED(hr) || options5.RaytracingTier < D3D12_RAYTRACING_TIER_1_0)
+        return false;
+
+    m_device = dxrDevice;
+    return true;
 }
 
 bool D3D12Renderer::CreateCommandObjects()

@@ -1,10 +1,13 @@
 #pragma once
 
 #include <array>
+#include <memory>
 #include <Windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
+
+#include "RayTracingManager.h"
 
 class D3D12Renderer
 {
@@ -21,6 +24,7 @@ private:
     static constexpr DXGI_FORMAT c_backBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
     bool CreateDevice();
+    bool CreateDxrDevice(IDXGIAdapter* adapter);
     bool CreateCommandObjects();
     bool CreateSwapChain();
     bool CreateRenderTargetViews();
@@ -40,12 +44,13 @@ private:
     HANDLE m_fenceEvent = nullptr;
 
     Microsoft::WRL::ComPtr<IDXGIFactory4> m_factory;
-    Microsoft::WRL::ComPtr<ID3D12Device> m_device;
+    Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> m_commandQueue;
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_commandAllocator;
-    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_commandList;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> m_commandList;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> m_swapChain;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, c_frameCount> m_renderTargets;
     Microsoft::WRL::ComPtr<ID3D12Fence> m_fence;
+    std::unique_ptr<RayTracingManager> m_rayTracingManager;
 };
