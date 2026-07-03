@@ -89,6 +89,26 @@ bool RayTracingManager::Initialize(HWND hWnd, ID3D12Device5* device, UINT width,
     return true;
 }
 
+void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
+{
+    if (!commandList || !m_stateObject || !m_rayGenShaderTable || !m_descriptorHeap)
+        return;
+
+    ID3D12DescriptorHeap* descriptorHeaps[] = { m_descriptorHeap.Get() };
+    commandList->SetDescriptorHeaps(1, descriptorHeaps);
+    commandList->SetComputeRootSignature(m_globalRootSignature.Get());
+    commandList->SetComputeRootDescriptorTable(0, m_descriptorHeap->GetGPUDescriptorHandleForHeapStart());
+    commandList->SetPipelineState1(m_stateObject.Get());
+
+    D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
+    dispatchDesc.RayGenerationShaderRecord.StartAddress = m_rayGenShaderTable->GetGPUVirtualAddress();
+    dispatchDesc.RayGenerationShaderRecord.SizeInBytes = m_rayGenShaderRecordSize;
+    dispatchDesc.Width = m_width;
+    dispatchDesc.Height = m_height;
+    dispatchDesc.Depth = 1;
+
+    commandList->DispatchRays(&dispatchDesc);
+}
 bool RayTracingManager::Resize(UINT width, UINT height)
 {
     if (width == 0 || height == 0)

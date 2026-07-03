@@ -12,6 +12,7 @@ class RayTracingManager
 public:
     bool Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height);
     bool Resize(UINT width, UINT height);
+    void DispatchRays(ID3D12GraphicsCommandList4* commandList);
 
     ID3D12Resource* GetOutputResource() const { return m_outputTexture.Get(); }
     ID3D12DescriptorHeap* GetDescriptorHeap() const { return m_descriptorHeap.Get(); }

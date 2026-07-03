@@ -10,9 +10,7 @@
 
 namespace
 {
-    constexpr float c_clearColor[] = { 0.00f, 0.00f, 1.00f, 1.0f };
-
-    UINT GetClientWidth(HWND hWnd)
+UINT GetClientWidth(HWND hWnd)
     {
         RECT rect = {};
         GetClientRect(hWnd, &rect);
@@ -71,7 +69,7 @@ bool D3D12Renderer::Initialize(HWND hWnd)
 
 void D3D12Renderer::Render()
 {
-    if (!m_swapChain || m_width == 0 || m_height == 0)
+    if (!m_swapChain || !m_rayTracingManager || m_width == 0 || m_height == 0)
         return;
 
     HRESULT hr = m_commandAllocator->Reset();
@@ -82,12 +80,37 @@ void D3D12Renderer::Render()
     if (ReportFailure(hr, L"Command list reset failed."))
         return;
 
-    TransitionCurrentBackBuffer(D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+    m_rayTracingManager->DispatchRays(m_commandList.Get());
 
-    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = GetCurrentRenderTargetView();
-    m_commandList->ClearRenderTargetView(rtvHandle, c_clearColor, 0, nullptr);
+    ID3D12Resource* raytracingOutput = m_rayTracingManager->GetOutputResource();
 
-    TransitionCurrentBackBuffer(D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+    D3D12_RESOURCE_BARRIER preCopyBarriers[2] = {};
+    preCopyBarriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    preCopyBarriers[0].Transition.pResource = raytracingOutput;
+    preCopyBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    preCopyBarriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    preCopyBarriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    preCopyBarriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    preCopyBarriers[1].Transition.pResource = m_renderTargets[m_frameIndex].Get();
+    preCopyBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    preCopyBarriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+    preCopyBarriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_commandList->ResourceBarrier(2, preCopyBarriers);
+
+    m_commandList->CopyResource(m_renderTargets[m_frameIndex].Get(), raytracingOutput);
+
+    D3D12_RESOURCE_BARRIER postCopyBarriers[2] = {};
+    postCopyBarriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    postCopyBarriers[0].Transition.pResource = raytracingOutput;
+    postCopyBarriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    postCopyBarriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    postCopyBarriers[0].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    postCopyBarriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    postCopyBarriers[1].Transition.pResource = m_renderTargets[m_frameIndex].Get();
+    postCopyBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    postCopyBarriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+    postCopyBarriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_commandList->ResourceBarrier(2, postCopyBarriers);
 
     hr = m_commandList->Close();
     if (ReportFailure(hr, L"Command list close failed."))
@@ -330,24 +353,7 @@ void D3D12Renderer::ReleaseRenderTargets()
     }
 }
 
-D3D12_CPU_DESCRIPTOR_HANDLE D3D12Renderer::GetCurrentRenderTargetView() const
-{
-    D3D12_CPU_DESCRIPTOR_HANDLE handle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    handle.ptr += static_cast<SIZE_T>(m_frameIndex) * m_rtvDescriptorSize;
-    return handle;
-}
 
-void D3D12Renderer::TransitionCurrentBackBuffer(D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
-{
-    D3D12_RESOURCE_BARRIER barrier = {};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = m_renderTargets[m_frameIndex].Get();
-    barrier.Transition.StateBefore = before;
-    barrier.Transition.StateAfter = after;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-
-    m_commandList->ResourceBarrier(1, &barrier);
-}
 
 bool D3D12Renderer::ReportFailure(HRESULT hr, const wchar_t* message) const
 {
