@@ -10,6 +10,8 @@
 class RayTracingManager
 {
 public:
+    ~RayTracingManager();
+
     bool Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height);
     bool Resize(UINT width, UINT height);
     void DispatchRays(ID3D12GraphicsCommandList4* commandList);
@@ -30,7 +32,27 @@ private:
     bool CreateOutputTexture();
     bool CreateGlobalRootSignature();
     bool CreateRaytracingPipelineState();
-    bool CreateRayGenShaderTable();
+    bool CreateShaderTables();
+    bool CreateShaderTable(const wchar_t* shaderExportName,
+        ID3D12Resource** shaderTable,
+        UINT* shaderRecordSize,
+        const wchar_t* debugName);
+    bool CreateAccelerationStructures();
+    bool CreateBuildCommandObjects();
+    bool CreateStaticGeometryBuffers();
+    bool BuildBottomLevelAccelerationStructure();
+    bool BuildTopLevelAccelerationStructure();
+    bool ExecuteBuildCommandListAndWait();
+    bool CreateUploadBuffer(const void* data,
+        UINT64 sizeInBytes,
+        const wchar_t* debugName,
+        Microsoft::WRL::ComPtr<ID3D12Resource>& resource);
+    bool CreateAccelerationStructureBuffer(UINT64 sizeInBytes,
+        const wchar_t* debugName,
+        Microsoft::WRL::ComPtr<ID3D12Resource>& resource);
+    bool CreateScratchBuffer(UINT64 sizeInBytes,
+        const wchar_t* debugName,
+        Microsoft::WRL::ComPtr<ID3D12Resource>& resource);
     bool LoadCompiledShader(std::vector<std::uint8_t>& shaderBytes) const;
     bool ReadBinaryFile(const std::wstring& path, std::vector<std::uint8_t>& bytes) const;
     std::wstring GetCompiledShaderPath() const;
@@ -42,6 +64,10 @@ private:
     UINT m_height = 0;
     UINT m_descriptorSize = 0;
     UINT m_rayGenShaderRecordSize = 0;
+    UINT m_missShaderRecordSize = 0;
+    UINT m_hitGroupShaderRecordSize = 0;
+    UINT64 m_buildFenceValue = 0;
+    HANDLE m_buildFenceEvent = nullptr;
 
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;
@@ -49,4 +75,18 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_globalRootSignature;
     Microsoft::WRL::ComPtr<ID3D12StateObject> m_stateObject;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_rayGenShaderTable;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_missShaderTable;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_hitGroupShaderTable;
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue> m_buildCommandQueue;
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator> m_buildCommandAllocator;
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> m_buildCommandList;
+    Microsoft::WRL::ComPtr<ID3D12Fence> m_buildFence;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_vertexBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_indexBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_bottomLevelAS;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_topLevelAS;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_instanceDescBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_blasScratchBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_tlasScratchBuffer;
 };
+

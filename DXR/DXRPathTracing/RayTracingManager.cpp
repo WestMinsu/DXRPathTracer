@@ -9,14 +9,33 @@
 namespace
 {
     constexpr wchar_t c_rayGenShaderName[] = L"MyRaygenShader_RadianceRay";
+    constexpr wchar_t c_closestHitShaderName[] = L"MyClosestHitShader_RadianceRay";
+    constexpr wchar_t c_missShaderName[] = L"MyMissShader_RadianceRay";
+    constexpr wchar_t c_hitGroupName[] = L"MyHitGroup_Triangle_RadianceRay";
     constexpr wchar_t c_compiledShaderRelativePath[] = L"Shaders\\Raytracing.dxil";
+    constexpr float c_triangleHalfSize = 0.5f;
+    constexpr float c_triangleDepth = 1.0f;
+    constexpr UINT c_vertexCount = 3;
+    constexpr UINT c_indexCount = 3;
+
+    struct Vertex
+    {
+        float position[3];
+    };
 
     UINT AlignUp(UINT value, UINT alignment)
     {
         return (value + alignment - 1) & ~(alignment - 1);
     }
 
-    D3D12_RESOURCE_DESC CreateBufferDesc(UINT64 sizeInBytes)
+    UINT64 AlignUp64(UINT64 value, UINT64 alignment)
+    {
+        return (value + alignment - 1) & ~(alignment - 1);
+    }
+
+    D3D12_RESOURCE_DESC CreateBufferDesc(
+        UINT64 sizeInBytes,
+        D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE)
     {
         D3D12_RESOURCE_DESC desc = {};
         desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -29,7 +48,7 @@ namespace
         desc.SampleDesc.Count = 1;
         desc.SampleDesc.Quality = 0;
         desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+        desc.Flags = flags;
         return desc;
     }
 
@@ -61,6 +80,15 @@ namespace
     };
 }
 
+RayTracingManager::~RayTracingManager()
+{
+    if (m_buildFenceEvent)
+    {
+        CloseHandle(m_buildFenceEvent);
+        m_buildFenceEvent = nullptr;
+    }
+}
+
 bool RayTracingManager::Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height)
 {
     m_hWnd = hWnd;
@@ -83,7 +111,10 @@ bool RayTracingManager::Initialize(HWND hWnd, ID3D12Device5* device, UINT width,
     if (!CreateRaytracingPipelineState())
         return false;
 
-    if (!CreateRayGenShaderTable())
+    if (!CreateShaderTables())
+        return false;
+
+    if (!CreateAccelerationStructures())
         return false;
 
     return true;
@@ -91,24 +122,35 @@ bool RayTracingManager::Initialize(HWND hWnd, ID3D12Device5* device, UINT width,
 
 void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
 {
-    if (!commandList || !m_stateObject || !m_rayGenShaderTable || !m_descriptorHeap)
+    if (!commandList || !m_stateObject || !m_rayGenShaderTable || !m_missShaderTable ||
+        !m_hitGroupShaderTable || !m_descriptorHeap || !m_topLevelAS)
+    {
         return;
+    }
 
     ID3D12DescriptorHeap* descriptorHeaps[] = { m_descriptorHeap.Get() };
     commandList->SetDescriptorHeaps(1, descriptorHeaps);
     commandList->SetComputeRootSignature(m_globalRootSignature.Get());
     commandList->SetComputeRootDescriptorTable(0, m_descriptorHeap->GetGPUDescriptorHandleForHeapStart());
+    commandList->SetComputeRootShaderResourceView(1, m_topLevelAS->GetGPUVirtualAddress());
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
     dispatchDesc.RayGenerationShaderRecord.StartAddress = m_rayGenShaderTable->GetGPUVirtualAddress();
     dispatchDesc.RayGenerationShaderRecord.SizeInBytes = m_rayGenShaderRecordSize;
+    dispatchDesc.MissShaderTable.StartAddress = m_missShaderTable->GetGPUVirtualAddress();
+    dispatchDesc.MissShaderTable.SizeInBytes = m_missShaderRecordSize;
+    dispatchDesc.MissShaderTable.StrideInBytes = m_missShaderRecordSize;
+    dispatchDesc.HitGroupTable.StartAddress = m_hitGroupShaderTable->GetGPUVirtualAddress();
+    dispatchDesc.HitGroupTable.SizeInBytes = m_hitGroupShaderRecordSize;
+    dispatchDesc.HitGroupTable.StrideInBytes = m_hitGroupShaderRecordSize;
     dispatchDesc.Width = m_width;
     dispatchDesc.Height = m_height;
     dispatchDesc.Depth = 1;
 
     commandList->DispatchRays(&dispatchDesc);
 }
+
 bool RayTracingManager::Resize(UINT width, UINT height)
 {
     if (width == 0 || height == 0)
@@ -185,15 +227,20 @@ bool RayTracingManager::CreateGlobalRootSignature()
     outputRange.RegisterSpace = 0;
     outputRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParameter = {};
-    rootParameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-    rootParameter.DescriptorTable.NumDescriptorRanges = 1;
-    rootParameter.DescriptorTable.pDescriptorRanges = &outputRange;
-    rootParameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    D3D12_ROOT_PARAMETER rootParameters[2] = {};
+    rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParameters[0].DescriptorTable.NumDescriptorRanges = 1;
+    rootParameters[0].DescriptorTable.pDescriptorRanges = &outputRange;
+    rootParameters[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParameters[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParameters[1].Descriptor.ShaderRegister = 0;
+    rootParameters[1].Descriptor.RegisterSpace = 0;
+    rootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
-    rootSignatureDesc.NumParameters = 1;
-    rootSignatureDesc.pParameters = &rootParameter;
+    rootSignatureDesc.NumParameters = _countof(rootParameters);
+    rootSignatureDesc.pParameters = rootParameters;
     rootSignatureDesc.NumStaticSamplers = 0;
     rootSignatureDesc.pStaticSamplers = nullptr;
     rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
@@ -226,16 +273,27 @@ bool RayTracingManager::CreateRaytracingPipelineState()
     if (!LoadCompiledShader(shaderBytes))
         return false;
 
-    D3D12_EXPORT_DESC rayGenExport = {};
-    rayGenExport.Name = c_rayGenShaderName;
-    rayGenExport.ExportToRename = nullptr;
-    rayGenExport.Flags = D3D12_EXPORT_FLAG_NONE;
+    D3D12_EXPORT_DESC shaderExports[3] = {};
+    shaderExports[0].Name = c_rayGenShaderName;
+    shaderExports[0].ExportToRename = nullptr;
+    shaderExports[0].Flags = D3D12_EXPORT_FLAG_NONE;
+    shaderExports[1].Name = c_closestHitShaderName;
+    shaderExports[1].ExportToRename = nullptr;
+    shaderExports[1].Flags = D3D12_EXPORT_FLAG_NONE;
+    shaderExports[2].Name = c_missShaderName;
+    shaderExports[2].ExportToRename = nullptr;
+    shaderExports[2].Flags = D3D12_EXPORT_FLAG_NONE;
 
     D3D12_DXIL_LIBRARY_DESC dxilLibraryDesc = {};
     dxilLibraryDesc.DXILLibrary.pShaderBytecode = shaderBytes.data();
     dxilLibraryDesc.DXILLibrary.BytecodeLength = shaderBytes.size();
-    dxilLibraryDesc.NumExports = 1;
-    dxilLibraryDesc.pExports = &rayGenExport;
+    dxilLibraryDesc.NumExports = _countof(shaderExports);
+    dxilLibraryDesc.pExports = shaderExports;
+
+    D3D12_HIT_GROUP_DESC hitGroupDesc = {};
+    hitGroupDesc.HitGroupExport = c_hitGroupName;
+    hitGroupDesc.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
+    hitGroupDesc.ClosestHitShaderImport = c_closestHitShaderName;
 
     D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
     shaderConfig.MaxPayloadSizeInBytes = c_shaderPayloadSize;
@@ -247,15 +305,17 @@ bool RayTracingManager::CreateRaytracingPipelineState()
     D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig = {};
     pipelineConfig.MaxTraceRecursionDepth = c_maxRecursionDepth;
 
-    D3D12_STATE_SUBOBJECT subobjects[4] = {};
+    D3D12_STATE_SUBOBJECT subobjects[5] = {};
     subobjects[0].Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
     subobjects[0].pDesc = &dxilLibraryDesc;
-    subobjects[1].Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
-    subobjects[1].pDesc = &shaderConfig;
-    subobjects[2].Type = D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE;
-    subobjects[2].pDesc = &globalRootSignature;
-    subobjects[3].Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
-    subobjects[3].pDesc = &pipelineConfig;
+    subobjects[1].Type = D3D12_STATE_SUBOBJECT_TYPE_HIT_GROUP;
+    subobjects[1].pDesc = &hitGroupDesc;
+    subobjects[2].Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_SHADER_CONFIG;
+    subobjects[2].pDesc = &shaderConfig;
+    subobjects[3].Type = D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE;
+    subobjects[3].pDesc = &globalRootSignature;
+    subobjects[4].Type = D3D12_STATE_SUBOBJECT_TYPE_RAYTRACING_PIPELINE_CONFIG;
+    subobjects[4].pDesc = &pipelineConfig;
 
     D3D12_STATE_OBJECT_DESC stateObjectDesc = {};
     stateObjectDesc.Type = D3D12_STATE_OBJECT_TYPE_RAYTRACING_PIPELINE;
@@ -270,25 +330,50 @@ bool RayTracingManager::CreateRaytracingPipelineState()
     return true;
 }
 
-bool RayTracingManager::CreateRayGenShaderTable()
+bool RayTracingManager::CreateShaderTables()
+{
+    return CreateShaderTable(
+        c_rayGenShaderName,
+        m_rayGenShaderTable.ReleaseAndGetAddressOf(),
+        &m_rayGenShaderRecordSize,
+        L"RayGen shader table") &&
+        CreateShaderTable(
+            c_missShaderName,
+            m_missShaderTable.ReleaseAndGetAddressOf(),
+            &m_missShaderRecordSize,
+            L"Miss shader table") &&
+        CreateShaderTable(
+            c_hitGroupName,
+            m_hitGroupShaderTable.ReleaseAndGetAddressOf(),
+            &m_hitGroupShaderRecordSize,
+            L"HitGroup shader table");
+}
+
+bool RayTracingManager::CreateShaderTable(
+    const wchar_t* shaderExportName,
+    ID3D12Resource** shaderTable,
+    UINT* shaderRecordSize,
+    const wchar_t* debugName)
 {
     Microsoft::WRL::ComPtr<ID3D12StateObjectProperties> stateObjectProperties;
     HRESULT hr = m_stateObject.As(&stateObjectProperties);
     if (ReportFailure(hr, L"Raytracing state object properties query failed."))
         return false;
 
-    void* shaderIdentifier = stateObjectProperties->GetShaderIdentifier(c_rayGenShaderName);
+    void* shaderIdentifier = stateObjectProperties->GetShaderIdentifier(shaderExportName);
     if (!shaderIdentifier)
     {
-        ReportMessage(L"RayGen shader identifier was not found in the state object.");
+        std::wstring message = L"Shader identifier was not found: ";
+        message += shaderExportName;
+        ReportMessage(message);
         return false;
     }
 
-    m_rayGenShaderRecordSize = AlignUp(
+    *shaderRecordSize = AlignUp(
         D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES,
         D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
     const UINT shaderTableSize = AlignUp(
-        m_rayGenShaderRecordSize,
+        *shaderRecordSize,
         D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
 
     const D3D12_HEAP_PROPERTIES heapProperties = CreateHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
@@ -300,22 +385,318 @@ bool RayTracingManager::CreateRayGenShaderTable()
         &bufferDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ,
         nullptr,
-        IID_PPV_ARGS(&m_rayGenShaderTable));
-    if (ReportFailure(hr, L"RayGen shader table creation failed."))
+        IID_PPV_ARGS(shaderTable));
+    if (ReportFailure(hr, L"Shader table creation failed."))
         return false;
 
-    m_rayGenShaderTable->SetName(L"RayGen shader table");
+    (*shaderTable)->SetName(debugName);
 
     void* mappedData = nullptr;
     D3D12_RANGE readRange = { 0, 0 };
-    hr = m_rayGenShaderTable->Map(0, &readRange, &mappedData);
-    if (ReportFailure(hr, L"RayGen shader table mapping failed."))
+    hr = (*shaderTable)->Map(0, &readRange, &mappedData);
+    if (ReportFailure(hr, L"Shader table mapping failed."))
         return false;
 
     std::memset(mappedData, 0, shaderTableSize);
     std::memcpy(mappedData, shaderIdentifier, D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
-    m_rayGenShaderTable->Unmap(0, nullptr);
+    (*shaderTable)->Unmap(0, nullptr);
 
+    return true;
+}
+
+bool RayTracingManager::CreateAccelerationStructures()
+{
+    if (!CreateBuildCommandObjects())
+        return false;
+
+    if (!CreateStaticGeometryBuffers())
+        return false;
+
+    HRESULT hr = m_buildCommandAllocator->Reset();
+    if (ReportFailure(hr, L"AS build command allocator reset failed."))
+        return false;
+
+    hr = m_buildCommandList->Reset(m_buildCommandAllocator.Get(), nullptr);
+    if (ReportFailure(hr, L"AS build command list reset failed."))
+        return false;
+
+    if (!BuildBottomLevelAccelerationStructure())
+        return false;
+
+    D3D12_RESOURCE_BARRIER blasBarrier = {};
+    blasBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    blasBarrier.UAV.pResource = m_bottomLevelAS.Get();
+    m_buildCommandList->ResourceBarrier(1, &blasBarrier);
+
+    if (!BuildTopLevelAccelerationStructure())
+        return false;
+
+    D3D12_RESOURCE_BARRIER tlasBarrier = {};
+    tlasBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    tlasBarrier.UAV.pResource = m_topLevelAS.Get();
+    m_buildCommandList->ResourceBarrier(1, &tlasBarrier);
+
+    const bool buildSucceeded = ExecuteBuildCommandListAndWait();
+    m_blasScratchBuffer.Reset();
+    m_tlasScratchBuffer.Reset();
+    return buildSucceeded;
+}
+
+bool RayTracingManager::CreateBuildCommandObjects()
+{
+    D3D12_COMMAND_QUEUE_DESC queueDesc = {};
+    queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+
+    HRESULT hr = m_device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&m_buildCommandQueue));
+    if (ReportFailure(hr, L"AS build command queue creation failed."))
+        return false;
+
+    hr = m_device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_buildCommandAllocator));
+    if (ReportFailure(hr, L"AS build command allocator creation failed."))
+        return false;
+
+    hr = m_device->CreateCommandList(
+        0,
+        D3D12_COMMAND_LIST_TYPE_DIRECT,
+        m_buildCommandAllocator.Get(),
+        nullptr,
+        IID_PPV_ARGS(&m_buildCommandList));
+    if (ReportFailure(hr, L"AS build command list creation failed."))
+        return false;
+
+    hr = m_buildCommandList->Close();
+    if (ReportFailure(hr, L"Initial AS build command list close failed."))
+        return false;
+
+    hr = m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_buildFence));
+    if (ReportFailure(hr, L"AS build fence creation failed."))
+        return false;
+
+    m_buildFenceEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    if (!m_buildFenceEvent)
+    {
+        ReportMessage(L"AS build fence event creation failed.");
+        return false;
+    }
+
+    return true;
+}
+
+bool RayTracingManager::CreateStaticGeometryBuffers()
+{
+    const Vertex vertices[c_vertexCount] =
+    {
+        { { 0.0f,                c_triangleHalfSize, c_triangleDepth } },
+        { { c_triangleHalfSize, -c_triangleHalfSize, c_triangleDepth } },
+        { { -c_triangleHalfSize, -c_triangleHalfSize, c_triangleDepth } }
+    };
+
+    const std::uint16_t indices[c_indexCount] = { 0, 1, 2 };
+
+    if (!CreateUploadBuffer(vertices, sizeof(vertices), L"Raytracing triangle vertex buffer", m_vertexBuffer))
+        return false;
+
+    return CreateUploadBuffer(indices, sizeof(indices), L"Raytracing triangle index buffer", m_indexBuffer);
+}
+
+bool RayTracingManager::BuildBottomLevelAccelerationStructure()
+{
+    D3D12_RAYTRACING_GEOMETRY_DESC geometryDesc = {};
+    geometryDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+    geometryDesc.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+    geometryDesc.Triangles.VertexBuffer.StartAddress = m_vertexBuffer->GetGPUVirtualAddress();
+    geometryDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(Vertex);
+    geometryDesc.Triangles.VertexCount = c_vertexCount;
+    geometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+    geometryDesc.Triangles.IndexBuffer = m_indexBuffer->GetGPUVirtualAddress();
+    geometryDesc.Triangles.IndexCount = c_indexCount;
+    geometryDesc.Triangles.IndexFormat = DXGI_FORMAT_R16_UINT;
+    geometryDesc.Triangles.Transform3x4 = 0;
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
+    inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+    inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+    inputs.NumDescs = 1;
+    inputs.pGeometryDescs = &geometryDesc;
+
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo = {};
+    m_device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
+    if (prebuildInfo.ResultDataMaxSizeInBytes == 0)
+    {
+        ReportMessage(L"BLAS prebuild info returned an empty result size.");
+        return false;
+    }
+
+    m_blasScratchBuffer.Reset();
+    if (!CreateScratchBuffer(prebuildInfo.ScratchDataSizeInBytes, L"BLAS scratch buffer", m_blasScratchBuffer))
+        return false;
+
+    if (!CreateAccelerationStructureBuffer(prebuildInfo.ResultDataMaxSizeInBytes, L"Bottom level acceleration structure", m_bottomLevelAS))
+        return false;
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {};
+    buildDesc.Inputs = inputs;
+    buildDesc.ScratchAccelerationStructureData = m_blasScratchBuffer->GetGPUVirtualAddress();
+    buildDesc.DestAccelerationStructureData = m_bottomLevelAS->GetGPUVirtualAddress();
+
+    m_buildCommandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+    return true;
+}
+
+bool RayTracingManager::BuildTopLevelAccelerationStructure()
+{
+    D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {};
+    instanceDesc.Transform[0][0] = 1.0f;
+    instanceDesc.Transform[1][1] = 1.0f;
+    instanceDesc.Transform[2][2] = 1.0f;
+    instanceDesc.InstanceMask = 0xFF;
+    instanceDesc.AccelerationStructure = m_bottomLevelAS->GetGPUVirtualAddress();
+
+    if (!CreateUploadBuffer(&instanceDesc, sizeof(instanceDesc), L"TLAS instance descriptor", m_instanceDescBuffer))
+        return false;
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
+    inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+    inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+    inputs.NumDescs = 1;
+    inputs.InstanceDescs = m_instanceDescBuffer->GetGPUVirtualAddress();
+
+    D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo = {};
+    m_device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
+    if (prebuildInfo.ResultDataMaxSizeInBytes == 0)
+    {
+        ReportMessage(L"TLAS prebuild info returned an empty result size.");
+        return false;
+    }
+
+    m_tlasScratchBuffer.Reset();
+    if (!CreateScratchBuffer(prebuildInfo.ScratchDataSizeInBytes, L"TLAS scratch buffer", m_tlasScratchBuffer))
+        return false;
+
+    if (!CreateAccelerationStructureBuffer(prebuildInfo.ResultDataMaxSizeInBytes, L"Top level acceleration structure", m_topLevelAS))
+        return false;
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {};
+    buildDesc.Inputs = inputs;
+    buildDesc.ScratchAccelerationStructureData = m_tlasScratchBuffer->GetGPUVirtualAddress();
+    buildDesc.DestAccelerationStructureData = m_topLevelAS->GetGPUVirtualAddress();
+
+    m_buildCommandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+    return true;
+}
+
+bool RayTracingManager::ExecuteBuildCommandListAndWait()
+{
+    HRESULT hr = m_buildCommandList->Close();
+    if (ReportFailure(hr, L"AS build command list close failed."))
+        return false;
+
+    ID3D12CommandList* commandLists[] = { m_buildCommandList.Get() };
+    m_buildCommandQueue->ExecuteCommandLists(1, commandLists);
+
+    const UINT64 fenceToWaitFor = ++m_buildFenceValue;
+    hr = m_buildCommandQueue->Signal(m_buildFence.Get(), fenceToWaitFor);
+    if (ReportFailure(hr, L"AS build fence signal failed."))
+        return false;
+
+    if (m_buildFence->GetCompletedValue() < fenceToWaitFor)
+    {
+        hr = m_buildFence->SetEventOnCompletion(fenceToWaitFor, m_buildFenceEvent);
+        if (ReportFailure(hr, L"AS build fence event setup failed."))
+            return false;
+
+        WaitForSingleObject(m_buildFenceEvent, INFINITE);
+    }
+
+    return true;
+}
+
+bool RayTracingManager::CreateUploadBuffer(
+    const void* data,
+    UINT64 sizeInBytes,
+    const wchar_t* debugName,
+    Microsoft::WRL::ComPtr<ID3D12Resource>& resource)
+{
+    const D3D12_HEAP_PROPERTIES heapProperties = CreateHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    const D3D12_RESOURCE_DESC bufferDesc = CreateBufferDesc(sizeInBytes);
+
+    HRESULT hr = m_device->CreateCommittedResource(
+        &heapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&resource));
+    if (ReportFailure(hr, L"Upload buffer creation failed."))
+        return false;
+
+    resource->SetName(debugName);
+
+    void* mappedData = nullptr;
+    D3D12_RANGE readRange = { 0, 0 };
+    hr = resource->Map(0, &readRange, &mappedData);
+    if (ReportFailure(hr, L"Upload buffer mapping failed."))
+        return false;
+
+    std::memcpy(mappedData, data, static_cast<std::size_t>(sizeInBytes));
+    resource->Unmap(0, nullptr);
+
+    return true;
+}
+
+bool RayTracingManager::CreateAccelerationStructureBuffer(
+    UINT64 sizeInBytes,
+    const wchar_t* debugName,
+    Microsoft::WRL::ComPtr<ID3D12Resource>& resource)
+{
+    const UINT64 alignedSize = AlignUp64(
+        sizeInBytes,
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
+    const D3D12_HEAP_PROPERTIES heapProperties = CreateHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    const D3D12_RESOURCE_DESC bufferDesc = CreateBufferDesc(
+        alignedSize,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+    HRESULT hr = m_device->CreateCommittedResource(
+        &heapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE,
+        nullptr,
+        IID_PPV_ARGS(&resource));
+    if (ReportFailure(hr, L"Acceleration structure buffer creation failed."))
+        return false;
+
+    resource->SetName(debugName);
+    return true;
+}
+
+bool RayTracingManager::CreateScratchBuffer(
+    UINT64 sizeInBytes,
+    const wchar_t* debugName,
+    Microsoft::WRL::ComPtr<ID3D12Resource>& resource)
+{
+    const UINT64 alignedSize = AlignUp64(
+        sizeInBytes,
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BYTE_ALIGNMENT);
+    const D3D12_HEAP_PROPERTIES heapProperties = CreateHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    const D3D12_RESOURCE_DESC bufferDesc = CreateBufferDesc(
+        alignedSize,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+
+    HRESULT hr = m_device->CreateCommittedResource(
+        &heapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        nullptr,
+        IID_PPV_ARGS(&resource));
+    if (ReportFailure(hr, L"Scratch buffer creation failed."))
+        return false;
+
+    resource->SetName(debugName);
     return true;
 }
 
@@ -405,3 +786,5 @@ void RayTracingManager::ReportMessage(const std::wstring& message) const
 {
     MessageBoxW(m_hWnd, message.c_str(), L"DXR Error", MB_OK | MB_ICONERROR);
 }
+
+
