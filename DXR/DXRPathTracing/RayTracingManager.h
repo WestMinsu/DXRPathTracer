@@ -15,8 +15,11 @@ public:
     bool Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height);
     bool Resize(UINT width, UINT height);
     void DispatchRays(ID3D12GraphicsCommandList4* commandList);
-    void SetShowNormalColor(bool showNormalColor) { m_showNormalColor = showNormalColor; }
+    void SetShowNormalColor(bool showNormalColor);
     void SetMaxBounce(UINT maxBounce);
+    void SetEnableAccumulation(bool enableAccumulation);
+    void ResetAccumulation() { m_accumulatedSampleCount = 0; }
+    UINT GetAccumulatedSampleCount() const { return m_accumulatedSampleCount; }
 
     ID3D12Resource* GetOutputResource() const { return m_outputTexture.Get(); }
     ID3D12DescriptorHeap* GetDescriptorHeap() const { return m_descriptorHeap.Get(); }
@@ -27,6 +30,7 @@ public:
 
 private:
     static constexpr DXGI_FORMAT c_outputFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    static constexpr DXGI_FORMAT c_accumulationFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
     static constexpr UINT c_shaderPayloadSize = 4 * sizeof(float);
     static constexpr UINT c_shaderAttributeSize = 2 * sizeof(float);
     static constexpr UINT c_maxBounce = 8;
@@ -70,13 +74,16 @@ private:
     UINT m_missShaderRecordSize = 0;
     UINT m_hitGroupShaderRecordSize = 0;
     UINT m_frameIndex = 0;
+    UINT m_accumulatedSampleCount = 0;
     UINT64 m_buildFenceValue = 0;
     HANDLE m_buildFenceEvent = nullptr;
     bool m_showNormalColor = true;
+    bool m_enableAccumulation = true;
     UINT m_maxBounce = 3;
 
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_accumulationTexture;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_descriptorHeap;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_globalRootSignature;
     Microsoft::WRL::ComPtr<ID3D12StateObject> m_stateObject;

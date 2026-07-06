@@ -46,6 +46,8 @@ namespace
         UINT showNormalColor;
         UINT frameIndex;
         UINT maxBounce;
+        UINT sampleIndex;
+        UINT enableAccumulation;
     };
 
     UINT AlignUp(UINT value, UINT alignment)
@@ -148,7 +150,7 @@ bool RayTracingManager::Initialize(HWND hWnd, ID3D12Device5* device, UINT width,
 void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
 {
     if (!commandList || !m_stateObject || !m_rayGenShaderTable || !m_missShaderTable ||
-        !m_hitGroupShaderTable || !m_descriptorHeap || !m_topLevelAS)
+        !m_hitGroupShaderTable || !m_descriptorHeap || !m_topLevelAS || !m_accumulationTexture)
     {
         return;
     }
@@ -160,11 +162,14 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     commandList->SetComputeRootShaderResourceView(1, m_topLevelAS->GetGPUVirtualAddress());
     commandList->SetComputeRootShaderResourceView(2, m_vertexBuffer->GetGPUVirtualAddress());
     commandList->SetComputeRootShaderResourceView(3, m_indexBuffer->GetGPUVirtualAddress());
+    const bool shouldAccumulate = m_enableAccumulation && !m_showNormalColor;
     RenderSettingsConstants renderSettings = {};
     renderSettings.showNormalColor = m_showNormalColor ? 1u : 0u;
     renderSettings.frameIndex = m_frameIndex++;
     renderSettings.maxBounce = m_maxBounce;
-    commandList->SetComputeRoot32BitConstants(4, 3, &renderSettings, 0);
+    renderSettings.sampleIndex = shouldAccumulate ? m_accumulatedSampleCount : 0u;
+    renderSettings.enableAccumulation = shouldAccumulate ? 1u : 0u;
+    commandList->SetComputeRoot32BitConstants(4, 5, &renderSettings, 0);
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -181,6 +186,11 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     dispatchDesc.Depth = 1;
 
     commandList->DispatchRays(&dispatchDesc);
+
+    if (shouldAccumulate)
+    {
+        ++m_accumulatedSampleCount;
+    }
 }
 
 bool RayTracingManager::Resize(UINT width, UINT height)
@@ -190,18 +200,45 @@ bool RayTracingManager::Resize(UINT width, UINT height)
 
     m_width = width;
     m_height = height;
+    ResetAccumulation();
     return CreateOutputTexture();
+}
+
+void RayTracingManager::SetShowNormalColor(bool showNormalColor)
+{
+    if (m_showNormalColor == showNormalColor)
+        return;
+
+    m_showNormalColor = showNormalColor;
+    ResetAccumulation();
 }
 
 void RayTracingManager::SetMaxBounce(UINT maxBounce)
 {
-    if (maxBounce < 1)
+    UINT clampedMaxBounce = maxBounce;
+    if (clampedMaxBounce < 1)
     {
-        m_maxBounce = 1;
-        return;
+        clampedMaxBounce = 1;
+    }
+    else if (clampedMaxBounce > c_maxBounce)
+    {
+        clampedMaxBounce = c_maxBounce;
     }
 
-    m_maxBounce = maxBounce > c_maxBounce ? c_maxBounce : maxBounce;
+    if (m_maxBounce == clampedMaxBounce)
+        return;
+
+    m_maxBounce = clampedMaxBounce;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetEnableAccumulation(bool enableAccumulation)
+{
+    if (m_enableAccumulation == enableAccumulation)
+        return;
+
+    m_enableAccumulation = enableAccumulation;
+    ResetAccumulation();
 }
 
 bool RayTracingManager::CreateOutputTexture()
@@ -209,7 +246,7 @@ bool RayTracingManager::CreateOutputTexture()
     if (!m_descriptorHeap)
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-        heapDesc.NumDescriptors = 1;
+        heapDesc.NumDescriptors = 2;
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
@@ -221,6 +258,7 @@ bool RayTracingManager::CreateOutputTexture()
     }
 
     m_outputTexture.Reset();
+    m_accumulationTexture.Reset();
 
     D3D12_RESOURCE_DESC textureDesc = {};
     textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -248,15 +286,42 @@ bool RayTracingManager::CreateOutputTexture()
 
     m_outputTexture->SetName(L"Raytracing output texture");
 
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-    uavDesc.Format = c_outputFormat;
-    uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    D3D12_RESOURCE_DESC accumulationDesc = textureDesc;
+    accumulationDesc.Format = c_accumulationFormat;
 
+    hr = m_device->CreateCommittedResource(
+        &heapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &accumulationDesc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        nullptr,
+        IID_PPV_ARGS(&m_accumulationTexture));
+    if (ReportFailure(hr, L"Raytracing accumulation texture creation failed."))
+        return false;
+
+    m_accumulationTexture->SetName(L"Raytracing accumulation texture");
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC outputUavDesc = {};
+    outputUavDesc.Format = c_outputFormat;
+    outputUavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE uavHandle = m_descriptorHeap->GetCPUDescriptorHandleForHeapStart();
     m_device->CreateUnorderedAccessView(
         m_outputTexture.Get(),
         nullptr,
-        &uavDesc,
-        m_descriptorHeap->GetCPUDescriptorHandleForHeapStart());
+        &outputUavDesc,
+        uavHandle);
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC accumulationUavDesc = {};
+    accumulationUavDesc.Format = c_accumulationFormat;
+    accumulationUavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+
+    uavHandle.ptr += m_descriptorSize;
+    m_device->CreateUnorderedAccessView(
+        m_accumulationTexture.Get(),
+        nullptr,
+        &accumulationUavDesc,
+        uavHandle);
 
     return true;
 }
@@ -265,7 +330,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
 {
     D3D12_DESCRIPTOR_RANGE outputRange = {};
     outputRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    outputRange.NumDescriptors = 1;
+    outputRange.NumDescriptors = 2;
     outputRange.BaseShaderRegister = 0;
     outputRange.RegisterSpace = 0;
     outputRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
@@ -294,7 +359,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 3;
+    rootParameters[4].Constants.Num32BitValues = 5;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};

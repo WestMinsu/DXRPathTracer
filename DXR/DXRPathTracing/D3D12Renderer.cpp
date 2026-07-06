@@ -83,6 +83,7 @@ void D3D12Renderer::Render()
     BuildImGuiFrame();
     m_rayTracingManager->SetShowNormalColor(m_showNormalColor);
     m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
+    m_rayTracingManager->SetEnableAccumulation(m_enableAccumulation);
 
     HRESULT hr = m_commandAllocator->Reset();
     if (ReportFailure(hr, L"Command allocator reset failed."))
@@ -439,7 +440,16 @@ void D3D12Renderer::BuildImGuiFrame()
     ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin("DXR Debug");
     ImGui::Checkbox("Show normal color", &m_showNormalColor);
+    ImGui::Checkbox("Accumulate samples", &m_enableAccumulation);
     ImGui::SliderInt("Max Bounce", &m_maxBounce, 1, 8);
+    if (ImGui::Button("Reset samples") && m_rayTracingManager)
+    {
+        m_rayTracingManager->ResetAccumulation();
+    }
+    const UINT accumulatedSamples = m_rayTracingManager
+        ? m_rayTracingManager->GetAccumulatedSampleCount()
+        : 0u;
+    ImGui::Text("Samples: %u", accumulatedSamples);
     const ImGuiIO& io = ImGui::GetIO();
     const float frameTimeMs = io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f;
     ImGui::Text("Frame: %.2f ms (%.1f FPS)", frameTimeMs, io.Framerate);

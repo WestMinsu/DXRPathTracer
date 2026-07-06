@@ -48,6 +48,7 @@ private:
     HANDLE m_fenceEvent = nullptr;
     bool m_imguiInitialized = false;
     bool m_showNormalColor = false;
+    bool m_enableAccumulation = false;
     int m_maxBounce = 3;
 
     Microsoft::WRL::ComPtr<IDXGIFactory4> m_factory;

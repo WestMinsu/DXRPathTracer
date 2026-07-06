@@ -21,6 +21,7 @@ static const float3 c_diffuseAlbedo = float3(1.0f, 0.0f, 1.0f);
 static const float3 c_floorAlbedo = float3(0.75f, 0.75f, 0.75f);
 
 RWTexture2D<float4> g_output : register(u0);
+RWTexture2D<float4> g_accumulation : register(u1);
 RaytracingAccelerationStructure g_scene : register(t0);
 StructuredBuffer<Vertex> g_vertices : register(t1);
 StructuredBuffer<uint> g_indices : register(t2);
@@ -30,6 +31,8 @@ cbuffer RenderSettings : register(b0)
     uint g_showNormalColor;
     uint g_frameIndex;
     uint g_maxBounce;
+    uint g_sampleIndex;
+    uint g_enableAccumulation;
 };
 
 uint CreateRandomSeed(uint depth, uint primitiveIndex)
@@ -103,7 +106,20 @@ void MyRaygenShader_RadianceRay()
 
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
 
-    g_output[launchIndex] = float4(payload.color, 1.0f);
+    if (g_enableAccumulation == 0)
+    {
+        g_output[launchIndex] = float4(payload.color, 1.0f);
+        return;
+    }
+
+    float3 accumulatedColor = payload.color;
+    if (g_sampleIndex > 0)
+    {
+        accumulatedColor += g_accumulation[launchIndex].rgb;
+    }
+
+    g_accumulation[launchIndex] = float4(accumulatedColor, 1.0f);
+    g_output[launchIndex] = float4(accumulatedColor / float(g_sampleIndex + 1), 1.0f);
 }
 
 [shader("closesthit")]
