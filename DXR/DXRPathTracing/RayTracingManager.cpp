@@ -27,7 +27,6 @@ namespace
         float position[3];
     };
 
-
     Vertex MakeCubeVertex(float x, float y, float z)
     {
         const float rotatedX = x * c_cubeCosY + z * c_cubeSinY;
@@ -37,6 +36,13 @@ namespace
 
         return { { rotatedX, finalY, finalZ } };
     }
+
+    struct RenderSettingsConstants
+    {
+        UINT showNormalColor;
+        UINT frameIndex;
+    };
+
     UINT AlignUp(UINT value, UINT alignment)
     {
         return (value + alignment - 1) & ~(alignment - 1);
@@ -149,8 +155,10 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     commandList->SetComputeRootShaderResourceView(1, m_topLevelAS->GetGPUVirtualAddress());
     commandList->SetComputeRootShaderResourceView(2, m_vertexBuffer->GetGPUVirtualAddress());
     commandList->SetComputeRootShaderResourceView(3, m_indexBuffer->GetGPUVirtualAddress());
-    const UINT showNormalColor = m_showNormalColor ? 1u : 0u;
-    commandList->SetComputeRoot32BitConstants(4, 1, &showNormalColor, 0);
+    RenderSettingsConstants renderSettings = {};
+    renderSettings.showNormalColor = m_showNormalColor ? 1u : 0u;
+    renderSettings.frameIndex = m_frameIndex++;
+    commandList->SetComputeRoot32BitConstants(4, 2, &renderSettings, 0);
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -269,7 +277,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 1;
+    rootParameters[4].Constants.Num32BitValues = 2;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};

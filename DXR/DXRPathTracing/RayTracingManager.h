@@ -28,7 +28,7 @@ private:
     static constexpr DXGI_FORMAT c_outputFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     static constexpr UINT c_shaderPayloadSize = 4 * sizeof(float);
     static constexpr UINT c_shaderAttributeSize = 2 * sizeof(float);
-    static constexpr UINT c_maxRecursionDepth = 1;
+    static constexpr UINT c_maxRecursionDepth = 4;
 
     bool CreateOutputTexture();
     bool CreateGlobalRootSignature();
@@ -67,6 +67,7 @@ private:
     UINT m_rayGenShaderRecordSize = 0;
     UINT m_missShaderRecordSize = 0;
     UINT m_hitGroupShaderRecordSize = 0;
+    UINT m_frameIndex = 0;
     UINT64 m_buildFenceValue = 0;
     HANDLE m_buildFenceEvent = nullptr;
     bool m_showNormalColor = true;
