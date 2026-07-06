@@ -2,6 +2,10 @@
 
 #include "RayTracingManager.h"
 
+#include "ThirdParty/imgui/imgui.h"
+#include "ThirdParty/imgui/backends/imgui_impl_dx12.h"
+#include "ThirdParty/imgui/backends/imgui_impl_win32.h"
+
 #include <iomanip>
 #include <sstream>
 
@@ -10,7 +14,7 @@
 
 namespace
 {
-UINT GetClientWidth(HWND hWnd)
+    UINT GetClientWidth(HWND hWnd)
     {
         RECT rect = {};
         GetClientRect(hWnd, &rect);
@@ -30,6 +34,7 @@ UINT GetClientWidth(HWND hWnd)
 D3D12Renderer::~D3D12Renderer()
 {
     WaitForGpu();
+    ShutdownImGui();
     m_rayTracingManager.reset();
 
     if (m_fenceEvent)
@@ -64,6 +69,9 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     if (!m_rayTracingManager->Initialize(m_hWnd, m_device.Get(), m_width, m_height))
         return false;
 
+    if (!InitializeImGui())
+        return false;
+
     return true;
 }
 
@@ -71,6 +79,9 @@ void D3D12Renderer::Render()
 {
     if (!m_swapChain || !m_rayTracingManager || m_width == 0 || m_height == 0)
         return;
+
+    BuildImGuiFrame();
+    m_rayTracingManager->SetShowNormalColor(m_showNormalColor);
 
     HRESULT hr = m_commandAllocator->Reset();
     if (ReportFailure(hr, L"Command allocator reset failed."))
@@ -108,9 +119,19 @@ void D3D12Renderer::Render()
     postCopyBarriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     postCopyBarriers[1].Transition.pResource = m_renderTargets[m_frameIndex].Get();
     postCopyBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    postCopyBarriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+    postCopyBarriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     postCopyBarriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_commandList->ResourceBarrier(2, postCopyBarriers);
+
+    RenderImGuiDrawData();
+
+    D3D12_RESOURCE_BARRIER presentBarrier = {};
+    presentBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    presentBarrier.Transition.pResource = m_renderTargets[m_frameIndex].Get();
+    presentBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    presentBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
+    presentBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_commandList->ResourceBarrier(1, &presentBarrier);
 
     hr = m_commandList->Close();
     if (ReportFailure(hr, L"Command list close failed."))
@@ -345,6 +366,98 @@ bool D3D12Renderer::CreateFence()
     return true;
 }
 
+bool D3D12Renderer::InitializeImGui()
+{
+    D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+    heapDesc.NumDescriptors = 1;
+    heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+
+    HRESULT hr = m_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_imguiDescriptorHeap));
+    if (ReportFailure(hr, L"ImGui descriptor heap creation failed."))
+        return false;
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    ImGui::StyleColorsDark();
+
+    if (!ImGui_ImplWin32_Init(m_hWnd))
+    {
+        ReportFailure(E_FAIL, L"ImGui Win32 initialization failed.");
+        return false;
+    }
+
+    const D3D12_CPU_DESCRIPTOR_HANDLE cpuHandle = m_imguiDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+    const D3D12_GPU_DESCRIPTOR_HANDLE gpuHandle = m_imguiDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+
+    ImGui_ImplDX12_InitInfo initInfo;
+    initInfo.Device = m_device.Get();
+    initInfo.CommandQueue = m_commandQueue.Get();
+    initInfo.NumFramesInFlight = c_frameCount;
+    initInfo.RTVFormat = c_backBufferFormat;
+    initInfo.SrvDescriptorHeap = m_imguiDescriptorHeap.Get();
+    initInfo.LegacySingleSrvCpuDescriptor = cpuHandle;
+    initInfo.LegacySingleSrvGpuDescriptor = gpuHandle;
+
+    if (!ImGui_ImplDX12_Init(&initInfo))
+    {
+        ImGui_ImplWin32_Shutdown();
+        ImGui::DestroyContext();
+        ReportFailure(E_FAIL, L"ImGui DX12 initialization failed.");
+        return false;
+    }
+
+    m_imguiInitialized = true;
+    return true;
+}
+
+void D3D12Renderer::ShutdownImGui()
+{
+    if (!m_imguiInitialized)
+        return;
+
+    ImGui_ImplDX12_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+    m_imguiInitialized = false;
+    m_imguiDescriptorHeap.Reset();
+}
+
+void D3D12Renderer::BuildImGuiFrame()
+{
+    if (!m_imguiInitialized)
+        return;
+
+    ImGui_ImplDX12_NewFrame();
+    ImGui_ImplWin32_NewFrame();
+    ImGui::NewFrame();
+
+    ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
+    ImGui::Begin("DXR Debug");
+    ImGui::Checkbox("Show normal color", &m_showNormalColor);
+    ImGui::Text("Hit mode: %s", m_showNormalColor ? "normal * 0.5 + 0.5" : "base color");
+    ImGui::Text("Miss: sky blue");
+    ImGui::End();
+
+    ImGui::Render();
+}
+
+void D3D12Renderer::RenderImGuiDrawData()
+{
+    if (!m_imguiInitialized)
+        return;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = GetCurrentRenderTargetView();
+    m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+
+    ID3D12DescriptorHeap* descriptorHeaps[] = { m_imguiDescriptorHeap.Get() };
+    m_commandList->SetDescriptorHeaps(1, descriptorHeaps);
+    ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), m_commandList.Get());
+}
+
 void D3D12Renderer::ReleaseRenderTargets()
 {
     for (auto& renderTarget : m_renderTargets)
@@ -353,7 +466,23 @@ void D3D12Renderer::ReleaseRenderTargets()
     }
 }
 
+D3D12_CPU_DESCRIPTOR_HANDLE D3D12Renderer::GetCurrentRenderTargetView() const
+{
+    D3D12_CPU_DESCRIPTOR_HANDLE handle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<SIZE_T>(m_frameIndex) * m_rtvDescriptorSize;
+    return handle;
+}
 
+void D3D12Renderer::TransitionCurrentBackBuffer(D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
+{
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = m_renderTargets[m_frameIndex].Get();
+    barrier.Transition.StateBefore = before;
+    barrier.Transition.StateAfter = after;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_commandList->ResourceBarrier(1, &barrier);
+}
 
 bool D3D12Renderer::ReportFailure(HRESULT hr, const wchar_t* message) const
 {
@@ -372,3 +501,5 @@ bool D3D12Renderer::ReportFailure(HRESULT hr, const wchar_t* message) const
     MessageBoxW(m_hWnd, text.str().c_str(), L"D3D12 Error", MB_OK | MB_ICONERROR);
     return true;
 }
+
+

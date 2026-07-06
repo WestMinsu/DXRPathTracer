@@ -133,6 +133,10 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     commandList->SetComputeRootSignature(m_globalRootSignature.Get());
     commandList->SetComputeRootDescriptorTable(0, m_descriptorHeap->GetGPUDescriptorHandleForHeapStart());
     commandList->SetComputeRootShaderResourceView(1, m_topLevelAS->GetGPUVirtualAddress());
+    commandList->SetComputeRootShaderResourceView(2, m_vertexBuffer->GetGPUVirtualAddress());
+    commandList->SetComputeRootShaderResourceView(3, m_indexBuffer->GetGPUVirtualAddress());
+    const UINT showNormalColor = m_showNormalColor ? 1u : 0u;
+    commandList->SetComputeRoot32BitConstants(4, 1, &showNormalColor, 0);
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -227,7 +231,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     outputRange.RegisterSpace = 0;
     outputRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParameters[2] = {};
+    D3D12_ROOT_PARAMETER rootParameters[5] = {};
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParameters[0].DescriptorTable.NumDescriptorRanges = 1;
     rootParameters[0].DescriptorTable.pDescriptorRanges = &outputRange;
@@ -237,6 +241,22 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[1].Descriptor.ShaderRegister = 0;
     rootParameters[1].Descriptor.RegisterSpace = 0;
     rootParameters[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParameters[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParameters[2].Descriptor.ShaderRegister = 1;
+    rootParameters[2].Descriptor.RegisterSpace = 0;
+    rootParameters[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParameters[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParameters[3].Descriptor.ShaderRegister = 2;
+    rootParameters[3].Descriptor.RegisterSpace = 0;
+    rootParameters[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParameters[4].Constants.ShaderRegister = 0;
+    rootParameters[4].Constants.RegisterSpace = 0;
+    rootParameters[4].Constants.Num32BitValues = 1;
+    rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
     rootSignatureDesc.NumParameters = _countof(rootParameters);
@@ -486,12 +506,12 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
 {
     const Vertex vertices[c_vertexCount] =
     {
-        { { 0.0f,                c_triangleHalfSize, c_triangleDepth } },
-        { { c_triangleHalfSize, -c_triangleHalfSize, c_triangleDepth } },
-        { { -c_triangleHalfSize, -c_triangleHalfSize, c_triangleDepth } }
+        { { 0.0f,                 c_triangleHalfSize, c_triangleDepth } },
+        { { -c_triangleHalfSize, -c_triangleHalfSize, c_triangleDepth } },
+        { { c_triangleHalfSize,  -c_triangleHalfSize, c_triangleDepth } }
     };
 
-    const std::uint16_t indices[c_indexCount] = { 0, 1, 2 };
+    const std::uint32_t indices[c_indexCount] = { 0, 1, 2 };
 
     if (!CreateUploadBuffer(vertices, sizeof(vertices), L"Raytracing triangle vertex buffer", m_vertexBuffer))
         return false;
@@ -510,7 +530,7 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure()
     geometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
     geometryDesc.Triangles.IndexBuffer = m_indexBuffer->GetGPUVirtualAddress();
     geometryDesc.Triangles.IndexCount = c_indexCount;
-    geometryDesc.Triangles.IndexFormat = DXGI_FORMAT_R16_UINT;
+    geometryDesc.Triangles.IndexFormat = DXGI_FORMAT_R32_UINT;
     geometryDesc.Triangles.Transform3x4 = 0;
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
@@ -786,5 +806,7 @@ void RayTracingManager::ReportMessage(const std::wstring& message) const
 {
     MessageBoxW(m_hWnd, message.c_str(), L"DXR Error", MB_OK | MB_ICONERROR);
 }
+
+
 
 

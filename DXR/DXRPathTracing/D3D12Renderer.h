@@ -29,6 +29,10 @@ private:
     bool CreateSwapChain();
     bool CreateRenderTargetViews();
     bool CreateFence();
+    bool InitializeImGui();
+    void ShutdownImGui();
+    void BuildImGuiFrame();
+    void RenderImGuiDrawData();
     void ReleaseRenderTargets();
 
     D3D12_CPU_DESCRIPTOR_HANDLE GetCurrentRenderTargetView() const;
@@ -42,6 +46,8 @@ private:
     UINT m_rtvDescriptorSize = 0;
     UINT64 m_fenceValue = 0;
     HANDLE m_fenceEvent = nullptr;
+    bool m_imguiInitialized = false;
+    bool m_showNormalColor = true;
 
     Microsoft::WRL::ComPtr<IDXGIFactory4> m_factory;
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
@@ -50,6 +56,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> m_commandList;
     Microsoft::WRL::ComPtr<IDXGISwapChain3> m_swapChain;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_imguiDescriptorHeap;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, c_frameCount> m_renderTargets;
     Microsoft::WRL::ComPtr<ID3D12Fence> m_fence;
     std::unique_ptr<RayTracingManager> m_rayTracingManager;

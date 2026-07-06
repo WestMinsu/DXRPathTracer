@@ -1,6 +1,9 @@
 #include <Windows.h>
 
 #include "D3D12Renderer.h"
+#include "ThirdParty/imgui/imgui.h"
+
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 
 namespace
 {
@@ -37,19 +40,16 @@ int APIENTRY wWinMain(
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
-        else if (gRendererReady)
-        {
-            gRenderer.Render();
-        }
         else
         {
-            WaitMessage();
+            gRenderer.Render();
         }
     }
 
     gRenderer.WaitForGpu();
     return static_cast<int>(msg.wParam);
 }
+
 
 namespace
 {
@@ -101,6 +101,9 @@ namespace
 
     LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
+        if (gRendererReady && ImGui_ImplWin32_WndProcHandler(hWnd, message, wParam, lParam))
+            return TRUE;
+
         switch (message)
         {
         case WM_PAINT:
@@ -128,3 +131,4 @@ namespace
         }
     }
 }
+

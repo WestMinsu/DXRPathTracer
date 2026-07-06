@@ -15,6 +15,7 @@ public:
     bool Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height);
     bool Resize(UINT width, UINT height);
     void DispatchRays(ID3D12GraphicsCommandList4* commandList);
+    void SetShowNormalColor(bool showNormalColor) { m_showNormalColor = showNormalColor; }
 
     ID3D12Resource* GetOutputResource() const { return m_outputTexture.Get(); }
     ID3D12DescriptorHeap* GetDescriptorHeap() const { return m_descriptorHeap.Get(); }
@@ -68,6 +69,7 @@ private:
     UINT m_hitGroupShaderRecordSize = 0;
     UINT64 m_buildFenceValue = 0;
     HANDLE m_buildFenceEvent = nullptr;
+    bool m_showNormalColor = true;
 
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;
@@ -89,4 +91,5 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_blasScratchBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_tlasScratchBuffer;
 };
+
 
