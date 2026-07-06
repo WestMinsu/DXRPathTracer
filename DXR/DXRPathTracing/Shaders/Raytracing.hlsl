@@ -9,7 +9,6 @@ struct RadiancePayload
     uint depth;
 };
 
-static const uint c_maxBounce = 3;
 static const float c_rayTMin = 0.001f;
 static const float c_rayTMax = 1000.0f;
 static const float c_rayOriginBias = 0.001f;
@@ -30,6 +29,7 @@ cbuffer RenderSettings : register(b0)
 {
     uint g_showNormalColor;
     uint g_frameIndex;
+    uint g_maxBounce;
 };
 
 uint CreateRandomSeed(uint depth, uint primitiveIndex)
@@ -132,7 +132,7 @@ void MyClosestHitShader_RadianceRay(
         return;
     }
 
-    if (payload.depth >= c_maxBounce)
+    if (payload.depth >= g_maxBounce)
     {
         payload.color = float3(0.0f, 0.0f, 0.0f);
         return;

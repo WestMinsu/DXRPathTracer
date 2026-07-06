@@ -45,6 +45,7 @@ namespace
     {
         UINT showNormalColor;
         UINT frameIndex;
+        UINT maxBounce;
     };
 
     UINT AlignUp(UINT value, UINT alignment)
@@ -162,7 +163,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     RenderSettingsConstants renderSettings = {};
     renderSettings.showNormalColor = m_showNormalColor ? 1u : 0u;
     renderSettings.frameIndex = m_frameIndex++;
-    commandList->SetComputeRoot32BitConstants(4, 2, &renderSettings, 0);
+    renderSettings.maxBounce = m_maxBounce;
+    commandList->SetComputeRoot32BitConstants(4, 3, &renderSettings, 0);
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -189,6 +191,17 @@ bool RayTracingManager::Resize(UINT width, UINT height)
     m_width = width;
     m_height = height;
     return CreateOutputTexture();
+}
+
+void RayTracingManager::SetMaxBounce(UINT maxBounce)
+{
+    if (maxBounce < 1)
+    {
+        m_maxBounce = 1;
+        return;
+    }
+
+    m_maxBounce = maxBounce > c_maxBounce ? c_maxBounce : maxBounce;
 }
 
 bool RayTracingManager::CreateOutputTexture()
@@ -281,7 +294,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 2;
+    rootParameters[4].Constants.Num32BitValues = 3;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};

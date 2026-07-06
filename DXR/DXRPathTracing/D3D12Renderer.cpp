@@ -82,6 +82,7 @@ void D3D12Renderer::Render()
 
     BuildImGuiFrame();
     m_rayTracingManager->SetShowNormalColor(m_showNormalColor);
+    m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
 
     HRESULT hr = m_commandAllocator->Reset();
     if (ReportFailure(hr, L"Command allocator reset failed."))
@@ -438,8 +439,10 @@ void D3D12Renderer::BuildImGuiFrame()
     ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin("DXR Debug");
     ImGui::Checkbox("Show normal color", &m_showNormalColor);
-    ImGui::Text("Hit mode: %s", m_showNormalColor ? "normal * 0.5 + 0.5" : "base color");
-    ImGui::Text("Miss: sky blue");
+    ImGui::SliderInt("Max Bounce", &m_maxBounce, 1, 8);
+    const ImGuiIO& io = ImGui::GetIO();
+    const float frameTimeMs = io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f;
+    ImGui::Text("Frame: %.2f ms (%.1f FPS)", frameTimeMs, io.Framerate);
     ImGui::End();
 
     ImGui::Render();

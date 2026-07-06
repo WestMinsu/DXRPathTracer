@@ -16,6 +16,7 @@ public:
     bool Resize(UINT width, UINT height);
     void DispatchRays(ID3D12GraphicsCommandList4* commandList);
     void SetShowNormalColor(bool showNormalColor) { m_showNormalColor = showNormalColor; }
+    void SetMaxBounce(UINT maxBounce);
 
     ID3D12Resource* GetOutputResource() const { return m_outputTexture.Get(); }
     ID3D12DescriptorHeap* GetDescriptorHeap() const { return m_descriptorHeap.Get(); }
@@ -28,7 +29,8 @@ private:
     static constexpr DXGI_FORMAT c_outputFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     static constexpr UINT c_shaderPayloadSize = 4 * sizeof(float);
     static constexpr UINT c_shaderAttributeSize = 2 * sizeof(float);
-    static constexpr UINT c_maxRecursionDepth = 4;
+    static constexpr UINT c_maxBounce = 8;
+    static constexpr UINT c_maxRecursionDepth = c_maxBounce + 1;
 
     bool CreateOutputTexture();
     bool CreateGlobalRootSignature();
@@ -71,6 +73,7 @@ private:
     UINT64 m_buildFenceValue = 0;
     HANDLE m_buildFenceEvent = nullptr;
     bool m_showNormalColor = true;
+    UINT m_maxBounce = 3;
 
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;
