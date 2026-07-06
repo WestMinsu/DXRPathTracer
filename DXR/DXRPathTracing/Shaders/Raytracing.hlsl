@@ -13,8 +13,13 @@ static const uint c_maxBounce = 3;
 static const float c_rayTMin = 0.001f;
 static const float c_rayTMax = 1000.0f;
 static const float c_rayOriginBias = 0.001f;
+static const float3 c_cameraPosition = float3(0.0f, 0.15f, -1.2f);
+static const float c_viewPlaneZ = 0.0f;
+static const float c_viewHalfHeight = 0.85f;
 static const float c_twoPi = 6.283185307f;
+static const uint c_cubePrimitiveCount = 12;
 static const float3 c_diffuseAlbedo = float3(1.0f, 0.0f, 1.0f);
+static const float3 c_floorAlbedo = float3(0.75f, 0.75f, 0.75f);
 
 RWTexture2D<float4> g_output : register(u0);
 RaytracingAccelerationStructure g_scene : register(t0);
@@ -69,17 +74,26 @@ float3 SkyColor(float3 direction)
     return lerp(float3(1.0f, 1.0f, 1.0f), float3(0.5f, 0.8f, 1.0f), t);
 }
 
+float3 SurfaceAlbedo(uint primitiveIndex)
+{
+    return primitiveIndex >= c_cubePrimitiveCount ? c_floorAlbedo : c_diffuseAlbedo;
+}
+
 [shader("raygeneration")]
 void MyRaygenShader_RadianceRay()
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
     float2 uv = (float2(launchIndex) + 0.5f) / float2(launchDim);
-    float2 screenPosition = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    float aspectRatio = float(launchDim.x) / float(launchDim.y);
+    float2 screenPosition = float2(
+        (uv.x * 2.0f - 1.0f) * aspectRatio * c_viewHalfHeight,
+        (1.0f - uv.y * 2.0f) * c_viewHalfHeight);
+    float3 viewPosition = float3(screenPosition, c_viewPlaneZ);
 
     RayDesc ray;
-    ray.Origin = float3(screenPosition, 0.0f);
-    ray.Direction = float3(0.0f, 0.0f, 1.0f);
+    ray.Origin = c_cameraPosition;
+    ray.Direction = normalize(viewPosition - c_cameraPosition);
     ray.TMin = c_rayTMin;
     ray.TMax = c_rayTMax;
 
@@ -145,7 +159,7 @@ void MyClosestHitShader_RadianceRay(
     bouncePayload.depth = payload.depth + 1;
 
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
-    payload.color = c_diffuseAlbedo * bouncePayload.color;
+    payload.color = SurfaceAlbedo(PrimitiveIndex()) * bouncePayload.color;
 }
 
 [shader("miss")]

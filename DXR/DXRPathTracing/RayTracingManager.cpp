@@ -19,8 +19,12 @@ namespace
     constexpr float c_cubeSinY = 0.573576436f;
     constexpr float c_cubeCosX = 0.939692621f;
     constexpr float c_cubeSinX = 0.342020143f;
-    constexpr UINT c_vertexCount = 24;
-    constexpr UINT c_indexCount = 36;
+    constexpr float c_floorY = -0.85f;
+    constexpr float c_floorHalfWidth = 2.25f;
+    constexpr float c_floorNearZ = 0.0f;
+    constexpr float c_floorFarZ = 4.0f;
+    constexpr UINT c_vertexCount = 28;
+    constexpr UINT c_indexCount = 42;
 
     struct Vertex
     {
@@ -557,7 +561,12 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         MakeCubeVertex(-h, -h, -h),
         MakeCubeVertex( h, -h, -h),
         MakeCubeVertex( h, -h,  h),
-        MakeCubeVertex(-h, -h,  h)
+        MakeCubeVertex(-h, -h,  h),
+
+        { { -c_floorHalfWidth, c_floorY, c_floorNearZ } },
+        { { -c_floorHalfWidth, c_floorY, c_floorFarZ } },
+        { {  c_floorHalfWidth, c_floorY, c_floorFarZ } },
+        { {  c_floorHalfWidth, c_floorY, c_floorNearZ } }
     };
 
     const std::uint32_t indices[c_indexCount] =
@@ -567,13 +576,14 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         8, 9, 10, 8, 10, 11,
         12, 13, 14, 12, 14, 15,
         16, 17, 18, 16, 18, 19,
-        20, 21, 22, 20, 22, 23
+        20, 21, 22, 20, 22, 23,
+        24, 25, 26, 24, 26, 27
     };
 
-    if (!CreateUploadBuffer(vertices, sizeof(vertices), L"Raytracing cube vertex buffer", m_vertexBuffer))
+    if (!CreateUploadBuffer(vertices, sizeof(vertices), L"Raytracing scene vertex buffer", m_vertexBuffer))
         return false;
 
-    return CreateUploadBuffer(indices, sizeof(indices), L"Raytracing cube index buffer", m_indexBuffer);
+    return CreateUploadBuffer(indices, sizeof(indices), L"Raytracing scene index buffer", m_indexBuffer);
 }
 
 bool RayTracingManager::BuildBottomLevelAccelerationStructure()
