@@ -13,16 +13,30 @@ namespace
     constexpr wchar_t c_missShaderName[] = L"MyMissShader_RadianceRay";
     constexpr wchar_t c_hitGroupName[] = L"MyHitGroup_Triangle_RadianceRay";
     constexpr wchar_t c_compiledShaderRelativePath[] = L"Shaders\\Raytracing.dxil";
-    constexpr float c_triangleHalfSize = 0.5f;
-    constexpr float c_triangleDepth = 1.0f;
-    constexpr UINT c_vertexCount = 3;
-    constexpr UINT c_indexCount = 3;
+    constexpr float c_cubeHalfSize = 0.45f;
+    constexpr float c_cubeCenterZ = 1.45f;
+    constexpr float c_cubeCosY = 0.819152044f;
+    constexpr float c_cubeSinY = 0.573576436f;
+    constexpr float c_cubeCosX = 0.939692621f;
+    constexpr float c_cubeSinX = 0.342020143f;
+    constexpr UINT c_vertexCount = 24;
+    constexpr UINT c_indexCount = 36;
 
     struct Vertex
     {
         float position[3];
     };
 
+
+    Vertex MakeCubeVertex(float x, float y, float z)
+    {
+        const float rotatedX = x * c_cubeCosY + z * c_cubeSinY;
+        const float rotatedZ = -x * c_cubeSinY + z * c_cubeCosY;
+        const float finalY = y * c_cubeCosX - rotatedZ * c_cubeSinX;
+        const float finalZ = y * c_cubeSinX + rotatedZ * c_cubeCosX + c_cubeCenterZ;
+
+        return { { rotatedX, finalY, finalZ } };
+    }
     UINT AlignUp(UINT value, UINT alignment)
     {
         return (value + alignment - 1) & ~(alignment - 1);
@@ -504,19 +518,54 @@ bool RayTracingManager::CreateBuildCommandObjects()
 
 bool RayTracingManager::CreateStaticGeometryBuffers()
 {
+    const float h = c_cubeHalfSize;
     const Vertex vertices[c_vertexCount] =
     {
-        { { 0.0f,                 c_triangleHalfSize, c_triangleDepth } },
-        { { -c_triangleHalfSize, -c_triangleHalfSize, c_triangleDepth } },
-        { { c_triangleHalfSize,  -c_triangleHalfSize, c_triangleDepth } }
+        MakeCubeVertex(-h,  h, -h),
+        MakeCubeVertex( h,  h, -h),
+        MakeCubeVertex( h, -h, -h),
+        MakeCubeVertex(-h, -h, -h),
+
+        MakeCubeVertex(-h,  h,  h),
+        MakeCubeVertex(-h, -h,  h),
+        MakeCubeVertex( h, -h,  h),
+        MakeCubeVertex( h,  h,  h),
+
+        MakeCubeVertex(-h,  h,  h),
+        MakeCubeVertex(-h,  h, -h),
+        MakeCubeVertex(-h, -h, -h),
+        MakeCubeVertex(-h, -h,  h),
+
+        MakeCubeVertex( h,  h, -h),
+        MakeCubeVertex( h,  h,  h),
+        MakeCubeVertex( h, -h,  h),
+        MakeCubeVertex( h, -h, -h),
+
+        MakeCubeVertex(-h,  h,  h),
+        MakeCubeVertex( h,  h,  h),
+        MakeCubeVertex( h,  h, -h),
+        MakeCubeVertex(-h,  h, -h),
+
+        MakeCubeVertex(-h, -h, -h),
+        MakeCubeVertex( h, -h, -h),
+        MakeCubeVertex( h, -h,  h),
+        MakeCubeVertex(-h, -h,  h)
     };
 
-    const std::uint32_t indices[c_indexCount] = { 0, 1, 2 };
+    const std::uint32_t indices[c_indexCount] =
+    {
+        0, 1, 2, 0, 2, 3,
+        4, 5, 6, 4, 6, 7,
+        8, 9, 10, 8, 10, 11,
+        12, 13, 14, 12, 14, 15,
+        16, 17, 18, 16, 18, 19,
+        20, 21, 22, 20, 22, 23
+    };
 
-    if (!CreateUploadBuffer(vertices, sizeof(vertices), L"Raytracing triangle vertex buffer", m_vertexBuffer))
+    if (!CreateUploadBuffer(vertices, sizeof(vertices), L"Raytracing cube vertex buffer", m_vertexBuffer))
         return false;
 
-    return CreateUploadBuffer(indices, sizeof(indices), L"Raytracing triangle index buffer", m_indexBuffer);
+    return CreateUploadBuffer(indices, sizeof(indices), L"Raytracing cube index buffer", m_indexBuffer);
 }
 
 bool RayTracingManager::BuildBottomLevelAccelerationStructure()
