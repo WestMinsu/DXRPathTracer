@@ -488,8 +488,18 @@ void D3D12Renderer::BuildImGuiFrame()
         m_enableAccumulation = true;
         m_captureActive = true;
         m_saveCurrentRequested = false;
-        m_rayTracingManager->ResetAccumulation();
-        m_captureStatus = "Capturing...";
+        const UINT captureTargetSamples = static_cast<UINT>(m_captureTargetSamples);
+        if (accumulatedSamples > captureTargetSamples)
+        {
+            m_rayTracingManager->ResetAccumulation();
+            m_captureStatus = "Capturing...";
+        }
+        else
+        {
+            m_captureStatus = accumulatedSamples == captureTargetSamples
+                ? "Saving capture..."
+                : "Capturing...";
+        }
     }
     ImGui::SameLine();
     if (ImGui::Button("Save Current"))
