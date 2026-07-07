@@ -13,13 +13,20 @@ namespace
     constexpr wchar_t c_missShaderName[] = L"MyMissShader_RadianceRay";
     constexpr wchar_t c_hitGroupName[] = L"MyHitGroup_Triangle_RadianceRay";
     constexpr wchar_t c_compiledShaderRelativePath[] = L"Shaders\\Raytracing.dxil";
-    constexpr float c_cubeHalfSize = 0.45f;
-    constexpr float c_cubeCenterZ = 1.45f;
-    constexpr float c_cubeCosY = 0.819152044f;
-    constexpr float c_cubeSinY = 0.573576436f;
-    constexpr float c_cubeCosX = 0.939692621f;
-    constexpr float c_cubeSinX = 0.342020143f;
-    constexpr float c_cubeCenterY = -0.21f;
+    constexpr float c_shortBlockHalfWidth = 0.42f;
+    constexpr float c_shortBlockHeight = 0.58f;
+    constexpr float c_shortBlockHalfDepth = 0.42f;
+    constexpr float c_shortBlockCenterX = -0.68f;
+    constexpr float c_shortBlockCenterZ = 1.28f;
+    constexpr float c_shortBlockCosY = 0.951056516f;
+    constexpr float c_shortBlockSinY = -0.309016994f;
+    constexpr float c_tallBlockHalfWidth = 0.42f;
+    constexpr float c_tallBlockHeight = 1.15f;
+    constexpr float c_tallBlockHalfDepth = 0.42f;
+    constexpr float c_tallBlockCenterX = 0.62f;
+    constexpr float c_tallBlockCenterZ = 2.35f;
+    constexpr float c_tallBlockCosY = 0.965925826f;
+    constexpr float c_tallBlockSinY = 0.258819045f;
     constexpr float c_boxFloorY = -0.85f;
     constexpr float c_boxCeilingY = 1.25f;
     constexpr float c_boxHalfWidth = 2.25f;
@@ -29,21 +36,20 @@ namespace
     constexpr float c_lightHalfWidth = 0.55f;
     constexpr float c_lightNearZ = 1.10f;
     constexpr float c_lightFarZ = 2.25f;
-    constexpr UINT c_vertexCount = 48;
-    constexpr UINT c_indexCount = 72;
+    constexpr UINT c_vertexCount = 72;
+    constexpr UINT c_indexCount = 108;
+
     struct Vertex
     {
         float position[3];
     };
 
-    Vertex MakeCubeVertex(float x, float y, float z)
+    Vertex MakeBlockVertex(float x, float y, float z, float centerX, float centerZ, float cosY, float sinY)
     {
-        const float rotatedX = x * c_cubeCosY + z * c_cubeSinY;
-        const float rotatedZ = -x * c_cubeSinY + z * c_cubeCosY;
-        const float finalY = y * c_cubeCosX - rotatedZ * c_cubeSinX + c_cubeCenterY;
-        const float finalZ = y * c_cubeSinX + rotatedZ * c_cubeCosX + c_cubeCenterZ;
+        const float rotatedX = x * cosY + z * sinY;
+        const float rotatedZ = -x * sinY + z * cosY;
 
-        return { { rotatedX, finalY, finalZ } };
+        return { { centerX + rotatedX, c_boxFloorY + y, centerZ + rotatedZ } };
     }
 
     struct RenderSettingsConstants
@@ -613,38 +619,73 @@ bool RayTracingManager::CreateBuildCommandObjects()
 
 bool RayTracingManager::CreateStaticGeometryBuffers()
 {
-    const float h = c_cubeHalfSize;
+    const float sw = c_shortBlockHalfWidth;
+    const float sh = c_shortBlockHeight;
+    const float sd = c_shortBlockHalfDepth;
+    const float tw = c_tallBlockHalfWidth;
+    const float th = c_tallBlockHeight;
+    const float td = c_tallBlockHalfDepth;
     const Vertex vertices[c_vertexCount] =
     {
-        MakeCubeVertex(-h,  h, -h),
-        MakeCubeVertex( h,  h, -h),
-        MakeCubeVertex( h, -h, -h),
-        MakeCubeVertex(-h, -h, -h),
+        MakeBlockVertex(-sw, sh, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex( sw, sh, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex( sw, 0.0f, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex(-sw, 0.0f, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
 
-        MakeCubeVertex(-h,  h,  h),
-        MakeCubeVertex(-h, -h,  h),
-        MakeCubeVertex( h, -h,  h),
-        MakeCubeVertex( h,  h,  h),
+        MakeBlockVertex(-sw, sh,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex(-sw, 0.0f,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex( sw, 0.0f,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex( sw, sh,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
 
-        MakeCubeVertex(-h,  h,  h),
-        MakeCubeVertex(-h,  h, -h),
-        MakeCubeVertex(-h, -h, -h),
-        MakeCubeVertex(-h, -h,  h),
+        MakeBlockVertex(-sw, sh,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex(-sw, sh, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex(-sw, 0.0f, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex(-sw, 0.0f,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
 
-        MakeCubeVertex( h,  h, -h),
-        MakeCubeVertex( h,  h,  h),
-        MakeCubeVertex( h, -h,  h),
-        MakeCubeVertex( h, -h, -h),
+        MakeBlockVertex( sw, sh, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex( sw, sh,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex( sw, 0.0f,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex( sw, 0.0f, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
 
-        MakeCubeVertex(-h,  h,  h),
-        MakeCubeVertex( h,  h,  h),
-        MakeCubeVertex( h,  h, -h),
-        MakeCubeVertex(-h,  h, -h),
+        MakeBlockVertex(-sw, sh,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex( sw, sh,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex( sw, sh, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex(-sw, sh, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
 
-        MakeCubeVertex(-h, -h, -h),
-        MakeCubeVertex( h, -h, -h),
-        MakeCubeVertex( h, -h,  h),
-        MakeCubeVertex(-h, -h,  h),
+        MakeBlockVertex(-sw, 0.0f, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex( sw, 0.0f, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex( sw, 0.0f,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+        MakeBlockVertex(-sw, 0.0f,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
+
+        MakeBlockVertex(-tw, th, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex( tw, th, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex( tw, 0.0f, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex(-tw, 0.0f, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+
+        MakeBlockVertex(-tw, th,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex(-tw, 0.0f,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex( tw, 0.0f,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex( tw, th,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+
+        MakeBlockVertex(-tw, th,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex(-tw, th, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex(-tw, 0.0f, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex(-tw, 0.0f,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+
+        MakeBlockVertex( tw, th, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex( tw, th,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex( tw, 0.0f,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex( tw, 0.0f, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+
+        MakeBlockVertex(-tw, th,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex( tw, th,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex( tw, th, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex(-tw, th, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+
+        MakeBlockVertex(-tw, 0.0f, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex( tw, 0.0f, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex( tw, 0.0f,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
+        MakeBlockVertex(-tw, 0.0f,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
 
         { { -c_boxHalfWidth, c_boxFloorY, c_boxNearZ } },
         { { -c_boxHalfWidth, c_boxFloorY, c_boxFarZ } },
@@ -690,7 +731,13 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         32, 33, 34, 32, 34, 35,
         36, 37, 38, 36, 38, 39,
         40, 41, 42, 40, 42, 43,
-        44, 45, 46, 44, 46, 47
+        44, 45, 46, 44, 46, 47,
+        48, 49, 50, 48, 50, 51,
+        52, 53, 54, 52, 54, 55,
+        56, 57, 58, 56, 58, 59,
+        60, 61, 62, 60, 62, 63,
+        64, 65, 66, 64, 66, 67,
+        68, 69, 70, 68, 70, 71
     };
 
     if (!CreateUploadBuffer(vertices, sizeof(vertices), L"Raytracing scene vertex buffer", m_vertexBuffer))
@@ -698,7 +745,6 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
 
     return CreateUploadBuffer(indices, sizeof(indices), L"Raytracing scene index buffer", m_indexBuffer);
 }
-
 bool RayTracingManager::BuildBottomLevelAccelerationStructure()
 {
     D3D12_RAYTRACING_GEOMETRY_DESC geometryDesc = {};

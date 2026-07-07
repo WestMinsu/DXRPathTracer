@@ -16,15 +16,15 @@ static const float3 c_cameraPosition = float3(0.0f, 0.15f, -1.2f);
 static const float c_viewPlaneZ = 0.0f;
 static const float c_viewHalfHeight = 0.85f;
 static const float c_twoPi = 6.283185307f;
-static const uint c_cubePrimitiveCount = 12;
-static const uint c_floorPrimitiveStart = c_cubePrimitiveCount;
-static const uint c_ceilingPrimitiveStart = 14;
-static const uint c_backWallPrimitiveStart = 16;
-static const uint c_leftWallPrimitiveStart = 18;
-static const uint c_rightWallPrimitiveStart = 20;
-static const uint c_lightPrimitiveStart = 22;
+static const uint c_blockPrimitiveCount = 24;
+static const uint c_floorPrimitiveStart = c_blockPrimitiveCount;
+static const uint c_ceilingPrimitiveStart = 26;
+static const uint c_backWallPrimitiveStart = 28;
+static const uint c_leftWallPrimitiveStart = 30;
+static const uint c_rightWallPrimitiveStart = 32;
+static const uint c_lightPrimitiveStart = 34;
 static const uint c_lightPrimitiveCount = 2;
-static const float3 c_cubeAlbedo = float3(0.74f, 0.74f, 0.74f);
+static const float3 c_blockAlbedo = float3(0.74f, 0.74f, 0.74f);
 static const float3 c_floorAlbedo = float3(0.75f, 0.75f, 0.75f);
 static const float3 c_ceilingAlbedo = float3(0.75f, 0.75f, 0.75f);
 static const float3 c_backWallAlbedo = float3(0.75f, 0.75f, 0.75f);
@@ -125,7 +125,7 @@ float3 SurfaceAlbedo(uint primitiveIndex)
         return c_floorAlbedo;
     }
 
-    return c_cubeAlbedo;
+    return c_blockAlbedo;
 }
 
 [shader("raygeneration")]
