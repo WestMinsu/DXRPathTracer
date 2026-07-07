@@ -19,13 +19,18 @@ namespace
     constexpr float c_cubeSinY = 0.573576436f;
     constexpr float c_cubeCosX = 0.939692621f;
     constexpr float c_cubeSinX = 0.342020143f;
-    constexpr float c_floorY = -0.85f;
-    constexpr float c_floorHalfWidth = 2.25f;
-    constexpr float c_floorNearZ = 0.0f;
-    constexpr float c_floorFarZ = 4.0f;
-    constexpr UINT c_vertexCount = 28;
-    constexpr UINT c_indexCount = 42;
-
+    constexpr float c_cubeCenterY = -0.21f;
+    constexpr float c_boxFloorY = -0.85f;
+    constexpr float c_boxCeilingY = 1.25f;
+    constexpr float c_boxHalfWidth = 2.25f;
+    constexpr float c_boxNearZ = 0.0f;
+    constexpr float c_boxFarZ = 4.0f;
+    constexpr float c_lightY = c_boxCeilingY - 0.002f;
+    constexpr float c_lightHalfWidth = 0.55f;
+    constexpr float c_lightNearZ = 1.10f;
+    constexpr float c_lightFarZ = 2.25f;
+    constexpr UINT c_vertexCount = 48;
+    constexpr UINT c_indexCount = 72;
     struct Vertex
     {
         float position[3];
@@ -35,7 +40,7 @@ namespace
     {
         const float rotatedX = x * c_cubeCosY + z * c_cubeSinY;
         const float rotatedZ = -x * c_cubeSinY + z * c_cubeCosY;
-        const float finalY = y * c_cubeCosX - rotatedZ * c_cubeSinX;
+        const float finalY = y * c_cubeCosX - rotatedZ * c_cubeSinX + c_cubeCenterY;
         const float finalZ = y * c_cubeSinX + rotatedZ * c_cubeCosX + c_cubeCenterZ;
 
         return { { rotatedX, finalY, finalZ } };
@@ -641,10 +646,35 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         MakeCubeVertex( h, -h,  h),
         MakeCubeVertex(-h, -h,  h),
 
-        { { -c_floorHalfWidth, c_floorY, c_floorNearZ } },
-        { { -c_floorHalfWidth, c_floorY, c_floorFarZ } },
-        { {  c_floorHalfWidth, c_floorY, c_floorFarZ } },
-        { {  c_floorHalfWidth, c_floorY, c_floorNearZ } }
+        { { -c_boxHalfWidth, c_boxFloorY, c_boxNearZ } },
+        { { -c_boxHalfWidth, c_boxFloorY, c_boxFarZ } },
+        { {  c_boxHalfWidth, c_boxFloorY, c_boxFarZ } },
+        { {  c_boxHalfWidth, c_boxFloorY, c_boxNearZ } },
+
+        { { -c_boxHalfWidth, c_boxCeilingY, c_boxNearZ } },
+        { {  c_boxHalfWidth, c_boxCeilingY, c_boxNearZ } },
+        { {  c_boxHalfWidth, c_boxCeilingY, c_boxFarZ } },
+        { { -c_boxHalfWidth, c_boxCeilingY, c_boxFarZ } },
+
+        { { -c_boxHalfWidth, c_boxFloorY, c_boxFarZ } },
+        { { -c_boxHalfWidth, c_boxCeilingY, c_boxFarZ } },
+        { {  c_boxHalfWidth, c_boxCeilingY, c_boxFarZ } },
+        { {  c_boxHalfWidth, c_boxFloorY, c_boxFarZ } },
+
+        { { -c_boxHalfWidth, c_boxFloorY, c_boxNearZ } },
+        { { -c_boxHalfWidth, c_boxCeilingY, c_boxNearZ } },
+        { { -c_boxHalfWidth, c_boxCeilingY, c_boxFarZ } },
+        { { -c_boxHalfWidth, c_boxFloorY, c_boxFarZ } },
+
+        { {  c_boxHalfWidth, c_boxFloorY, c_boxNearZ } },
+        { {  c_boxHalfWidth, c_boxFloorY, c_boxFarZ } },
+        { {  c_boxHalfWidth, c_boxCeilingY, c_boxFarZ } },
+        { {  c_boxHalfWidth, c_boxCeilingY, c_boxNearZ } },
+
+        { { -c_lightHalfWidth, c_lightY, c_lightNearZ } },
+        { {  c_lightHalfWidth, c_lightY, c_lightNearZ } },
+        { {  c_lightHalfWidth, c_lightY, c_lightFarZ } },
+        { { -c_lightHalfWidth, c_lightY, c_lightFarZ } }
     };
 
     const std::uint32_t indices[c_indexCount] =
@@ -655,7 +685,12 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         12, 13, 14, 12, 14, 15,
         16, 17, 18, 16, 18, 19,
         20, 21, 22, 20, 22, 23,
-        24, 25, 26, 24, 26, 27
+        24, 25, 26, 24, 26, 27,
+        28, 29, 30, 28, 30, 31,
+        32, 33, 34, 32, 34, 35,
+        36, 37, 38, 36, 38, 39,
+        40, 41, 42, 40, 42, 43,
+        44, 45, 46, 44, 46, 47
     };
 
     if (!CreateUploadBuffer(vertices, sizeof(vertices), L"Raytracing scene vertex buffer", m_vertexBuffer))

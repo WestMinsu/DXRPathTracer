@@ -17,9 +17,20 @@ static const float c_viewPlaneZ = 0.0f;
 static const float c_viewHalfHeight = 0.85f;
 static const float c_twoPi = 6.283185307f;
 static const uint c_cubePrimitiveCount = 12;
-static const float3 c_diffuseAlbedo = float3(1.0f, 0.0f, 1.0f);
+static const uint c_floorPrimitiveStart = c_cubePrimitiveCount;
+static const uint c_ceilingPrimitiveStart = 14;
+static const uint c_backWallPrimitiveStart = 16;
+static const uint c_leftWallPrimitiveStart = 18;
+static const uint c_rightWallPrimitiveStart = 20;
+static const uint c_lightPrimitiveStart = 22;
+static const uint c_lightPrimitiveCount = 2;
+static const float3 c_cubeAlbedo = float3(0.74f, 0.74f, 0.74f);
 static const float3 c_floorAlbedo = float3(0.75f, 0.75f, 0.75f);
-
+static const float3 c_ceilingAlbedo = float3(0.75f, 0.75f, 0.75f);
+static const float3 c_backWallAlbedo = float3(0.75f, 0.75f, 0.75f);
+static const float3 c_leftWallAlbedo = float3(0.65f, 0.08f, 0.05f);
+static const float3 c_rightWallAlbedo = float3(0.12f, 0.45f, 0.10f);
+static const float3 c_lightEmission = float3(12.0f, 10.0f, 8.0f);
 RWTexture2D<float4> g_output : register(u0);
 RWTexture2D<float4> g_accumulation : register(u1);
 RaytracingAccelerationStructure g_scene : register(t0);
@@ -71,15 +82,50 @@ float3 RandomUnitVector(inout uint seed)
     return float3(radius * cosPhi, radius * sinPhi, z);
 }
 
-float3 SkyColor(float3 direction)
+bool IsLightPrimitive(uint primitiveIndex)
 {
-    float t = 0.5f * (normalize(direction).y + 1.0f);
-    return lerp(float3(1.0f, 1.0f, 1.0f), float3(0.5f, 0.8f, 1.0f), t);
+    return primitiveIndex >= c_lightPrimitiveStart &&
+        primitiveIndex < c_lightPrimitiveStart + c_lightPrimitiveCount;
+}
+
+float3 SurfaceEmission(uint primitiveIndex)
+{
+    return IsLightPrimitive(primitiveIndex) ? c_lightEmission : float3(0.0f, 0.0f, 0.0f);
 }
 
 float3 SurfaceAlbedo(uint primitiveIndex)
 {
-    return primitiveIndex >= c_cubePrimitiveCount ? c_floorAlbedo : c_diffuseAlbedo;
+    if (IsLightPrimitive(primitiveIndex))
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
+    if (primitiveIndex >= c_rightWallPrimitiveStart)
+    {
+        return c_rightWallAlbedo;
+    }
+
+    if (primitiveIndex >= c_leftWallPrimitiveStart)
+    {
+        return c_leftWallAlbedo;
+    }
+
+    if (primitiveIndex >= c_backWallPrimitiveStart)
+    {
+        return c_backWallAlbedo;
+    }
+
+    if (primitiveIndex >= c_ceilingPrimitiveStart)
+    {
+        return c_ceilingAlbedo;
+    }
+
+    if (primitiveIndex >= c_floorPrimitiveStart)
+    {
+        return c_floorAlbedo;
+    }
+
+    return c_cubeAlbedo;
 }
 
 [shader("raygeneration")]
@@ -148,6 +194,14 @@ void MyClosestHitShader_RadianceRay(
         return;
     }
 
+
+    float3 emission = SurfaceEmission(PrimitiveIndex());
+    if (any(emission > 0.0f))
+    {
+        payload.color = emission;
+        return;
+    }
+
     if (payload.depth >= g_maxBounce)
     {
         payload.color = float3(0.0f, 0.0f, 0.0f);
@@ -155,13 +209,14 @@ void MyClosestHitShader_RadianceRay(
     }
 
     uint seed = CreateRandomSeed(payload.depth, PrimitiveIndex());
+
+    // RTIOW-style Lambertian distribution sampling.
     float3 scatterDirection = normal + RandomUnitVector(seed);
     if (dot(scatterDirection, scatterDirection) < 0.000001f)
     {
         scatterDirection = normal;
     }
     scatterDirection = normalize(scatterDirection);
-
     float3 hitPosition = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
 
     RayDesc bounceRay;
@@ -181,5 +236,5 @@ void MyClosestHitShader_RadianceRay(
 [shader("miss")]
 void MyMissShader_RadianceRay(inout RadiancePayload payload)
 {
-    payload.color = SkyColor(WorldRayDirection());
+    payload.color = float3(0.0f, 0.0f, 0.0f);
 }
