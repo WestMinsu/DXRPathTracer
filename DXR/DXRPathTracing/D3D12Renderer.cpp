@@ -6,11 +6,17 @@
 #include "ThirdParty/imgui/backends/imgui_impl_dx12.h"
 #include "ThirdParty/imgui/backends/imgui_impl_win32.h"
 
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <iomanip>
 #include <sstream>
+#include <vector>
+#include <wincodec.h>
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "windowscodecs.lib")
 
 namespace
 {
@@ -34,6 +40,7 @@ namespace
 D3D12Renderer::~D3D12Renderer()
 {
     WaitForGpu();
+    SavePendingCapture();
     ShutdownImGui();
     m_rayTracingManager.reset();
 
@@ -112,6 +119,19 @@ void D3D12Renderer::Render()
 
     m_commandList->CopyResource(m_renderTargets[m_frameIndex].Get(), raytracingOutput);
 
+    const UINT accumulatedSamples = m_rayTracingManager->GetAccumulatedSampleCount();
+    const UINT captureTargetSamples = static_cast<UINT>(m_captureTargetSamples > 1 ? m_captureTargetSamples : 1);
+    const bool targetCaptureReached = m_captureActive && accumulatedSamples >= captureTargetSamples;
+    if (!m_pendingCapture.readbackBuffer && (m_saveCurrentRequested || targetCaptureReached))
+    {
+        const std::wstring capturePath = BuildCaptureFilePath(accumulatedSamples);
+        if (QueueOutputCapture(raytracingOutput, capturePath))
+        {
+            m_captureActive = false;
+            m_saveCurrentRequested = false;
+            m_captureStatus = "Saving capture...";
+        }
+    }
     D3D12_RESOURCE_BARRIER postCopyBarriers[2] = {};
     postCopyBarriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     postCopyBarriers[0].Transition.pResource = raytracingOutput;
@@ -147,6 +167,7 @@ void D3D12Renderer::Render()
         return;
 
     WaitForGpu();
+    SavePendingCapture();
     m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
 }
 
@@ -166,6 +187,7 @@ void D3D12Renderer::Resize(UINT width, UINT height)
         return;
 
     WaitForGpu();
+    SavePendingCapture();
     ReleaseRenderTargets();
 
     HRESULT hr = m_swapChain->ResizeBuffers(c_frameCount, width, height, c_backBufferFormat, 0);
@@ -453,6 +475,37 @@ void D3D12Renderer::BuildImGuiFrame()
     const ImGuiIO& io = ImGui::GetIO();
     const float frameTimeMs = io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f;
     ImGui::Text("Frame: %.2f ms (%.1f FPS)", frameTimeMs, io.Framerate);
+    ImGui::Separator();
+    ImGui::InputInt("Target Samples", &m_captureTargetSamples);
+    if (m_captureTargetSamples < 1)
+    {
+        m_captureTargetSamples = 1;
+    }
+
+    if (ImGui::Button("Start Capture") && m_rayTracingManager)
+    {
+        m_showNormalColor = false;
+        m_enableAccumulation = true;
+        m_captureActive = true;
+        m_saveCurrentRequested = false;
+        m_rayTracingManager->ResetAccumulation();
+        m_captureStatus = "Capturing...";
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Save Current"))
+    {
+        m_saveCurrentRequested = true;
+        m_captureStatus = "Saving current frame...";
+    }
+
+    if (m_captureActive)
+    {
+        ImGui::Text("Capture: %u / %d", accumulatedSamples, m_captureTargetSamples);
+    }
+    if (!m_captureStatus.empty())
+    {
+        ImGui::TextUnformatted(m_captureStatus.c_str());
+    }
     ImGui::End();
 
     ImGui::Render();
@@ -477,6 +530,280 @@ void D3D12Renderer::ReleaseRenderTargets()
     {
         renderTarget.Reset();
     }
+}
+
+bool D3D12Renderer::QueueOutputCapture(ID3D12Resource* sourceTexture, const std::wstring& filePath)
+{
+    if (!sourceTexture || !m_device || !m_commandList)
+        return false;
+
+    const D3D12_RESOURCE_DESC sourceDesc = sourceTexture->GetDesc();
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+    UINT numRows = 0;
+    UINT64 rowSizeInBytes = 0;
+    UINT64 totalBytes = 0;
+    m_device->GetCopyableFootprints(
+        &sourceDesc,
+        0,
+        1,
+        0,
+        &footprint,
+        &numRows,
+        &rowSizeInBytes,
+        &totalBytes);
+    const UINT64 readbackSize = footprint.Offset +
+        static_cast<UINT64>(footprint.Footprint.RowPitch) * numRows;
+
+    D3D12_HEAP_PROPERTIES heapProperties = {};
+    heapProperties.Type = D3D12_HEAP_TYPE_READBACK;
+    heapProperties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+    heapProperties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+    heapProperties.CreationNodeMask = 1;
+    heapProperties.VisibleNodeMask = 1;
+
+    D3D12_RESOURCE_DESC bufferDesc = {};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Width = readbackSize;
+    bufferDesc.Height = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels = 1;
+    bufferDesc.SampleDesc.Count = 1;
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    Microsoft::WRL::ComPtr<ID3D12Resource> readbackBuffer;
+    HRESULT hr = m_device->CreateCommittedResource(
+        &heapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&readbackBuffer));
+    if (ReportFailure(hr, L"Capture readback buffer creation failed."))
+        return false;
+
+    D3D12_TEXTURE_COPY_LOCATION dst = {};
+    dst.pResource = readbackBuffer.Get();
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint = footprint;
+
+    D3D12_TEXTURE_COPY_LOCATION src = {};
+    src.pResource = sourceTexture;
+    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    src.SubresourceIndex = 0;
+
+    m_commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+    m_pendingCapture.readbackBuffer = readbackBuffer;
+    m_pendingCapture.filePath = filePath;
+    m_pendingCapture.width = static_cast<UINT>(sourceDesc.Width);
+    m_pendingCapture.height = sourceDesc.Height;
+    m_pendingCapture.rowPitch = footprint.Footprint.RowPitch;
+    m_pendingCapture.readbackSize = readbackSize;
+    return true;
+}
+
+void D3D12Renderer::SavePendingCapture()
+{
+    if (!m_pendingCapture.readbackBuffer)
+        return;
+
+    void* mappedPixels = nullptr;
+    D3D12_RANGE readRange = { 0, 0 };
+    readRange.End = static_cast<SIZE_T>(m_pendingCapture.readbackSize);
+
+    HRESULT hr = m_pendingCapture.readbackBuffer->Map(0, &readRange, &mappedPixels);
+    if (ReportFailure(hr, L"Capture readback mapping failed."))
+    {
+        m_pendingCapture = PendingCapture();
+        m_captureStatus = "Capture failed.";
+        return;
+    }
+
+    const bool saved = SavePngFile(
+        m_pendingCapture.filePath,
+        m_pendingCapture.width,
+        m_pendingCapture.height,
+        m_pendingCapture.rowPitch,
+        mappedPixels);
+
+    D3D12_RANGE writeRange = { 0, 0 };
+    m_pendingCapture.readbackBuffer->Unmap(0, &writeRange);
+
+    if (saved)
+    {
+        std::string pathText;
+        pathText.reserve(m_pendingCapture.filePath.size());
+        for (wchar_t ch : m_pendingCapture.filePath)
+        {
+            pathText.push_back(ch >= 0 && ch < 128 ? static_cast<char>(ch) : '?');
+        }
+        m_captureStatus = "Saved: " + pathText;
+    }
+    else
+    {
+        m_captureStatus = "Capture save failed.";
+    }
+
+    m_pendingCapture = PendingCapture();
+}
+
+bool D3D12Renderer::SavePngFile(
+    const std::wstring& filePath,
+    UINT width,
+    UINT height,
+    UINT rowPitch,
+    const void* pixels) const
+{
+    const UINT tightRowPitch = width * 4;
+    const UINT tightImageSize = tightRowPitch * height;
+    std::vector<BYTE> tightPixels(tightImageSize);
+
+    const BYTE* sourcePixels = static_cast<const BYTE*>(pixels);
+    for (UINT y = 0; y < height; ++y)
+    {
+        std::memcpy(
+            tightPixels.data() + static_cast<std::size_t>(y) * tightRowPitch,
+            sourcePixels + static_cast<std::size_t>(y) * rowPitch,
+            tightRowPitch);
+    }
+
+    HRESULT coHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool shouldUninitialize = SUCCEEDED(coHr);
+    if (FAILED(coHr) && coHr != RPC_E_CHANGED_MODE)
+        return !ReportFailure(coHr, L"COM initialization for PNG capture failed.");
+
+    auto fail = [&]() -> bool
+    {
+        DeleteFileW(filePath.c_str());
+        if (shouldUninitialize)
+            CoUninitialize();
+        return false;
+    };
+
+    Microsoft::WRL::ComPtr<IWICImagingFactory> factory;
+    HRESULT hr = CoCreateInstance(
+        CLSID_WICImagingFactory,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&factory));
+    if (ReportFailure(hr, L"WIC factory creation failed."))
+        return fail();
+
+    Microsoft::WRL::ComPtr<IWICBitmap> sourceBitmap;
+    hr = factory->CreateBitmapFromMemory(
+        width,
+        height,
+        GUID_WICPixelFormat32bppRGBA,
+        tightRowPitch,
+        tightImageSize,
+        tightPixels.data(),
+        &sourceBitmap);
+    if (ReportFailure(hr, L"WIC capture bitmap creation failed."))
+        return fail();
+
+    Microsoft::WRL::ComPtr<IWICStream> stream;
+    hr = factory->CreateStream(&stream);
+    if (ReportFailure(hr, L"WIC stream creation failed."))
+        return fail();
+
+    hr = stream->InitializeFromFilename(filePath.c_str(), GENERIC_WRITE);
+    if (ReportFailure(hr, L"Capture PNG file creation failed."))
+        return fail();
+
+    Microsoft::WRL::ComPtr<IWICBitmapEncoder> encoder;
+    hr = factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder);
+    if (ReportFailure(hr, L"WIC PNG encoder creation failed."))
+        return fail();
+
+    hr = encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache);
+    if (ReportFailure(hr, L"WIC PNG encoder initialization failed."))
+        return fail();
+
+    Microsoft::WRL::ComPtr<IWICBitmapFrameEncode> frame;
+    hr = encoder->CreateNewFrame(&frame, nullptr);
+    if (ReportFailure(hr, L"WIC PNG frame creation failed."))
+        return fail();
+
+    hr = frame->Initialize(nullptr);
+    if (ReportFailure(hr, L"WIC PNG frame initialization failed."))
+        return fail();
+
+    hr = frame->SetSize(width, height);
+    if (ReportFailure(hr, L"WIC PNG size setup failed."))
+        return fail();
+
+    WICPixelFormatGUID framePixelFormat = GUID_WICPixelFormat32bppRGBA;
+    hr = frame->SetPixelFormat(&framePixelFormat);
+    if (ReportFailure(hr, L"WIC PNG pixel format setup failed."))
+        return fail();
+
+    if (IsEqualGUID(framePixelFormat, GUID_WICPixelFormat32bppRGBA))
+    {
+        hr = frame->WritePixels(
+            height,
+            tightRowPitch,
+            tightImageSize,
+            tightPixels.data());
+        if (ReportFailure(hr, L"WIC PNG pixel write failed."))
+            return fail();
+    }
+    else
+    {
+        Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
+        hr = factory->CreateFormatConverter(&converter);
+        if (ReportFailure(hr, L"WIC PNG format converter creation failed."))
+            return fail();
+
+        hr = converter->Initialize(
+            sourceBitmap.Get(),
+            framePixelFormat,
+            WICBitmapDitherTypeNone,
+            nullptr,
+            0.0,
+            WICBitmapPaletteTypeCustom);
+        if (ReportFailure(hr, L"WIC PNG format conversion failed."))
+            return fail();
+
+        hr = frame->WriteSource(converter.Get(), nullptr);
+        if (ReportFailure(hr, L"WIC PNG converted pixel write failed."))
+            return fail();
+    }
+
+    hr = frame->Commit();
+    if (ReportFailure(hr, L"WIC PNG frame commit failed."))
+        return fail();
+
+    hr = encoder->Commit();
+    if (ReportFailure(hr, L"WIC PNG encoder commit failed."))
+        return fail();
+
+    if (shouldUninitialize)
+        CoUninitialize();
+
+    return true;
+}
+std::wstring D3D12Renderer::BuildCaptureFilePath(UINT sampleCount) const
+{
+    CreateDirectoryW(L"Captures", nullptr);
+
+    SYSTEMTIME time = {};
+    GetLocalTime(&time);
+
+    std::wostringstream path;
+    path << L"Captures\\capture_"
+         << std::setfill(L'0')
+         << std::setw(4) << time.wYear
+         << std::setw(2) << time.wMonth
+         << std::setw(2) << time.wDay
+         << L"_"
+         << std::setw(2) << time.wHour
+         << std::setw(2) << time.wMinute
+         << std::setw(2) << time.wSecond
+         << L"_"
+         << sampleCount
+         << L"spp.png";
+
+    return path.str();
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE D3D12Renderer::GetCurrentRenderTargetView() const

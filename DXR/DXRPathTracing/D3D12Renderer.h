@@ -2,6 +2,7 @@
 
 #include <array>
 #include <memory>
+#include <string>
 #include <Windows.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
@@ -34,10 +35,28 @@ private:
     void BuildImGuiFrame();
     void RenderImGuiDrawData();
     void ReleaseRenderTargets();
+    bool QueueOutputCapture(ID3D12Resource* sourceTexture, const std::wstring& filePath);
+    void SavePendingCapture();
+    bool SavePngFile(const std::wstring& filePath,
+        UINT width,
+        UINT height,
+        UINT rowPitch,
+        const void* pixels) const;
+    std::wstring BuildCaptureFilePath(UINT sampleCount) const;
 
     D3D12_CPU_DESCRIPTOR_HANDLE GetCurrentRenderTargetView() const;
     void TransitionCurrentBackBuffer(D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after);
     bool ReportFailure(HRESULT hr, const wchar_t* message) const;
+
+    struct PendingCapture
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> readbackBuffer;
+        std::wstring filePath;
+        UINT width = 0;
+        UINT height = 0;
+        UINT rowPitch = 0;
+        UINT64 readbackSize = 0;
+    };
 
     HWND m_hWnd = nullptr;
     UINT m_width = 0;
@@ -48,8 +67,12 @@ private:
     HANDLE m_fenceEvent = nullptr;
     bool m_imguiInitialized = false;
     bool m_showNormalColor = false;
-    bool m_enableAccumulation = false;
+    bool m_enableAccumulation = true;
+    bool m_captureActive = false;
+    bool m_saveCurrentRequested = false;
+    int m_captureTargetSamples = 256;
     int m_maxBounce = 3;
+    std::string m_captureStatus;
 
     Microsoft::WRL::ComPtr<IDXGIFactory4> m_factory;
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
@@ -62,4 +85,5 @@ private:
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, c_frameCount> m_renderTargets;
     Microsoft::WRL::ComPtr<ID3D12Fence> m_fence;
     std::unique_ptr<RayTracingManager> m_rayTracingManager;
+    PendingCapture m_pendingCapture;
 };
