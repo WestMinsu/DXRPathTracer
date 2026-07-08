@@ -65,6 +65,12 @@ void MyClosestHitShader_RadianceRay(
         return;
     }
 
+    if (g_sceneType == c_scenePbrGgx && g_pbrDebugView != c_pbrDebugBeauty)
+    {
+        payload.color = PbrMaterialDebugColor(PrimitiveIndex());
+        return;
+    }
+
     float3 hitPosition = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     float3 emission = SurfaceEmission(PrimitiveIndex());
     if (any(emission > 0.0f))
@@ -81,31 +87,17 @@ void MyClosestHitShader_RadianceRay(
 
     if (g_sceneType == c_scenePbrGgx)
     {
-        payload.color = ShadePbrGgx(PrimitiveIndex(), normal, hitPosition);
+        PbrMaterial material = GetPbrMaterial(PrimitiveIndex());
+        payload.color = TracePbrBrdfWithGgxImportanceSampling(material, normal, hitPosition, payload.depth, PrimitiveIndex());
         return;
     }
 
-    uint seed = CreateRandomSeed(payload.depth, PrimitiveIndex());
-
-    float3 scatterDirection = normal + RandomUnitVector(seed);
-    if (dot(scatterDirection, scatterDirection) < 0.000001f)
-    {
-        scatterDirection = normal;
-    }
-    scatterDirection = normalize(scatterDirection);
-
-    RayDesc bounceRay;
-    bounceRay.Origin = hitPosition + normal * c_rayOriginBias;
-    bounceRay.Direction = scatterDirection;
-    bounceRay.TMin = c_rayTMin;
-    bounceRay.TMax = c_rayTMax;
-
-    RadiancePayload bouncePayload;
-    bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
-    bouncePayload.depth = payload.depth + 1;
-
-    TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
-    payload.color = CornellSurfaceAlbedo(PrimitiveIndex()) * bouncePayload.color;
+    payload.color = TraceLambertianBounce(
+        normal,
+        hitPosition,
+        CornellSurfaceAlbedo(PrimitiveIndex()),
+        payload.depth,
+        PrimitiveIndex());
 }
 
 [shader("miss")]

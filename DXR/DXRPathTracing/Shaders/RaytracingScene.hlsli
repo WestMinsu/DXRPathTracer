@@ -67,18 +67,6 @@ float3 CornellSurfaceAlbedo(uint primitiveIndex)
     return c_blockAlbedo;
 }
 
-float PbrRoughnessFromColumn(uint column)
-{
-    if (column == 0)
-        return 0.06f;
-    if (column == 1)
-        return 0.18f;
-    if (column == 2)
-        return 0.35f;
-    if (column == 3)
-        return 0.60f;
-    return 0.85f;
-}
 
 PbrMaterial GetPbrMaterial(uint primitiveIndex)
 {
@@ -97,21 +85,9 @@ PbrMaterial GetPbrMaterial(uint primitiveIndex)
 
     if (primitiveIndex < c_pbrSpherePrimitiveCount * c_pbrSphereCount)
     {
-        uint sphereIndex = primitiveIndex / c_pbrSpherePrimitiveCount;
-        uint row = sphereIndex / c_pbrSphereColumns;
-        uint column = sphereIndex - row * c_pbrSphereColumns;
-        material.roughness = PbrRoughnessFromColumn(column);
-
-        if (row == 0)
-        {
-            material.baseColor = float3(0.82f, 0.08f, 0.035f);
-            material.metallic = 0.0f;
-        }
-        else
-        {
-            material.baseColor = float3(1.0f, 0.766f, 0.336f);
-            material.metallic = 1.0f;
-        }
+        material.baseColor = float3(1.0f, 0.766f, 0.336f);
+        material.metallic = g_pbrMetallic;
+        material.roughness = g_pbrRoughness;
     }
     else if (primitiveIndex >= c_pbrBackWallPrimitiveStart)
     {
@@ -122,4 +98,25 @@ PbrMaterial GetPbrMaterial(uint primitiveIndex)
     return material;
 }
 
+float3 PbrMaterialDebugColor(uint primitiveIndex)
+{
+    PbrMaterial material = GetPbrMaterial(primitiveIndex);
+
+    if (g_pbrDebugView == c_pbrDebugAlbedo)
+    {
+        return material.baseColor;
+    }
+
+    if (g_pbrDebugView == c_pbrDebugMetallic)
+    {
+        return float3(material.metallic, material.metallic, material.metallic);
+    }
+
+    if (g_pbrDebugView == c_pbrDebugRoughness)
+    {
+        return float3(material.roughness, material.roughness, material.roughness);
+    }
+
+    return float3(0.0f, 0.0f, 0.0f);
+}
 #endif

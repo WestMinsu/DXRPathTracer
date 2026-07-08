@@ -23,6 +23,10 @@ struct PbrMaterial
 
 static const uint c_sceneCornellBox = 0;
 static const uint c_scenePbrGgx = 1;
+static const uint c_pbrDebugBeauty = 0;
+static const uint c_pbrDebugAlbedo = 1;
+static const uint c_pbrDebugMetallic = 2;
+static const uint c_pbrDebugRoughness = 3;
 static const float c_rayTMin = 0.001f;
 static const float c_rayTMax = 1000.0f;
 static const float c_rayOriginBias = 0.001f;
@@ -40,9 +44,8 @@ static const uint c_leftWallPrimitiveStart = 30;
 static const uint c_rightWallPrimitiveStart = 32;
 static const uint c_lightPrimitiveStart = 34;
 static const uint c_lightPrimitiveCount = 2;
-static const uint c_pbrSphereColumns = 5;
 static const uint c_pbrSpherePrimitiveCount = 528;
-static const uint c_pbrSphereCount = 10;
+static const uint c_pbrSphereCount = 3;
 static const uint c_pbrFloorPrimitiveStart = c_pbrSpherePrimitiveCount * c_pbrSphereCount;
 static const uint c_pbrBackWallPrimitiveStart = c_pbrFloorPrimitiveStart + 2;
 static const uint c_pbrLightPrimitiveStart = c_pbrBackWallPrimitiveStart + 2;
@@ -55,7 +58,7 @@ static const float3 c_backWallAlbedo = float3(0.75f, 0.75f, 0.75f);
 static const float3 c_leftWallAlbedo = float3(0.65f, 0.08f, 0.05f);
 static const float3 c_rightWallAlbedo = float3(0.12f, 0.45f, 0.10f);
 static const float3 c_cornellLightEmission = float3(12.0f, 10.0f, 8.0f);
-static const float3 c_pbrLightEmission = float3(4.0f, 4.0f, 4.0f);
+static const float3 c_pbrLightEmission = float3(1.0f, 1.0f, 1.0f);
 
 RWTexture2D<float4> g_output : register(u0);
 RWTexture2D<float4> g_accumulation : register(u1);
@@ -71,6 +74,9 @@ cbuffer RenderSettings : register(b0)
     uint g_sampleIndex;
     uint g_enableAccumulation;
     uint g_sceneType;
+    uint g_pbrDebugView;
+    float g_pbrMetallic;
+    float g_pbrRoughness;
 };
 
 uint CreateRandomSeed(uint depth, uint primitiveIndex)
@@ -109,6 +115,24 @@ float3 RandomUnitVector(inout uint seed)
     return float3(radius * cosPhi, radius * sinPhi, z);
 }
 
+
+float3 RandomCosineHemisphereDirection(float3 normal, inout uint seed)
+{
+    float u0 = RandomFloat01(seed);
+    float u1 = RandomFloat01(seed);
+    float radius = sqrt(u0);
+    float phi = u1 * c_twoPi;
+    float sinPhi;
+    float cosPhi;
+    sincos(phi, sinPhi, cosPhi);
+
+    float3 tangent = abs(normal.z) < 0.999f
+        ? normalize(cross(float3(0.0f, 0.0f, 1.0f), normal))
+        : normalize(cross(float3(0.0f, 1.0f, 0.0f), normal));
+    float3 bitangent = cross(normal, tangent);
+    float3 localDirection = float3(radius * cosPhi, radius * sinPhi, sqrt(max(0.0f, 1.0f - u0)));
+    return normalize(tangent * localDirection.x + bitangent * localDirection.y + normal * localDirection.z);
+}
 float3 InterpolateNormal(uint i0, uint i1, uint i2, BuiltInTriangleIntersectionAttributes attributes)
 {
     float3 barycentrics = float3(
@@ -121,4 +145,23 @@ float3 InterpolateNormal(uint i0, uint i1, uint i2, BuiltInTriangleIntersectionA
     return normalize(n0 * barycentrics.x + n1 * barycentrics.y + n2 * barycentrics.z);
 }
 
+float3 TraceLambertianBounce(float3 normal, float3 hitPosition, float3 albedo, uint depth, uint primitiveIndex)
+{
+    uint seed = CreateRandomSeed(depth, primitiveIndex);
+
+    float3 scatterDirection = RandomCosineHemisphereDirection(normal, seed);
+
+    RayDesc bounceRay;
+    bounceRay.Origin = hitPosition + normal * c_rayOriginBias;
+    bounceRay.Direction = scatterDirection;
+    bounceRay.TMin = c_rayTMin;
+    bounceRay.TMax = c_rayTMax;
+
+    RadiancePayload bouncePayload;
+    bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
+    bouncePayload.depth = depth + 1;
+
+    TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
+    return albedo * bouncePayload.color;
+}
 #endif

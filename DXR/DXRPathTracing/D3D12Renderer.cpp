@@ -91,6 +91,8 @@ void D3D12Renderer::Render()
     m_rayTracingManager->SetShowNormalColor(m_showNormalColor);
     m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
     m_rayTracingManager->SetEnableAccumulation(m_enableAccumulation);
+    m_rayTracingManager->SetPbrDebugView(static_cast<UINT>(m_pbrDebugView));
+    m_rayTracingManager->SetPbrMaterial(m_pbrMetallic, m_pbrRoughness);
 
     HRESULT hr = m_commandAllocator->Reset();
     if (ReportFailure(hr, L"Command allocator reset failed."))
@@ -469,6 +471,28 @@ void D3D12Renderer::BuildImGuiFrame()
         m_captureStatus.clear();
         m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
     }
+    if (m_sceneType == static_cast<int>(RayTracingManager::c_scenePbrGgx))
+    {
+        const char* pbrDebugNames[] = { "Beauty", "Albedo", "Metallic", "Roughness" };
+        if (ImGui::Combo("PBR Debug", &m_pbrDebugView, pbrDebugNames, _countof(pbrDebugNames)) && m_rayTracingManager)
+        {
+            m_captureActive = false;
+            m_saveCurrentRequested = false;
+            m_captureStatus.clear();
+            m_rayTracingManager->SetPbrDebugView(static_cast<UINT>(m_pbrDebugView));
+        }
+
+        bool pbrMaterialChanged = false;
+        pbrMaterialChanged |= ImGui::SliderFloat("PBR Metallic", &m_pbrMetallic, 0.0f, 1.0f, "%.2f");
+        pbrMaterialChanged |= ImGui::SliderFloat("PBR Roughness", &m_pbrRoughness, 0.03f, 1.0f, "%.2f");
+        if (pbrMaterialChanged && m_rayTracingManager)
+        {
+            m_captureActive = false;
+            m_saveCurrentRequested = false;
+            m_captureStatus.clear();
+            m_rayTracingManager->SetPbrMaterial(m_pbrMetallic, m_pbrRoughness);
+        }
+    }
     ImGui::Checkbox("Show normal color", &m_showNormalColor);
     ImGui::Checkbox("Accumulate samples", &m_enableAccumulation);
     ImGui::SliderInt("Max Bounce", &m_maxBounce, 1, 8);
@@ -493,6 +517,7 @@ void D3D12Renderer::BuildImGuiFrame()
     if (ImGui::Button("Start Capture") && m_rayTracingManager)
     {
         m_showNormalColor = false;
+        m_pbrDebugView = static_cast<int>(RayTracingManager::c_pbrDebugBeauty);
         m_enableAccumulation = true;
         m_captureActive = true;
         m_saveCurrentRequested = false;

@@ -14,6 +14,10 @@ public:
 
     static constexpr UINT c_sceneCornellBox = 0;
     static constexpr UINT c_scenePbrGgx = 1;
+    static constexpr UINT c_pbrDebugBeauty = 0;
+    static constexpr UINT c_pbrDebugAlbedo = 1;
+    static constexpr UINT c_pbrDebugMetallic = 2;
+    static constexpr UINT c_pbrDebugRoughness = 3;
 
     bool Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height);
     bool Resize(UINT width, UINT height);
@@ -22,6 +26,8 @@ public:
     void SetMaxBounce(UINT maxBounce);
     void SetEnableAccumulation(bool enableAccumulation);
     void SetSceneType(UINT sceneType);
+    void SetPbrDebugView(UINT pbrDebugView);
+    void SetPbrMaterial(float metallic, float roughness);
     void ResetAccumulation() { m_accumulatedSampleCount = 0; }
     UINT GetAccumulatedSampleCount() const { return m_accumulatedSampleCount; }
 
@@ -87,6 +93,9 @@ private:
     bool m_enableAccumulation = true;
     UINT m_maxBounce = 3;
     UINT m_sceneType = c_sceneCornellBox;
+    UINT m_pbrDebugView = c_pbrDebugBeauty;
+    float m_pbrMetallic = 1.0f;
+    float m_pbrRoughness = 0.35f;
 
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;

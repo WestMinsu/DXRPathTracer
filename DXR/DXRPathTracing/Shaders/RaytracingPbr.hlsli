@@ -77,4 +77,62 @@ float3 ShadePbrGgx(uint primitiveIndex, float3 normal, float3 hitPosition)
     return EvaluateBrdf(material, normal, viewDirection, lightDirection) * shadowPayload.color;
 }
 
+float3 ImportanceSampleGGX(float2 sampleValue, float3 normal, float roughness)
+{
+    float alpha = roughness * roughness;
+    float alphaSquared = alpha * alpha;
+    float phi = sampleValue.x * c_twoPi;
+    float cosTheta = sqrt((1.0f - sampleValue.y) / max(1.0f + (alphaSquared - 1.0f) * sampleValue.y, 0.000001f));
+    float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
+
+    float sinPhi;
+    float cosPhi;
+    sincos(phi, sinPhi, cosPhi);
+
+    float3 tangent = abs(normal.z) < 0.999f
+        ? normalize(cross(float3(0.0f, 0.0f, 1.0f), normal))
+        : normalize(cross(float3(0.0f, 1.0f, 0.0f), normal));
+    float3 bitangent = cross(normal, tangent);
+    float3 localHalfVector = float3(sinTheta * cosPhi, sinTheta * sinPhi, cosTheta);
+    return normalize(tangent * localHalfVector.x + bitangent * localHalfVector.y + normal * localHalfVector.z);
+}
+
+float3 TracePbrBrdfWithGgxImportanceSampling(PbrMaterial material, float3 normal, float3 hitPosition, uint depth, uint primitiveIndex)
+{
+    uint seed = CreateRandomSeed(depth, primitiveIndex);
+    float3 viewDirection = normalize(-WorldRayDirection());
+    float2 sampleValue = float2(RandomFloat01(seed), RandomFloat01(seed));
+    float3 halfVector = ImportanceSampleGGX(sampleValue, normal, material.roughness);
+    float vDotH = saturate(dot(viewDirection, halfVector));
+    if (vDotH <= 0.0f)
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
+    float3 sampleDirection = normalize(2.0f * vDotH * halfVector - viewDirection);
+    float nDotL = saturate(dot(normal, sampleDirection));
+    if (nDotL <= 0.0f)
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
+    float nDotH = saturate(dot(normal, halfVector));
+    float pdf = DistributionGGX(normal, halfVector, material.roughness) * nDotH / max(4.0f * vDotH, 0.000001f);
+    pdf = max(pdf, 0.000001f);
+
+    RayDesc bounceRay;
+    bounceRay.Origin = hitPosition + normal * c_rayOriginBias;
+    bounceRay.Direction = sampleDirection;
+    bounceRay.TMin = c_rayTMin;
+    bounceRay.TMax = c_rayTMax;
+
+    RadiancePayload bouncePayload;
+    bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
+    bouncePayload.depth = depth + 1;
+
+    TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
+
+    float3 weightedBrdf = EvaluateBrdf(material, normal, viewDirection, sampleDirection) / pdf;
+    return weightedBrdf * bouncePayload.color;
+}
 #endif

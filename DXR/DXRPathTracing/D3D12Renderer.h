@@ -73,6 +73,9 @@ private:
     int m_captureTargetSamples = 256;
     int m_maxBounce = 8;
     int m_sceneType = 0;
+    int m_pbrDebugView = 0;
+    float m_pbrMetallic = 1.0f;
+    float m_pbrRoughness = 0.35f;
     std::string m_captureStatus;
 
     Microsoft::WRL::ComPtr<IDXGIFactory4> m_factory;

@@ -43,25 +43,22 @@ namespace
     constexpr float c_cornellLightNearZ = 1.10f;
     constexpr float c_cornellLightFarZ = 2.25f;
 
-    constexpr UINT c_sphereColumns = 5;
-    constexpr UINT c_sphereRows = 2;
-    constexpr UINT c_sphereCount = c_sphereColumns * c_sphereRows;
+    constexpr UINT c_sphereCount = 3;
     constexpr UINT c_sphereSlices = 24;
     constexpr UINT c_sphereStacks = 12;
-    constexpr float c_sphereRadius = 0.28f;
-    constexpr float c_sphereStartX = -1.44f;
-    constexpr float c_sphereSpacingX = 0.72f;
-    constexpr float c_dielectricSphereZ = 1.20f;
-    constexpr float c_metalSphereZ = 2.30f;
+    constexpr float c_sphereRadius = 0.42f;
+    constexpr float c_sphereStartX = -0.92f;
+    constexpr float c_sphereSpacingX = 0.92f;
+    constexpr float c_sphereCenterZ = 1.80f;
     constexpr float c_pbrFloorY = -0.85f;
     constexpr float c_pbrSceneHalfWidth = 2.05f;
     constexpr float c_pbrSceneNearZ = 0.0f;
     constexpr float c_pbrSceneBackZ = 4.25f;
     constexpr float c_pbrSceneCeilingY = 1.65f;
     constexpr float c_pbrLightY = 1.55f;
-    constexpr float c_pbrLightHalfWidth = 0.72f;
-    constexpr float c_pbrLightNearZ = 1.35f;
-    constexpr float c_pbrLightFarZ = 2.75f;
+    constexpr float c_pbrLightHalfWidth = 1.90f;
+    constexpr float c_pbrLightNearZ = 0.70f;
+    constexpr float c_pbrLightFarZ = 3.40f;
 
     struct Float3
     {
@@ -247,20 +244,21 @@ namespace
         vertices.reserve(c_sphereCount * (c_sphereStacks + 1) * (c_sphereSlices + 1) + 12);
         indices.reserve(c_sphereCount * c_sphereSlices * (c_sphereStacks - 1) * 6 + 18);
 
-        for (UINT row = 0; row < c_sphereRows; ++row)
+        for (UINT sphereIndex = 0; sphereIndex < c_sphereCount; ++sphereIndex)
         {
-            const float sphereZ = row == 0 ? c_dielectricSphereZ : c_metalSphereZ;
-            for (UINT column = 0; column < c_sphereColumns; ++column)
-            {
-                const float sphereX = c_sphereStartX + c_sphereSpacingX * static_cast<float>(column);
-                AddPbrSphere(vertices, indices, MakeFloat3(sphereX, c_pbrFloorY + c_sphereRadius, sphereZ), c_sphereRadius);
-            }
+            const float sphereX = c_sphereStartX + c_sphereSpacingX * static_cast<float>(sphereIndex);
+            AddPbrSphere(
+                vertices,
+                indices,
+                MakeFloat3(sphereX, c_pbrFloorY + c_sphereRadius, c_sphereCenterZ),
+                c_sphereRadius);
         }
 
         AddQuad(vertices, indices, MakeFloat3(-c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneNearZ), MakeFloat3(-c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneNearZ), MakeFloat3(0.0f, 1.0f, 0.0f));
         AddQuad(vertices, indices, MakeFloat3(-c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrSceneCeilingY, c_pbrSceneBackZ), MakeFloat3(-c_pbrSceneHalfWidth, c_pbrSceneCeilingY, c_pbrSceneBackZ), MakeFloat3(0.0f, 0.0f, -1.0f));
         AddQuad(vertices, indices, MakeFloat3(-c_pbrLightHalfWidth, c_pbrLightY, c_pbrLightNearZ), MakeFloat3( c_pbrLightHalfWidth, c_pbrLightY, c_pbrLightNearZ), MakeFloat3( c_pbrLightHalfWidth, c_pbrLightY, c_pbrLightFarZ), MakeFloat3(-c_pbrLightHalfWidth, c_pbrLightY, c_pbrLightFarZ), MakeFloat3(0.0f, -1.0f, 0.0f));
     }
+
     struct RenderSettingsConstants
     {
         UINT showNormalColor;
@@ -269,6 +267,9 @@ namespace
         UINT sampleIndex;
         UINT enableAccumulation;
         UINT sceneType;
+        UINT pbrDebugView;
+        float pbrMetallic;
+        float pbrRoughness;
     };
 
     UINT AlignUp(UINT value, UINT alignment)
@@ -383,7 +384,7 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     commandList->SetComputeRootShaderResourceView(1, m_topLevelAS->GetGPUVirtualAddress());
     commandList->SetComputeRootShaderResourceView(2, m_vertexBuffer->GetGPUVirtualAddress());
     commandList->SetComputeRootShaderResourceView(3, m_indexBuffer->GetGPUVirtualAddress());
-    const bool shouldAccumulate = m_enableAccumulation && !m_showNormalColor;
+    const bool shouldAccumulate = m_enableAccumulation && !m_showNormalColor && !(m_sceneType == c_scenePbrGgx && m_pbrDebugView != c_pbrDebugBeauty);
     RenderSettingsConstants renderSettings = {};
     renderSettings.showNormalColor = m_showNormalColor ? 1u : 0u;
     renderSettings.frameIndex = m_frameIndex++;
@@ -391,7 +392,10 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     renderSettings.sampleIndex = shouldAccumulate ? m_accumulatedSampleCount : 0u;
     renderSettings.enableAccumulation = shouldAccumulate ? 1u : 0u;
     renderSettings.sceneType = m_sceneType;
-    commandList->SetComputeRoot32BitConstants(4, 6, &renderSettings, 0);
+    renderSettings.pbrDebugView = m_pbrDebugView;
+    renderSettings.pbrMetallic = m_pbrMetallic;
+    renderSettings.pbrRoughness = m_pbrRoughness;
+    commandList->SetComputeRoot32BitConstants(4, 9, &renderSettings, 0);
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -463,6 +467,29 @@ void RayTracingManager::SetEnableAccumulation(bool enableAccumulation)
     ResetAccumulation();
 }
 
+void RayTracingManager::SetPbrDebugView(UINT pbrDebugView)
+{
+    const UINT clampedPbrDebugView = pbrDebugView <= c_pbrDebugRoughness
+        ? pbrDebugView
+        : c_pbrDebugBeauty;
+    if (m_pbrDebugView == clampedPbrDebugView)
+        return;
+
+    m_pbrDebugView = clampedPbrDebugView;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetPbrMaterial(float metallic, float roughness)
+{
+    const float clampedMetallic = metallic < 0.0f ? 0.0f : (metallic > 1.0f ? 1.0f : metallic);
+    const float clampedRoughness = roughness < 0.03f ? 0.03f : (roughness > 1.0f ? 1.0f : roughness);
+    if (m_pbrMetallic == clampedMetallic && m_pbrRoughness == clampedRoughness)
+        return;
+
+    m_pbrMetallic = clampedMetallic;
+    m_pbrRoughness = clampedRoughness;
+    ResetAccumulation();
+}
 void RayTracingManager::SetSceneType(UINT sceneType)
 {
     const UINT clampedSceneType = sceneType == c_scenePbrGgx ? c_scenePbrGgx : c_sceneCornellBox;
@@ -592,7 +619,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 6;
+    rootParameters[4].Constants.Num32BitValues = 9;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
