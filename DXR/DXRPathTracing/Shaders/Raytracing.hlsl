@@ -1,132 +1,6 @@
-struct Vertex
-{
-    float3 position;
-};
-
-struct RadiancePayload
-{
-    float3 color;
-    uint depth;
-};
-
-static const float c_rayTMin = 0.001f;
-static const float c_rayTMax = 1000.0f;
-static const float c_rayOriginBias = 0.001f;
-static const float3 c_cameraPosition = float3(0.0f, 0.15f, -1.2f);
-static const float c_viewPlaneZ = 0.0f;
-static const float c_viewHalfHeight = 0.85f;
-static const float c_twoPi = 6.283185307f;
-static const uint c_blockPrimitiveCount = 24;
-static const uint c_floorPrimitiveStart = c_blockPrimitiveCount;
-static const uint c_ceilingPrimitiveStart = 26;
-static const uint c_backWallPrimitiveStart = 28;
-static const uint c_leftWallPrimitiveStart = 30;
-static const uint c_rightWallPrimitiveStart = 32;
-static const uint c_lightPrimitiveStart = 34;
-static const uint c_lightPrimitiveCount = 2;
-static const float3 c_blockAlbedo = float3(0.74f, 0.74f, 0.74f);
-static const float3 c_floorAlbedo = float3(0.75f, 0.75f, 0.75f);
-static const float3 c_ceilingAlbedo = float3(0.75f, 0.75f, 0.75f);
-static const float3 c_backWallAlbedo = float3(0.75f, 0.75f, 0.75f);
-static const float3 c_leftWallAlbedo = float3(0.65f, 0.08f, 0.05f);
-static const float3 c_rightWallAlbedo = float3(0.12f, 0.45f, 0.10f);
-static const float3 c_lightEmission = float3(12.0f, 10.0f, 8.0f);
-RWTexture2D<float4> g_output : register(u0);
-RWTexture2D<float4> g_accumulation : register(u1);
-RaytracingAccelerationStructure g_scene : register(t0);
-StructuredBuffer<Vertex> g_vertices : register(t1);
-StructuredBuffer<uint> g_indices : register(t2);
-
-cbuffer RenderSettings : register(b0)
-{
-    uint g_showNormalColor;
-    uint g_frameIndex;
-    uint g_maxBounce;
-    uint g_sampleIndex;
-    uint g_enableAccumulation;
-};
-
-uint CreateRandomSeed(uint depth, uint primitiveIndex)
-{
-    uint2 launchIndex = DispatchRaysIndex().xy;
-    uint2 launchDim = DispatchRaysDimensions().xy;
-    uint seed = launchIndex.x + launchIndex.y * launchDim.x;
-    seed = seed * 1973u + g_frameIndex * 9277u + depth * 26699u + primitiveIndex * 911u + 1u;
-    seed ^= seed >> 16;
-    seed *= 2246822519u;
-    seed ^= seed >> 13;
-    seed *= 3266489917u;
-    seed ^= seed >> 16;
-    return seed;
-}
-
-uint NextRandom(inout uint seed)
-{
-    seed = seed * 1664525u + 1013904223u;
-    return seed;
-}
-
-float RandomFloat01(inout uint seed)
-{
-    return float(NextRandom(seed) & 0x00FFFFFFu) / 16777216.0f;
-}
-
-float3 RandomUnitVector(inout uint seed)
-{
-    float z = RandomFloat01(seed) * 2.0f - 1.0f;
-    float phi = RandomFloat01(seed) * c_twoPi;
-    float radius = sqrt(max(0.0f, 1.0f - z * z));
-    float sinPhi;
-    float cosPhi;
-    sincos(phi, sinPhi, cosPhi);
-    return float3(radius * cosPhi, radius * sinPhi, z);
-}
-
-bool IsLightPrimitive(uint primitiveIndex)
-{
-    return primitiveIndex >= c_lightPrimitiveStart &&
-        primitiveIndex < c_lightPrimitiveStart + c_lightPrimitiveCount;
-}
-
-float3 SurfaceEmission(uint primitiveIndex)
-{
-    return IsLightPrimitive(primitiveIndex) ? c_lightEmission : float3(0.0f, 0.0f, 0.0f);
-}
-
-float3 SurfaceAlbedo(uint primitiveIndex)
-{
-    if (IsLightPrimitive(primitiveIndex))
-    {
-        return float3(0.0f, 0.0f, 0.0f);
-    }
-
-    if (primitiveIndex >= c_rightWallPrimitiveStart)
-    {
-        return c_rightWallAlbedo;
-    }
-
-    if (primitiveIndex >= c_leftWallPrimitiveStart)
-    {
-        return c_leftWallAlbedo;
-    }
-
-    if (primitiveIndex >= c_backWallPrimitiveStart)
-    {
-        return c_backWallAlbedo;
-    }
-
-    if (primitiveIndex >= c_ceilingPrimitiveStart)
-    {
-        return c_ceilingAlbedo;
-    }
-
-    if (primitiveIndex >= c_floorPrimitiveStart)
-    {
-        return c_floorAlbedo;
-    }
-
-    return c_blockAlbedo;
-}
+#include "RaytracingCommon.hlsli"
+#include "RaytracingScene.hlsli"
+#include "RaytracingPbr.hlsli"
 
 [shader("raygeneration")]
 void MyRaygenShader_RadianceRay()
@@ -178,10 +52,7 @@ void MyClosestHitShader_RadianceRay(
     uint i1 = g_indices[indexOffset + 1];
     uint i2 = g_indices[indexOffset + 2];
 
-    float3 p0 = g_vertices[i0].position;
-    float3 p1 = g_vertices[i1].position;
-    float3 p2 = g_vertices[i2].position;
-    float3 normal = normalize(cross(p1 - p0, p2 - p0));
+    float3 normal = InterpolateNormal(i0, i1, i2, attributes);
     if (dot(normal, WorldRayDirection()) > 0.0f)
     {
         normal = -normal;
@@ -194,7 +65,7 @@ void MyClosestHitShader_RadianceRay(
         return;
     }
 
-
+    float3 hitPosition = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     float3 emission = SurfaceEmission(PrimitiveIndex());
     if (any(emission > 0.0f))
     {
@@ -208,16 +79,20 @@ void MyClosestHitShader_RadianceRay(
         return;
     }
 
+    if (g_sceneType == c_scenePbrGgx)
+    {
+        payload.color = ShadePbrGgx(PrimitiveIndex(), normal, hitPosition);
+        return;
+    }
+
     uint seed = CreateRandomSeed(payload.depth, PrimitiveIndex());
 
-    // RTIOW-style Lambertian distribution sampling.
     float3 scatterDirection = normal + RandomUnitVector(seed);
     if (dot(scatterDirection, scatterDirection) < 0.000001f)
     {
         scatterDirection = normal;
     }
     scatterDirection = normalize(scatterDirection);
-    float3 hitPosition = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
 
     RayDesc bounceRay;
     bounceRay.Origin = hitPosition + normal * c_rayOriginBias;
@@ -230,7 +105,7 @@ void MyClosestHitShader_RadianceRay(
     bouncePayload.depth = payload.depth + 1;
 
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
-    payload.color = SurfaceAlbedo(PrimitiveIndex()) * bouncePayload.color;
+    payload.color = CornellSurfaceAlbedo(PrimitiveIndex()) * bouncePayload.color;
 }
 
 [shader("miss")]

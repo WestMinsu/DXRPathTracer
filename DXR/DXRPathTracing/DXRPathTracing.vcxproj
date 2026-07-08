@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -157,10 +157,16 @@
     <CustomBuild Include="Shaders\Raytracing.hlsl">
       <FileType>Document</FileType>
       <Command>if not exist &quot;$(OutDir)Shaders&quot; mkdir &quot;$(OutDir)Shaders&quot;
-&quot;$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxc.exe&quot; &quot;%(FullPath)&quot; /T lib_6_3 /Fo &quot;$(OutDir)Shaders\%(Filename).dxil&quot;</Command>
+&quot;$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxc.exe&quot; &quot;%(FullPath)&quot; /I &quot;$(ProjectDir)Shaders&quot; /T lib_6_3 /Fo &quot;$(OutDir)Shaders\%(Filename).dxil&quot;</Command>
       <Message>Compiling DXR shader %(Filename).hlsl</Message>
       <Outputs>$(OutDir)Shaders\%(Filename).dxil</Outputs>
+      <AdditionalInputs>Shaders\RaytracingCommon.hlsli;Shaders\RaytracingScene.hlsli;Shaders\RaytracingPbr.hlsli;%(AdditionalInputs)</AdditionalInputs>
     </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Shaders\RaytracingCommon.hlsli" />
+    <None Include="Shaders\RaytracingScene.hlsli" />
+    <None Include="Shaders\RaytracingPbr.hlsli" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

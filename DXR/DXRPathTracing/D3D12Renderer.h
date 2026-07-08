@@ -72,6 +72,7 @@ private:
     bool m_saveCurrentRequested = false;
     int m_captureTargetSamples = 256;
     int m_maxBounce = 8;
+    int m_sceneType = 0;
     std::string m_captureStatus;
 
     Microsoft::WRL::ComPtr<IDXGIFactory4> m_factory;

@@ -1,8 +1,11 @@
 #include "RayTracingManager.h"
 
+#include <cmath>
 #include <cstring>
+#include <cstdint>
 #include <iomanip>
 #include <sstream>
+#include <vector>
 
 #pragma comment(lib, "d3d12.lib")
 
@@ -13,6 +16,9 @@ namespace
     constexpr wchar_t c_missShaderName[] = L"MyMissShader_RadianceRay";
     constexpr wchar_t c_hitGroupName[] = L"MyHitGroup_Triangle_RadianceRay";
     constexpr wchar_t c_compiledShaderRelativePath[] = L"Shaders\\Raytracing.dxil";
+    constexpr float c_pi = 3.141592654f;
+    constexpr float c_twoPi = 6.283185307f;
+
     constexpr float c_shortBlockHalfWidth = 0.42f;
     constexpr float c_shortBlockHeight = 0.58f;
     constexpr float c_shortBlockHalfDepth = 0.42f;
@@ -32,26 +38,229 @@ namespace
     constexpr float c_boxHalfWidth = 2.25f;
     constexpr float c_boxNearZ = 0.0f;
     constexpr float c_boxFarZ = 4.0f;
-    constexpr float c_lightY = c_boxCeilingY - 0.002f;
-    constexpr float c_lightHalfWidth = 0.55f;
-    constexpr float c_lightNearZ = 1.10f;
-    constexpr float c_lightFarZ = 2.25f;
-    constexpr UINT c_vertexCount = 72;
-    constexpr UINT c_indexCount = 108;
+    constexpr float c_cornellLightY = c_boxCeilingY - 0.002f;
+    constexpr float c_cornellLightHalfWidth = 0.55f;
+    constexpr float c_cornellLightNearZ = 1.10f;
+    constexpr float c_cornellLightFarZ = 2.25f;
+
+    constexpr UINT c_sphereColumns = 5;
+    constexpr UINT c_sphereRows = 2;
+    constexpr UINT c_sphereCount = c_sphereColumns * c_sphereRows;
+    constexpr UINT c_sphereSlices = 24;
+    constexpr UINT c_sphereStacks = 12;
+    constexpr float c_sphereRadius = 0.28f;
+    constexpr float c_sphereStartX = -1.44f;
+    constexpr float c_sphereSpacingX = 0.72f;
+    constexpr float c_dielectricSphereZ = 1.20f;
+    constexpr float c_metalSphereZ = 2.30f;
+    constexpr float c_pbrFloorY = -0.85f;
+    constexpr float c_pbrSceneHalfWidth = 2.05f;
+    constexpr float c_pbrSceneNearZ = 0.0f;
+    constexpr float c_pbrSceneBackZ = 4.25f;
+    constexpr float c_pbrSceneCeilingY = 1.65f;
+    constexpr float c_pbrLightY = 1.55f;
+    constexpr float c_pbrLightHalfWidth = 0.72f;
+    constexpr float c_pbrLightNearZ = 1.35f;
+    constexpr float c_pbrLightFarZ = 2.75f;
+
+    struct Float3
+    {
+        float x;
+        float y;
+        float z;
+    };
 
     struct Vertex
     {
         float position[3];
+        float normal[3];
     };
 
-    Vertex MakeBlockVertex(float x, float y, float z, float centerX, float centerZ, float cosY, float sinY)
+    Float3 MakeFloat3(float x, float y, float z)
     {
-        const float rotatedX = x * cosY + z * sinY;
-        const float rotatedZ = -x * sinY + z * cosY;
-
-        return { { centerX + rotatedX, c_boxFloorY + y, centerZ + rotatedZ } };
+        return { x, y, z };
     }
 
+    Vertex MakeVertex(Float3 position, Float3 normal)
+    {
+        return
+        {
+            { position.x, position.y, position.z },
+            { normal.x, normal.y, normal.z }
+        };
+    }
+
+    Float3 RotateY(Float3 value, float cosY, float sinY)
+    {
+        return MakeFloat3(
+            value.x * cosY + value.z * sinY,
+            value.y,
+            -value.x * sinY + value.z * cosY);
+    }
+
+    Float3 MakeBlockPoint(float x, float y, float z, float centerX, float centerZ, float cosY, float sinY)
+    {
+        const Float3 rotated = RotateY(MakeFloat3(x, y, z), cosY, sinY);
+        return MakeFloat3(centerX + rotated.x, c_boxFloorY + rotated.y, centerZ + rotated.z);
+    }
+
+    Float3 MakeBlockNormal(float x, float y, float z, float cosY, float sinY)
+    {
+        return RotateY(MakeFloat3(x, y, z), cosY, sinY);
+    }
+
+    void AddQuad(
+        std::vector<Vertex>& vertices,
+        std::vector<std::uint32_t>& indices,
+        Float3 p0,
+        Float3 p1,
+        Float3 p2,
+        Float3 p3,
+        Float3 normal)
+    {
+        const std::uint32_t baseIndex = static_cast<std::uint32_t>(vertices.size());
+        vertices.push_back(MakeVertex(p0, normal));
+        vertices.push_back(MakeVertex(p1, normal));
+        vertices.push_back(MakeVertex(p2, normal));
+        vertices.push_back(MakeVertex(p3, normal));
+
+        indices.push_back(baseIndex + 0);
+        indices.push_back(baseIndex + 1);
+        indices.push_back(baseIndex + 2);
+        indices.push_back(baseIndex + 0);
+        indices.push_back(baseIndex + 2);
+        indices.push_back(baseIndex + 3);
+    }
+
+    void AddCornellBlock(
+        std::vector<Vertex>& vertices,
+        std::vector<std::uint32_t>& indices,
+        float halfWidth,
+        float height,
+        float halfDepth,
+        float centerX,
+        float centerZ,
+        float cosY,
+        float sinY)
+    {
+        const auto point = [=](float x, float y, float z)
+        {
+            return MakeBlockPoint(x, y, z, centerX, centerZ, cosY, sinY);
+        };
+        const auto normal = [=](float x, float y, float z)
+        {
+            return MakeBlockNormal(x, y, z, cosY, sinY);
+        };
+
+        AddQuad(vertices, indices, point(-halfWidth, height, -halfDepth), point( halfWidth, height, -halfDepth), point( halfWidth, 0.0f, -halfDepth), point(-halfWidth, 0.0f, -halfDepth), normal( 0.0f,  0.0f, -1.0f));
+        AddQuad(vertices, indices, point(-halfWidth, height,  halfDepth), point(-halfWidth, 0.0f,  halfDepth), point( halfWidth, 0.0f,  halfDepth), point( halfWidth, height,  halfDepth), normal( 0.0f,  0.0f,  1.0f));
+        AddQuad(vertices, indices, point(-halfWidth, height,  halfDepth), point(-halfWidth, height, -halfDepth), point(-halfWidth, 0.0f, -halfDepth), point(-halfWidth, 0.0f,  halfDepth), normal(-1.0f,  0.0f,  0.0f));
+        AddQuad(vertices, indices, point( halfWidth, height, -halfDepth), point( halfWidth, height,  halfDepth), point( halfWidth, 0.0f,  halfDepth), point( halfWidth, 0.0f, -halfDepth), normal( 1.0f,  0.0f,  0.0f));
+        AddQuad(vertices, indices, point(-halfWidth, height,  halfDepth), point( halfWidth, height,  halfDepth), point( halfWidth, height, -halfDepth), point(-halfWidth, height, -halfDepth), normal( 0.0f,  1.0f,  0.0f));
+        AddQuad(vertices, indices, point(-halfWidth, 0.0f, -halfDepth), point( halfWidth, 0.0f, -halfDepth), point( halfWidth, 0.0f,  halfDepth), point(-halfWidth, 0.0f,  halfDepth), normal( 0.0f, -1.0f,  0.0f));
+    }
+
+    void AddCornellBoxGeometry(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices)
+    {
+        vertices.reserve(72);
+        indices.reserve(108);
+
+        AddCornellBlock(vertices, indices, c_shortBlockHalfWidth, c_shortBlockHeight, c_shortBlockHalfDepth, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY);
+        AddCornellBlock(vertices, indices, c_tallBlockHalfWidth, c_tallBlockHeight, c_tallBlockHalfDepth, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY);
+
+        AddQuad(vertices, indices, MakeFloat3(-c_boxHalfWidth, c_boxFloorY, c_boxNearZ), MakeFloat3(-c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxFloorY, c_boxNearZ), MakeFloat3(0.0f, 1.0f, 0.0f));
+        AddQuad(vertices, indices, MakeFloat3(-c_boxHalfWidth, c_boxCeilingY, c_boxNearZ), MakeFloat3( c_boxHalfWidth, c_boxCeilingY, c_boxNearZ), MakeFloat3( c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3(-c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3(0.0f, -1.0f, 0.0f));
+        AddQuad(vertices, indices, MakeFloat3(-c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3(-c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3(0.0f, 0.0f, -1.0f));
+        AddQuad(vertices, indices, MakeFloat3(-c_boxHalfWidth, c_boxFloorY, c_boxNearZ), MakeFloat3(-c_boxHalfWidth, c_boxCeilingY, c_boxNearZ), MakeFloat3(-c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3(-c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3(1.0f, 0.0f, 0.0f));
+        AddQuad(vertices, indices, MakeFloat3( c_boxHalfWidth, c_boxFloorY, c_boxNearZ), MakeFloat3( c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxCeilingY, c_boxNearZ), MakeFloat3(-1.0f, 0.0f, 0.0f));
+        AddQuad(vertices, indices, MakeFloat3(-c_cornellLightHalfWidth, c_cornellLightY, c_cornellLightNearZ), MakeFloat3( c_cornellLightHalfWidth, c_cornellLightY, c_cornellLightNearZ), MakeFloat3( c_cornellLightHalfWidth, c_cornellLightY, c_cornellLightFarZ), MakeFloat3(-c_cornellLightHalfWidth, c_cornellLightY, c_cornellLightFarZ), MakeFloat3(0.0f, -1.0f, 0.0f));
+    }
+
+    void AddPbrSphere(
+        std::vector<Vertex>& vertices,
+        std::vector<std::uint32_t>& indices,
+        Float3 center,
+        float radius)
+    {
+        const std::uint32_t baseIndex = static_cast<std::uint32_t>(vertices.size());
+        for (UINT stack = 0; stack <= c_sphereStacks; ++stack)
+        {
+            const float theta = c_pi * static_cast<float>(stack) / static_cast<float>(c_sphereStacks);
+            const float sinTheta = std::sin(theta);
+            const float cosTheta = std::cos(theta);
+
+            for (UINT slice = 0; slice <= c_sphereSlices; ++slice)
+            {
+                const float phi = c_twoPi * static_cast<float>(slice) / static_cast<float>(c_sphereSlices);
+                const float sinPhi = std::sin(phi);
+                const float cosPhi = std::cos(phi);
+                const Float3 normal = MakeFloat3(sinTheta * cosPhi, cosTheta, sinTheta * sinPhi);
+                const Float3 position = MakeFloat3(
+                    center.x + normal.x * radius,
+                    center.y + normal.y * radius,
+                    center.z + normal.z * radius);
+                vertices.push_back(MakeVertex(position, normal));
+            }
+        }
+
+        const auto vertexIndex = [baseIndex](UINT stack, UINT slice) -> std::uint32_t
+        {
+            return baseIndex + stack * (c_sphereSlices + 1) + slice;
+        };
+
+        for (UINT stack = 0; stack < c_sphereStacks; ++stack)
+        {
+            for (UINT slice = 0; slice < c_sphereSlices; ++slice)
+            {
+                const std::uint32_t i0 = vertexIndex(stack, slice);
+                const std::uint32_t i1 = vertexIndex(stack + 1, slice);
+                const std::uint32_t i2 = vertexIndex(stack + 1, slice + 1);
+                const std::uint32_t i3 = vertexIndex(stack, slice + 1);
+
+                if (stack == 0)
+                {
+                    indices.push_back(i0);
+                    indices.push_back(i1);
+                    indices.push_back(i2);
+                }
+                else if (stack == c_sphereStacks - 1)
+                {
+                    indices.push_back(i0);
+                    indices.push_back(i1);
+                    indices.push_back(i3);
+                }
+                else
+                {
+                    indices.push_back(i0);
+                    indices.push_back(i1);
+                    indices.push_back(i2);
+                    indices.push_back(i0);
+                    indices.push_back(i2);
+                    indices.push_back(i3);
+                }
+            }
+        }
+    }
+
+    void AddPbrGgxSceneGeometry(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices)
+    {
+        vertices.reserve(c_sphereCount * (c_sphereStacks + 1) * (c_sphereSlices + 1) + 12);
+        indices.reserve(c_sphereCount * c_sphereSlices * (c_sphereStacks - 1) * 6 + 18);
+
+        for (UINT row = 0; row < c_sphereRows; ++row)
+        {
+            const float sphereZ = row == 0 ? c_dielectricSphereZ : c_metalSphereZ;
+            for (UINT column = 0; column < c_sphereColumns; ++column)
+            {
+                const float sphereX = c_sphereStartX + c_sphereSpacingX * static_cast<float>(column);
+                AddPbrSphere(vertices, indices, MakeFloat3(sphereX, c_pbrFloorY + c_sphereRadius, sphereZ), c_sphereRadius);
+            }
+        }
+
+        AddQuad(vertices, indices, MakeFloat3(-c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneNearZ), MakeFloat3(-c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneNearZ), MakeFloat3(0.0f, 1.0f, 0.0f));
+        AddQuad(vertices, indices, MakeFloat3(-c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrSceneCeilingY, c_pbrSceneBackZ), MakeFloat3(-c_pbrSceneHalfWidth, c_pbrSceneCeilingY, c_pbrSceneBackZ), MakeFloat3(0.0f, 0.0f, -1.0f));
+        AddQuad(vertices, indices, MakeFloat3(-c_pbrLightHalfWidth, c_pbrLightY, c_pbrLightNearZ), MakeFloat3( c_pbrLightHalfWidth, c_pbrLightY, c_pbrLightNearZ), MakeFloat3( c_pbrLightHalfWidth, c_pbrLightY, c_pbrLightFarZ), MakeFloat3(-c_pbrLightHalfWidth, c_pbrLightY, c_pbrLightFarZ), MakeFloat3(0.0f, -1.0f, 0.0f));
+    }
     struct RenderSettingsConstants
     {
         UINT showNormalColor;
@@ -59,6 +268,7 @@ namespace
         UINT maxBounce;
         UINT sampleIndex;
         UINT enableAccumulation;
+        UINT sceneType;
     };
 
     UINT AlignUp(UINT value, UINT alignment)
@@ -180,7 +390,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     renderSettings.maxBounce = m_maxBounce;
     renderSettings.sampleIndex = shouldAccumulate ? m_accumulatedSampleCount : 0u;
     renderSettings.enableAccumulation = shouldAccumulate ? 1u : 0u;
-    commandList->SetComputeRoot32BitConstants(4, 5, &renderSettings, 0);
+    renderSettings.sceneType = m_sceneType;
+    commandList->SetComputeRoot32BitConstants(4, 6, &renderSettings, 0);
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -250,6 +461,17 @@ void RayTracingManager::SetEnableAccumulation(bool enableAccumulation)
 
     m_enableAccumulation = enableAccumulation;
     ResetAccumulation();
+}
+
+void RayTracingManager::SetSceneType(UINT sceneType)
+{
+    const UINT clampedSceneType = sceneType == c_scenePbrGgx ? c_scenePbrGgx : c_sceneCornellBox;
+    if (m_sceneType == clampedSceneType)
+        return;
+
+    m_sceneType = clampedSceneType;
+    ResetAccumulation();
+    CreateAccelerationStructures();
 }
 
 bool RayTracingManager::CreateOutputTexture()
@@ -370,7 +592,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 5;
+    rootParameters[4].Constants.Num32BitValues = 6;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
@@ -619,131 +841,35 @@ bool RayTracingManager::CreateBuildCommandObjects()
 
 bool RayTracingManager::CreateStaticGeometryBuffers()
 {
-    const float sw = c_shortBlockHalfWidth;
-    const float sh = c_shortBlockHeight;
-    const float sd = c_shortBlockHalfDepth;
-    const float tw = c_tallBlockHalfWidth;
-    const float th = c_tallBlockHeight;
-    const float td = c_tallBlockHalfDepth;
-    const Vertex vertices[c_vertexCount] =
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+
+    if (m_sceneType == c_scenePbrGgx)
     {
-        MakeBlockVertex(-sw, sh, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex( sw, sh, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex( sw, 0.0f, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex(-sw, 0.0f, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-
-        MakeBlockVertex(-sw, sh,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex(-sw, 0.0f,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex( sw, 0.0f,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex( sw, sh,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-
-        MakeBlockVertex(-sw, sh,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex(-sw, sh, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex(-sw, 0.0f, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex(-sw, 0.0f,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-
-        MakeBlockVertex( sw, sh, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex( sw, sh,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex( sw, 0.0f,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex( sw, 0.0f, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-
-        MakeBlockVertex(-sw, sh,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex( sw, sh,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex( sw, sh, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex(-sw, sh, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-
-        MakeBlockVertex(-sw, 0.0f, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex( sw, 0.0f, -sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex( sw, 0.0f,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-        MakeBlockVertex(-sw, 0.0f,  sd, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY),
-
-        MakeBlockVertex(-tw, th, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex( tw, th, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex( tw, 0.0f, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex(-tw, 0.0f, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-
-        MakeBlockVertex(-tw, th,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex(-tw, 0.0f,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex( tw, 0.0f,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex( tw, th,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-
-        MakeBlockVertex(-tw, th,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex(-tw, th, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex(-tw, 0.0f, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex(-tw, 0.0f,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-
-        MakeBlockVertex( tw, th, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex( tw, th,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex( tw, 0.0f,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex( tw, 0.0f, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-
-        MakeBlockVertex(-tw, th,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex( tw, th,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex( tw, th, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex(-tw, th, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-
-        MakeBlockVertex(-tw, 0.0f, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex( tw, 0.0f, -td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex( tw, 0.0f,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-        MakeBlockVertex(-tw, 0.0f,  td, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY),
-
-        { { -c_boxHalfWidth, c_boxFloorY, c_boxNearZ } },
-        { { -c_boxHalfWidth, c_boxFloorY, c_boxFarZ } },
-        { {  c_boxHalfWidth, c_boxFloorY, c_boxFarZ } },
-        { {  c_boxHalfWidth, c_boxFloorY, c_boxNearZ } },
-
-        { { -c_boxHalfWidth, c_boxCeilingY, c_boxNearZ } },
-        { {  c_boxHalfWidth, c_boxCeilingY, c_boxNearZ } },
-        { {  c_boxHalfWidth, c_boxCeilingY, c_boxFarZ } },
-        { { -c_boxHalfWidth, c_boxCeilingY, c_boxFarZ } },
-
-        { { -c_boxHalfWidth, c_boxFloorY, c_boxFarZ } },
-        { { -c_boxHalfWidth, c_boxCeilingY, c_boxFarZ } },
-        { {  c_boxHalfWidth, c_boxCeilingY, c_boxFarZ } },
-        { {  c_boxHalfWidth, c_boxFloorY, c_boxFarZ } },
-
-        { { -c_boxHalfWidth, c_boxFloorY, c_boxNearZ } },
-        { { -c_boxHalfWidth, c_boxCeilingY, c_boxNearZ } },
-        { { -c_boxHalfWidth, c_boxCeilingY, c_boxFarZ } },
-        { { -c_boxHalfWidth, c_boxFloorY, c_boxFarZ } },
-
-        { {  c_boxHalfWidth, c_boxFloorY, c_boxNearZ } },
-        { {  c_boxHalfWidth, c_boxFloorY, c_boxFarZ } },
-        { {  c_boxHalfWidth, c_boxCeilingY, c_boxFarZ } },
-        { {  c_boxHalfWidth, c_boxCeilingY, c_boxNearZ } },
-
-        { { -c_lightHalfWidth, c_lightY, c_lightNearZ } },
-        { {  c_lightHalfWidth, c_lightY, c_lightNearZ } },
-        { {  c_lightHalfWidth, c_lightY, c_lightFarZ } },
-        { { -c_lightHalfWidth, c_lightY, c_lightFarZ } }
-    };
-
-    const std::uint32_t indices[c_indexCount] =
+        AddPbrGgxSceneGeometry(vertices, indices);
+    }
+    else
     {
-        0, 1, 2, 0, 2, 3,
-        4, 5, 6, 4, 6, 7,
-        8, 9, 10, 8, 10, 11,
-        12, 13, 14, 12, 14, 15,
-        16, 17, 18, 16, 18, 19,
-        20, 21, 22, 20, 22, 23,
-        24, 25, 26, 24, 26, 27,
-        28, 29, 30, 28, 30, 31,
-        32, 33, 34, 32, 34, 35,
-        36, 37, 38, 36, 38, 39,
-        40, 41, 42, 40, 42, 43,
-        44, 45, 46, 44, 46, 47,
-        48, 49, 50, 48, 50, 51,
-        52, 53, 54, 52, 54, 55,
-        56, 57, 58, 56, 58, 59,
-        60, 61, 62, 60, 62, 63,
-        64, 65, 66, 64, 66, 67,
-        68, 69, 70, 68, 70, 71
-    };
+        AddCornellBoxGeometry(vertices, indices);
+    }
 
-    if (!CreateUploadBuffer(vertices, sizeof(vertices), L"Raytracing scene vertex buffer", m_vertexBuffer))
+    m_vertexCount = static_cast<UINT>(vertices.size());
+    m_indexCount = static_cast<UINT>(indices.size());
+
+    if (!CreateUploadBuffer(
+        vertices.data(),
+        sizeof(Vertex) * vertices.size(),
+        L"Raytracing scene vertex buffer",
+        m_vertexBuffer))
+    {
         return false;
+    }
 
-    return CreateUploadBuffer(indices, sizeof(indices), L"Raytracing scene index buffer", m_indexBuffer);
+    return CreateUploadBuffer(
+        indices.data(),
+        sizeof(std::uint32_t) * indices.size(),
+        L"Raytracing scene index buffer",
+        m_indexBuffer);
 }
 bool RayTracingManager::BuildBottomLevelAccelerationStructure()
 {
@@ -752,10 +878,10 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure()
     geometryDesc.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
     geometryDesc.Triangles.VertexBuffer.StartAddress = m_vertexBuffer->GetGPUVirtualAddress();
     geometryDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(Vertex);
-    geometryDesc.Triangles.VertexCount = c_vertexCount;
+    geometryDesc.Triangles.VertexCount = m_vertexCount;
     geometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
     geometryDesc.Triangles.IndexBuffer = m_indexBuffer->GetGPUVirtualAddress();
-    geometryDesc.Triangles.IndexCount = c_indexCount;
+    geometryDesc.Triangles.IndexCount = m_indexCount;
     geometryDesc.Triangles.IndexFormat = DXGI_FORMAT_R32_UINT;
     geometryDesc.Triangles.Transform3x4 = 0;
 

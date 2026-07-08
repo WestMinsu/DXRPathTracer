@@ -461,6 +461,14 @@ void D3D12Renderer::BuildImGuiFrame()
     ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin("DXR Debug");
+    const char* sceneNames[] = { "Cornell Box", "PBR GGX" };
+    if (ImGui::Combo("Scene", &m_sceneType, sceneNames, _countof(sceneNames)) && m_rayTracingManager)
+    {
+        m_captureActive = false;
+        m_saveCurrentRequested = false;
+        m_captureStatus.clear();
+        m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
+    }
     ImGui::Checkbox("Show normal color", &m_showNormalColor);
     ImGui::Checkbox("Accumulate samples", &m_enableAccumulation);
     ImGui::SliderInt("Max Bounce", &m_maxBounce, 1, 8);

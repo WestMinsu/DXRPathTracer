@@ -12,12 +12,16 @@ class RayTracingManager
 public:
     ~RayTracingManager();
 
+    static constexpr UINT c_sceneCornellBox = 0;
+    static constexpr UINT c_scenePbrGgx = 1;
+
     bool Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height);
     bool Resize(UINT width, UINT height);
     void DispatchRays(ID3D12GraphicsCommandList4* commandList);
     void SetShowNormalColor(bool showNormalColor);
     void SetMaxBounce(UINT maxBounce);
     void SetEnableAccumulation(bool enableAccumulation);
+    void SetSceneType(UINT sceneType);
     void ResetAccumulation() { m_accumulatedSampleCount = 0; }
     UINT GetAccumulatedSampleCount() const { return m_accumulatedSampleCount; }
 
@@ -75,11 +79,14 @@ private:
     UINT m_hitGroupShaderRecordSize = 0;
     UINT m_frameIndex = 0;
     UINT m_accumulatedSampleCount = 0;
+    UINT m_vertexCount = 0;
+    UINT m_indexCount = 0;
     UINT64 m_buildFenceValue = 0;
     HANDLE m_buildFenceEvent = nullptr;
     bool m_showNormalColor = true;
     bool m_enableAccumulation = true;
     UINT m_maxBounce = 3;
+    UINT m_sceneType = c_sceneCornellBox;
 
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;
