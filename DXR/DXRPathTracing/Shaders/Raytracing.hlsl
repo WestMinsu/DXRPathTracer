@@ -103,5 +103,7 @@ void MyClosestHitShader_RadianceRay(
 [shader("miss")]
 void MyMissShader_RadianceRay(inout RadiancePayload payload)
 {
-    payload.color = float3(0.0f, 0.0f, 0.0f);
+    payload.color = g_sceneType == c_scenePbrGgx && g_enableIbl != 0
+        ? SampleEnvironmentMap(WorldRayDirection())
+        : float3(0.0f, 0.0f, 0.0f);
 }

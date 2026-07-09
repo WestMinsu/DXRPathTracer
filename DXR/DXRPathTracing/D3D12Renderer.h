@@ -76,6 +76,8 @@ private:
     int m_pbrDebugView = 0;
     float m_pbrMetallic = 1.0f;
     float m_pbrRoughness = 0.35f;
+    bool m_enableIbl = true;
+    float m_iblIntensity = 1.0f;
     std::string m_captureStatus;
 
     Microsoft::WRL::ComPtr<IDXGIFactory4> m_factory;

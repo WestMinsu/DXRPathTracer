@@ -168,6 +168,11 @@
     <None Include="Shaders\RaytracingScene.hlsli" />
     <None Include="Shaders\RaytracingPbr.hlsli" />
   </ItemGroup>
+  <ItemGroup>
+    <None Include="Assets\Textures\Cubemaps\HDRI\autumn_hill_view_4kSpecularHDR.dds">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

@@ -28,6 +28,7 @@ public:
     void SetSceneType(UINT sceneType);
     void SetPbrDebugView(UINT pbrDebugView);
     void SetPbrMaterial(float metallic, float roughness);
+    void SetIblSettings(bool enableIbl, float intensity);
     void ResetAccumulation() { m_accumulatedSampleCount = 0; }
     UINT GetAccumulatedSampleCount() const { return m_accumulatedSampleCount; }
 
@@ -47,6 +48,7 @@ private:
     static constexpr UINT c_maxRecursionDepth = c_maxBounce + 1;
 
     bool CreateOutputTexture();
+    bool CreateEnvironmentMap();
     bool CreateGlobalRootSignature();
     bool CreateRaytracingPipelineState();
     bool CreateShaderTables();
@@ -73,6 +75,7 @@ private:
     bool LoadCompiledShader(std::vector<std::uint8_t>& shaderBytes) const;
     bool ReadBinaryFile(const std::wstring& path, std::vector<std::uint8_t>& bytes) const;
     std::wstring GetCompiledShaderPath() const;
+    std::wstring GetEnvironmentMapPath() const;
     bool ReportFailure(HRESULT hr, const wchar_t* message) const;
     void ReportMessage(const std::wstring& message) const;
 
@@ -96,10 +99,13 @@ private:
     UINT m_pbrDebugView = c_pbrDebugBeauty;
     float m_pbrMetallic = 1.0f;
     float m_pbrRoughness = 0.35f;
+    bool m_enableIbl = true;
+    float m_iblIntensity = 1.0f;
 
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_accumulationTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_environmentMap;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_descriptorHeap;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_globalRootSignature;
     Microsoft::WRL::ComPtr<ID3D12StateObject> m_stateObject;

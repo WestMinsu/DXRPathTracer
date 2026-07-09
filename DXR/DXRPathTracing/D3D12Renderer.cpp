@@ -93,6 +93,7 @@ void D3D12Renderer::Render()
     m_rayTracingManager->SetEnableAccumulation(m_enableAccumulation);
     m_rayTracingManager->SetPbrDebugView(static_cast<UINT>(m_pbrDebugView));
     m_rayTracingManager->SetPbrMaterial(m_pbrMetallic, m_pbrRoughness);
+    m_rayTracingManager->SetIblSettings(m_enableIbl, m_iblIntensity);
 
     HRESULT hr = m_commandAllocator->Reset();
     if (ReportFailure(hr, L"Command allocator reset failed."))
@@ -463,7 +464,7 @@ void D3D12Renderer::BuildImGuiFrame()
     ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin("DXR Debug");
-    const char* sceneNames[] = { "Cornell Box", "PBR GGX" };
+    const char* sceneNames[] = { "Cornell Box", "PBR" };
     if (ImGui::Combo("Scene", &m_sceneType, sceneNames, _countof(sceneNames)) && m_rayTracingManager)
     {
         m_captureActive = false;
@@ -491,6 +492,17 @@ void D3D12Renderer::BuildImGuiFrame()
             m_saveCurrentRequested = false;
             m_captureStatus.clear();
             m_rayTracingManager->SetPbrMaterial(m_pbrMetallic, m_pbrRoughness);
+        }
+
+        bool iblChanged = false;
+        iblChanged |= ImGui::Checkbox("Enable IBL", &m_enableIbl);
+        iblChanged |= ImGui::SliderFloat("IBL Intensity", &m_iblIntensity, 0.0f, 4.0f, "%.2f");
+        if (iblChanged && m_rayTracingManager)
+        {
+            m_captureActive = false;
+            m_saveCurrentRequested = false;
+            m_captureStatus.clear();
+            m_rayTracingManager->SetIblSettings(m_enableIbl, m_iblIntensity);
         }
     }
     ImGui::Checkbox("Show normal color", &m_showNormalColor);

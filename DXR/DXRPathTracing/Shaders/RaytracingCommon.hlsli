@@ -65,6 +65,8 @@ RWTexture2D<float4> g_accumulation : register(u1);
 RaytracingAccelerationStructure g_scene : register(t0);
 StructuredBuffer<Vertex> g_vertices : register(t1);
 StructuredBuffer<uint> g_indices : register(t2);
+TextureCube<float4> g_environmentMap : register(t3);
+SamplerState g_environmentSampler : register(s0);
 
 cbuffer RenderSettings : register(b0)
 {
@@ -75,8 +77,10 @@ cbuffer RenderSettings : register(b0)
     uint g_enableAccumulation;
     uint g_sceneType;
     uint g_pbrDebugView;
+    uint g_enableIbl;
     float g_pbrMetallic;
     float g_pbrRoughness;
+    float g_iblIntensity;
 };
 
 uint CreateRandomSeed(uint depth, uint primitiveIndex)
@@ -145,6 +149,13 @@ float3 InterpolateNormal(uint i0, uint i1, uint i2, BuiltInTriangleIntersectionA
     return normalize(n0 * barycentrics.x + n1 * barycentrics.y + n2 * barycentrics.z);
 }
 
+
+float3 SampleEnvironmentMap(float3 direction)
+{
+    return max(
+        g_environmentMap.SampleLevel(g_environmentSampler, normalize(direction), 0.0f).rgb,
+        float3(0.0f, 0.0f, 0.0f)) * g_iblIntensity;
+}
 float3 TraceLambertianBounce(float3 normal, float3 hitPosition, float3 albedo, uint depth, uint primitiveIndex)
 {
     uint seed = CreateRandomSeed(depth, primitiveIndex);

@@ -1,7 +1,9 @@
 #include "RayTracingManager.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstddef>
 #include <cstdint>
 #include <iomanip>
 #include <sstream>
@@ -16,6 +18,14 @@ namespace
     constexpr wchar_t c_missShaderName[] = L"MyMissShader_RadianceRay";
     constexpr wchar_t c_hitGroupName[] = L"MyHitGroup_Triangle_RadianceRay";
     constexpr wchar_t c_compiledShaderRelativePath[] = L"Shaders\\Raytracing.dxil";
+    constexpr wchar_t c_environmentMapRelativePath[] = L"Assets\\Textures\\Cubemaps\\HDRI\\autumn_hill_view_4kSpecularHDR.dds";
+    constexpr UINT c_descriptorCount = 3;
+    constexpr UINT c_environmentDescriptorIndex = 2;
+    constexpr UINT c_cubeFaceCount = 6;
+    constexpr UINT c_ddsHeaderSize = 128;
+    constexpr UINT c_ddsMagic = 0x20534444u;
+    constexpr UINT c_d3dFormatA16B16G16R16F = 113;
+    constexpr UINT c_bytesPerRgba16FloatPixel = 8;
     constexpr float c_pi = 3.141592654f;
     constexpr float c_twoPi = 6.283185307f;
 
@@ -71,6 +81,16 @@ namespace
     {
         float position[3];
         float normal[3];
+    };
+
+    struct DdsCubemapData
+    {
+        UINT width = 0;
+        UINT height = 0;
+        UINT mipCount = 0;
+        DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+        UINT bytesPerPixel = 0;
+        std::vector<std::uint8_t> texels;
     };
 
     Float3 MakeFloat3(float x, float y, float z)
@@ -255,8 +275,6 @@ namespace
         }
 
         AddQuad(vertices, indices, MakeFloat3(-c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneNearZ), MakeFloat3(-c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneNearZ), MakeFloat3(0.0f, 1.0f, 0.0f));
-        AddQuad(vertices, indices, MakeFloat3(-c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrSceneCeilingY, c_pbrSceneBackZ), MakeFloat3(-c_pbrSceneHalfWidth, c_pbrSceneCeilingY, c_pbrSceneBackZ), MakeFloat3(0.0f, 0.0f, -1.0f));
-        AddQuad(vertices, indices, MakeFloat3(-c_pbrLightHalfWidth, c_pbrLightY, c_pbrLightNearZ), MakeFloat3( c_pbrLightHalfWidth, c_pbrLightY, c_pbrLightNearZ), MakeFloat3( c_pbrLightHalfWidth, c_pbrLightY, c_pbrLightFarZ), MakeFloat3(-c_pbrLightHalfWidth, c_pbrLightY, c_pbrLightFarZ), MakeFloat3(0.0f, -1.0f, 0.0f));
     }
 
     struct RenderSettingsConstants
@@ -268,8 +286,10 @@ namespace
         UINT enableAccumulation;
         UINT sceneType;
         UINT pbrDebugView;
+        UINT enableIbl;
         float pbrMetallic;
         float pbrRoughness;
+        float iblIntensity;
     };
 
     UINT AlignUp(UINT value, UINT alignment)
@@ -310,6 +330,60 @@ namespace
         properties.CreationNodeMask = 1;
         properties.VisibleNodeMask = 1;
         return properties;
+    }
+
+    UINT ReadUint32(const std::vector<std::uint8_t>& bytes, std::size_t offset)
+    {
+        return static_cast<UINT>(bytes[offset + 0]) |
+            (static_cast<UINT>(bytes[offset + 1]) << 8) |
+            (static_cast<UINT>(bytes[offset + 2]) << 16) |
+            (static_cast<UINT>(bytes[offset + 3]) << 24);
+    }
+
+    UINT GetMipDimension(UINT baseDimension, UINT mipLevel)
+    {
+        const UINT dimension = baseDimension >> mipLevel;
+        return dimension > 0 ? dimension : 1;
+    }
+
+    bool ParseLegacyRgba16FloatCubemapDds(const std::vector<std::uint8_t>& bytes, DdsCubemapData& cubemap)
+    {
+        if (bytes.size() < c_ddsHeaderSize || ReadUint32(bytes, 0) != c_ddsMagic)
+            return false;
+
+        const UINT height = ReadUint32(bytes, 12);
+        const UINT width = ReadUint32(bytes, 16);
+        UINT mipCount = ReadUint32(bytes, 28);
+        const UINT fourCc = ReadUint32(bytes, 84);
+        if (width == 0 || height == 0 || fourCc != c_d3dFormatA16B16G16R16F)
+            return false;
+
+        if (mipCount == 0)
+            mipCount = 1;
+
+        UINT64 requiredBytes = 0;
+        for (UINT face = 0; face < c_cubeFaceCount; ++face)
+        {
+            for (UINT mip = 0; mip < mipCount; ++mip)
+            {
+                const UINT mipWidth = GetMipDimension(width, mip);
+                const UINT mipHeight = GetMipDimension(height, mip);
+                requiredBytes += static_cast<UINT64>(mipWidth) * mipHeight * c_bytesPerRgba16FloatPixel;
+            }
+        }
+
+        if (bytes.size() < static_cast<std::size_t>(c_ddsHeaderSize + requiredBytes))
+            return false;
+
+        cubemap.width = width;
+        cubemap.height = height;
+        cubemap.mipCount = mipCount;
+        cubemap.format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        cubemap.bytesPerPixel = c_bytesPerRgba16FloatPixel;
+        cubemap.texels.assign(
+            bytes.begin() + c_ddsHeaderSize,
+            bytes.begin() + c_ddsHeaderSize + static_cast<std::ptrdiff_t>(requiredBytes));
+        return true;
     }
 
     struct ScopedFileHandle
@@ -354,6 +428,12 @@ bool RayTracingManager::Initialize(HWND hWnd, ID3D12Device5* device, UINT width,
     if (!CreateOutputTexture())
         return false;
 
+    if (!CreateBuildCommandObjects())
+        return false;
+
+    if (!CreateEnvironmentMap())
+        return false;
+
     if (!CreateGlobalRootSignature())
         return false;
 
@@ -372,7 +452,7 @@ bool RayTracingManager::Initialize(HWND hWnd, ID3D12Device5* device, UINT width,
 void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
 {
     if (!commandList || !m_stateObject || !m_rayGenShaderTable || !m_missShaderTable ||
-        !m_hitGroupShaderTable || !m_descriptorHeap || !m_topLevelAS || !m_accumulationTexture)
+        !m_hitGroupShaderTable || !m_descriptorHeap || !m_topLevelAS || !m_accumulationTexture || !m_environmentMap)
     {
         return;
     }
@@ -393,9 +473,14 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     renderSettings.enableAccumulation = shouldAccumulate ? 1u : 0u;
     renderSettings.sceneType = m_sceneType;
     renderSettings.pbrDebugView = m_pbrDebugView;
+    renderSettings.enableIbl = m_enableIbl ? 1u : 0u;
     renderSettings.pbrMetallic = m_pbrMetallic;
     renderSettings.pbrRoughness = m_pbrRoughness;
-    commandList->SetComputeRoot32BitConstants(4, 9, &renderSettings, 0);
+    renderSettings.iblIntensity = m_iblIntensity;
+    commandList->SetComputeRoot32BitConstants(4, 11, &renderSettings, 0);
+    D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
+    environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
+    commandList->SetComputeRootDescriptorTable(5, environmentHandle);
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -490,6 +575,17 @@ void RayTracingManager::SetPbrMaterial(float metallic, float roughness)
     m_pbrRoughness = clampedRoughness;
     ResetAccumulation();
 }
+
+void RayTracingManager::SetIblSettings(bool enableIbl, float intensity)
+{
+    const float clampedIntensity = intensity < 0.0f ? 0.0f : (intensity > 8.0f ? 8.0f : intensity);
+    if (m_enableIbl == enableIbl && m_iblIntensity == clampedIntensity)
+        return;
+
+    m_enableIbl = enableIbl;
+    m_iblIntensity = clampedIntensity;
+    ResetAccumulation();
+}
 void RayTracingManager::SetSceneType(UINT sceneType)
 {
     const UINT clampedSceneType = sceneType == c_scenePbrGgx ? c_scenePbrGgx : c_sceneCornellBox;
@@ -506,7 +602,7 @@ bool RayTracingManager::CreateOutputTexture()
     if (!m_descriptorHeap)
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-        heapDesc.NumDescriptors = 2;
+        heapDesc.NumDescriptors = c_descriptorCount;
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 
@@ -583,6 +679,181 @@ bool RayTracingManager::CreateOutputTexture()
         &accumulationUavDesc,
         uavHandle);
 
+    if (m_environmentMap)
+    {
+        const D3D12_RESOURCE_DESC environmentDesc = m_environmentMap->GetDesc();
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format = environmentDesc.Format;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+        srvDesc.TextureCube.MostDetailedMip = 0;
+        srvDesc.TextureCube.MipLevels = environmentDesc.MipLevels;
+        srvDesc.TextureCube.ResourceMinLODClamp = 0.0f;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE environmentSrvHandle = m_descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        environmentSrvHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
+        m_device->CreateShaderResourceView(m_environmentMap.Get(), &srvDesc, environmentSrvHandle);
+    }
+
+    return true;
+}
+
+
+bool RayTracingManager::CreateEnvironmentMap()
+{
+    std::vector<std::uint8_t> ddsBytes;
+    if (!ReadBinaryFile(GetEnvironmentMapPath(), ddsBytes))
+    {
+        std::wstring message = L"Environment DDS was not found.\nExpected: ";
+        message += GetEnvironmentMapPath();
+        ReportMessage(message);
+        return false;
+    }
+
+    DdsCubemapData cubemap;
+    if (!ParseLegacyRgba16FloatCubemapDds(ddsBytes, cubemap))
+    {
+        ReportMessage(L"Environment DDS must be a legacy A16B16G16R16F cubemap generated by iblbaker.");
+        return false;
+    }
+
+    const UINT subresourceCount = c_cubeFaceCount * cubemap.mipCount;
+
+    D3D12_RESOURCE_DESC textureDesc = {};
+    textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    textureDesc.Alignment = 0;
+    textureDesc.Width = cubemap.width;
+    textureDesc.Height = cubemap.height;
+    textureDesc.DepthOrArraySize = static_cast<UINT16>(c_cubeFaceCount);
+    textureDesc.MipLevels = static_cast<UINT16>(cubemap.mipCount);
+    textureDesc.Format = cubemap.format;
+    textureDesc.SampleDesc.Count = 1;
+    textureDesc.SampleDesc.Quality = 0;
+    textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+    const D3D12_HEAP_PROPERTIES defaultHeapProperties = CreateHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    HRESULT hr = m_device->CreateCommittedResource(
+        &defaultHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &textureDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&m_environmentMap));
+    if (ReportFailure(hr, L"Environment cubemap creation failed."))
+        return false;
+
+    m_environmentMap->SetName(L"IBL environment cubemap");
+
+    std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(subresourceCount);
+    std::vector<UINT> rowCounts(subresourceCount);
+    std::vector<UINT64> rowSizes(subresourceCount);
+    UINT64 uploadBufferSize = 0;
+    m_device->GetCopyableFootprints(
+        &textureDesc,
+        0,
+        subresourceCount,
+        0,
+        footprints.data(),
+        rowCounts.data(),
+        rowSizes.data(),
+        &uploadBufferSize);
+
+    const D3D12_HEAP_PROPERTIES uploadHeapProperties = CreateHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    const D3D12_RESOURCE_DESC uploadBufferDesc = CreateBufferDesc(uploadBufferSize);
+    Microsoft::WRL::ComPtr<ID3D12Resource> uploadBuffer;
+    hr = m_device->CreateCommittedResource(
+        &uploadHeapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &uploadBufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&uploadBuffer));
+    if (ReportFailure(hr, L"Environment cubemap upload buffer creation failed."))
+        return false;
+
+    uploadBuffer->SetName(L"IBL environment cubemap upload buffer");
+
+    std::uint8_t* mappedData = nullptr;
+    D3D12_RANGE readRange = { 0, 0 };
+    hr = uploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&mappedData));
+    if (ReportFailure(hr, L"Environment cubemap upload buffer mapping failed."))
+        return false;
+
+    std::memset(mappedData, 0, static_cast<std::size_t>(uploadBufferSize));
+    std::size_t sourceOffset = 0;
+    for (UINT face = 0; face < c_cubeFaceCount; ++face)
+    {
+        for (UINT mip = 0; mip < cubemap.mipCount; ++mip)
+        {
+            const UINT subresourceIndex = face * cubemap.mipCount + mip;
+            const UINT mipWidth = GetMipDimension(cubemap.width, mip);
+            const UINT mipHeight = GetMipDimension(cubemap.height, mip);
+            const std::size_t sourceRowPitch = static_cast<std::size_t>(mipWidth) * cubemap.bytesPerPixel;
+            const std::uint8_t* source = cubemap.texels.data() + sourceOffset;
+            std::uint8_t* destination = mappedData + footprints[subresourceIndex].Offset;
+
+            for (UINT row = 0; row < mipHeight; ++row)
+            {
+                std::memcpy(
+                    destination + static_cast<std::size_t>(row) * footprints[subresourceIndex].Footprint.RowPitch,
+                    source + static_cast<std::size_t>(row) * sourceRowPitch,
+                    sourceRowPitch);
+            }
+
+            sourceOffset += sourceRowPitch * mipHeight;
+        }
+    }
+
+    D3D12_RANGE writeRange = { 0, static_cast<SIZE_T>(uploadBufferSize) };
+    uploadBuffer->Unmap(0, &writeRange);
+
+    hr = m_buildCommandAllocator->Reset();
+    if (ReportFailure(hr, L"Environment upload command allocator reset failed."))
+        return false;
+
+    hr = m_buildCommandList->Reset(m_buildCommandAllocator.Get(), nullptr);
+    if (ReportFailure(hr, L"Environment upload command list reset failed."))
+        return false;
+
+    for (UINT subresourceIndex = 0; subresourceIndex < subresourceCount; ++subresourceIndex)
+    {
+        D3D12_TEXTURE_COPY_LOCATION sourceLocation = {};
+        sourceLocation.pResource = uploadBuffer.Get();
+        sourceLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        sourceLocation.PlacedFootprint = footprints[subresourceIndex];
+
+        D3D12_TEXTURE_COPY_LOCATION destinationLocation = {};
+        destinationLocation.pResource = m_environmentMap.Get();
+        destinationLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        destinationLocation.SubresourceIndex = subresourceIndex;
+
+        m_buildCommandList->CopyTextureRegion(&destinationLocation, 0, 0, 0, &sourceLocation, nullptr);
+    }
+
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = m_environmentMap.Get();
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_buildCommandList->ResourceBarrier(1, &barrier);
+
+    if (!ExecuteBuildCommandListAndWait())
+        return false;
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format = cubemap.format;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+    srvDesc.TextureCube.MostDetailedMip = 0;
+    srvDesc.TextureCube.MipLevels = cubemap.mipCount;
+    srvDesc.TextureCube.ResourceMinLODClamp = 0.0f;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE srvHandle = m_descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+    srvHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
+    m_device->CreateShaderResourceView(m_environmentMap.Get(), &srvDesc, srvHandle);
     return true;
 }
 
@@ -595,7 +866,14 @@ bool RayTracingManager::CreateGlobalRootSignature()
     outputRange.RegisterSpace = 0;
     outputRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParameters[5] = {};
+    D3D12_DESCRIPTOR_RANGE environmentRange = {};
+    environmentRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    environmentRange.NumDescriptors = 1;
+    environmentRange.BaseShaderRegister = 3;
+    environmentRange.RegisterSpace = 0;
+    environmentRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParameters[6] = {};
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParameters[0].DescriptorTable.NumDescriptorRanges = 1;
     rootParameters[0].DescriptorTable.pDescriptorRanges = &outputRange;
@@ -619,14 +897,34 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 9;
+    rootParameters[4].Constants.Num32BitValues = 11;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+    rootParameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParameters[5].DescriptorTable.NumDescriptorRanges = 1;
+    rootParameters[5].DescriptorTable.pDescriptorRanges = &environmentRange;
+    rootParameters[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+
+    D3D12_STATIC_SAMPLER_DESC environmentSampler = {};
+    environmentSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    environmentSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    environmentSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    environmentSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    environmentSampler.MipLODBias = 0.0f;
+    environmentSampler.MaxAnisotropy = 1;
+    environmentSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    environmentSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK;
+    environmentSampler.MinLOD = 0.0f;
+    environmentSampler.MaxLOD = D3D12_FLOAT32_MAX;
+    environmentSampler.ShaderRegister = 0;
+    environmentSampler.RegisterSpace = 0;
+    environmentSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
     rootSignatureDesc.NumParameters = _countof(rootParameters);
     rootSignatureDesc.pParameters = rootParameters;
-    rootSignatureDesc.NumStaticSamplers = 0;
-    rootSignatureDesc.pStaticSamplers = nullptr;
+    rootSignatureDesc.NumStaticSamplers = 1;
+    rootSignatureDesc.pStaticSamplers = &environmentSampler;
     rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
     Microsoft::WRL::ComPtr<ID3DBlob> signature;
@@ -790,8 +1088,11 @@ bool RayTracingManager::CreateShaderTable(
 
 bool RayTracingManager::CreateAccelerationStructures()
 {
-    if (!CreateBuildCommandObjects())
-        return false;
+    if (!m_buildCommandQueue || !m_buildCommandAllocator || !m_buildCommandList || !m_buildFence)
+    {
+        if (!CreateBuildCommandObjects())
+            return false;
+    }
 
     if (!CreateStaticGeometryBuffers())
         return false;
@@ -898,6 +1199,7 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         L"Raytracing scene index buffer",
         m_indexBuffer);
 }
+
 bool RayTracingManager::BuildBottomLevelAccelerationStructure()
 {
     D3D12_RAYTRACING_GEOMETRY_DESC geometryDesc = {};
@@ -1144,6 +1446,24 @@ bool RayTracingManager::ReadBinaryFile(const std::wstring& path, std::vector<std
     return readSucceeded && bytesRead == bytes.size();
 }
 
+std::wstring RayTracingManager::GetEnvironmentMapPath() const
+{
+    std::wstring modulePath(MAX_PATH, L'\0');
+    DWORD length = GetModuleFileNameW(nullptr, &modulePath[0], static_cast<DWORD>(modulePath.size()));
+    while (length == modulePath.size())
+    {
+        modulePath.resize(modulePath.size() * 2);
+        length = GetModuleFileNameW(nullptr, &modulePath[0], static_cast<DWORD>(modulePath.size()));
+    }
+
+    modulePath.resize(length);
+    const std::wstring::size_type slash = modulePath.find_last_of(L"\\/");
+    const std::wstring executableDir = slash == std::wstring::npos
+        ? std::wstring()
+        : modulePath.substr(0, slash + 1);
+
+    return executableDir + c_environmentMapRelativePath;
+}
 std::wstring RayTracingManager::GetCompiledShaderPath() const
 {
     std::wstring modulePath(MAX_PATH, L'\0');

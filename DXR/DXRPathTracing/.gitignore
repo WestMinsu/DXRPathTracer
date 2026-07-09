@@ -1,0 +1,10 @@
+# Local generated files
+x64/
+*.user
+imgui.ini
+
+# Local capture/reference outputs
+Captures/
+
+# Local texture/model assets
+Assets/
