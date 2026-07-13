@@ -7,6 +7,7 @@
 #include "ThirdParty/imgui/backends/imgui_impl_win32.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
@@ -40,7 +41,7 @@ namespace
 D3D12Renderer::~D3D12Renderer()
 {
     WaitForGpu();
-    SavePendingCapture();
+    SavePendingCaptures();
     ShutdownImGui();
     m_rayTracingManager.reset();
 
@@ -94,6 +95,7 @@ void D3D12Renderer::Render()
     m_rayTracingManager->SetPbrDebugView(static_cast<UINT>(m_pbrDebugView));
     m_rayTracingManager->SetPbrMaterial(m_pbrMetallic, m_pbrRoughness);
     m_rayTracingManager->SetIblSettings(m_enableIbl, m_iblIntensity);
+    m_rayTracingManager->SetExposure(m_exposure);
 
     HRESULT hr = m_commandAllocator->Reset();
     if (ReportFailure(hr, L"Command allocator reset failed."))
@@ -125,14 +127,50 @@ void D3D12Renderer::Render()
     const UINT accumulatedSamples = m_rayTracingManager->GetAccumulatedSampleCount();
     const UINT captureTargetSamples = static_cast<UINT>(m_captureTargetSamples > 1 ? m_captureTargetSamples : 1);
     const bool targetCaptureReached = m_captureActive && accumulatedSamples >= captureTargetSamples;
-    if (!m_pendingCapture.readbackBuffer && (m_saveCurrentRequested || targetCaptureReached))
+    if (m_pendingCaptures.empty() && (m_saveCurrentRequested || targetCaptureReached))
     {
-        const std::wstring capturePath = BuildCaptureFilePath(accumulatedSamples);
-        if (QueueOutputCapture(raytracingOutput, capturePath))
+        bool queuedCapture = QueueTextureCapture(
+            raytracingOutput,
+            BuildCaptureFilePath(accumulatedSamples, L".png"),
+            CaptureFormat::Png,
+            1u);
+
+        const bool canSaveHdr =
+            m_enableAccumulation &&
+            accumulatedSamples > 0 &&
+            !m_showNormalColor &&
+            !(m_sceneType == static_cast<int>(RayTracingManager::c_scenePbrGgx) &&
+              m_pbrDebugView != static_cast<int>(RayTracingManager::c_pbrDebugBeauty));
+        ID3D12Resource* accumulationTexture = m_rayTracingManager->GetAccumulationResource();
+        if (canSaveHdr && accumulationTexture)
+        {
+            D3D12_RESOURCE_BARRIER accumulationToCopy = {};
+            accumulationToCopy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            accumulationToCopy.Transition.pResource = accumulationTexture;
+            accumulationToCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            accumulationToCopy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+            accumulationToCopy.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            m_commandList->ResourceBarrier(1, &accumulationToCopy);
+
+            queuedCapture |= QueueTextureCapture(
+                accumulationTexture,
+                BuildCaptureFilePath(accumulatedSamples, L".pfm"),
+                CaptureFormat::Pfm,
+                accumulatedSamples);
+
+            std::swap(
+                accumulationToCopy.Transition.StateBefore,
+                accumulationToCopy.Transition.StateAfter);
+            m_commandList->ResourceBarrier(1, &accumulationToCopy);
+        }
+
+        if (queuedCapture)
         {
             m_captureActive = false;
             m_saveCurrentRequested = false;
-            m_captureStatus = "Saving capture...";
+            m_captureStatus = canSaveHdr
+                ? "Saving PNG preview and linear HDR PFM..."
+                : "Saving PNG preview...";
         }
     }
     D3D12_RESOURCE_BARRIER postCopyBarriers[2] = {};
@@ -170,7 +208,7 @@ void D3D12Renderer::Render()
         return;
 
     WaitForGpu();
-    SavePendingCapture();
+    SavePendingCaptures();
     m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
 }
 
@@ -190,7 +228,7 @@ void D3D12Renderer::Resize(UINT width, UINT height)
         return;
 
     WaitForGpu();
-    SavePendingCapture();
+    SavePendingCaptures();
     ReleaseRenderTargets();
 
     HRESULT hr = m_swapChain->ResizeBuffers(c_frameCount, width, height, c_backBufferFormat, 0);
@@ -505,6 +543,7 @@ void D3D12Renderer::BuildImGuiFrame()
             m_rayTracingManager->SetIblSettings(m_enableIbl, m_iblIntensity);
         }
     }
+    ImGui::SliderFloat("Exposure (EV)", &m_exposure, -8.0f, 8.0f, "%.2f");
     ImGui::Checkbox("Show normal color", &m_showNormalColor);
     ImGui::Checkbox("Accumulate samples", &m_enableAccumulation);
     ImGui::SliderInt("Max Bounce", &m_maxBounce, 1, 8);
@@ -587,7 +626,11 @@ void D3D12Renderer::ReleaseRenderTargets()
     }
 }
 
-bool D3D12Renderer::QueueOutputCapture(ID3D12Resource* sourceTexture, const std::wstring& filePath)
+bool D3D12Renderer::QueueTextureCapture(
+    ID3D12Resource* sourceTexture,
+    const std::wstring& filePath,
+    CaptureFormat format,
+    UINT sampleCount)
 {
     if (!sourceTexture || !m_device || !m_commandList)
         return false;
@@ -648,58 +691,92 @@ bool D3D12Renderer::QueueOutputCapture(ID3D12Resource* sourceTexture, const std:
 
     m_commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
 
-    m_pendingCapture.readbackBuffer = readbackBuffer;
-    m_pendingCapture.filePath = filePath;
-    m_pendingCapture.width = static_cast<UINT>(sourceDesc.Width);
-    m_pendingCapture.height = sourceDesc.Height;
-    m_pendingCapture.rowPitch = footprint.Footprint.RowPitch;
-    m_pendingCapture.readbackSize = readbackSize;
+    PendingCapture pendingCapture;
+    pendingCapture.readbackBuffer = readbackBuffer;
+    pendingCapture.filePath = filePath;
+    pendingCapture.width = static_cast<UINT>(sourceDesc.Width);
+    pendingCapture.height = sourceDesc.Height;
+    pendingCapture.rowPitch = footprint.Footprint.RowPitch;
+    pendingCapture.readbackSize = readbackSize;
+    pendingCapture.sampleCount = sampleCount > 0 ? sampleCount : 1u;
+    pendingCapture.format = format;
+    m_pendingCaptures.push_back(pendingCapture);
     return true;
 }
 
-void D3D12Renderer::SavePendingCapture()
+void D3D12Renderer::ConfigureAutomatedCapture(
+    UINT sampleCount,
+    const std::wstring& outputPrefix)
 {
-    if (!m_pendingCapture.readbackBuffer)
+    m_captureTargetSamples = static_cast<int>(sampleCount > 0 ? sampleCount : 1u);
+    m_captureOutputPrefix = outputPrefix;
+    m_showNormalColor = false;
+    m_pbrDebugView = static_cast<int>(RayTracingManager::c_pbrDebugBeauty);
+    m_enableAccumulation = true;
+    m_captureActive = true;
+    m_exitAfterCapture = true;
+    m_captureStatus = "Automated capture running...";
+}
+
+void D3D12Renderer::SavePendingCaptures()
+{
+    if (m_pendingCaptures.empty())
         return;
 
-    void* mappedPixels = nullptr;
-    D3D12_RANGE readRange = { 0, 0 };
-    readRange.End = static_cast<SIZE_T>(m_pendingCapture.readbackSize);
-
-    HRESULT hr = m_pendingCapture.readbackBuffer->Map(0, &readRange, &mappedPixels);
-    if (ReportFailure(hr, L"Capture readback mapping failed."))
+    bool allSaved = true;
+    for (PendingCapture& pendingCapture : m_pendingCaptures)
     {
-        m_pendingCapture = PendingCapture();
-        m_captureStatus = "Capture failed.";
-        return;
-    }
-
-    const bool saved = SavePngFile(
-        m_pendingCapture.filePath,
-        m_pendingCapture.width,
-        m_pendingCapture.height,
-        m_pendingCapture.rowPitch,
-        mappedPixels);
-
-    D3D12_RANGE writeRange = { 0, 0 };
-    m_pendingCapture.readbackBuffer->Unmap(0, &writeRange);
-
-    if (saved)
-    {
-        std::string pathText;
-        pathText.reserve(m_pendingCapture.filePath.size());
-        for (wchar_t ch : m_pendingCapture.filePath)
+        if (!pendingCapture.readbackBuffer)
         {
-            pathText.push_back(ch >= 0 && ch < 128 ? static_cast<char>(ch) : '?');
+            allSaved = false;
+            continue;
         }
-        m_captureStatus = "Saved: " + pathText;
-    }
-    else
-    {
-        m_captureStatus = "Capture save failed.";
+
+        void* mappedPixels = nullptr;
+        D3D12_RANGE readRange = { 0, static_cast<SIZE_T>(pendingCapture.readbackSize) };
+        HRESULT hr = pendingCapture.readbackBuffer->Map(0, &readRange, &mappedPixels);
+        if (ReportFailure(hr, L"Capture readback mapping failed."))
+        {
+            allSaved = false;
+            continue;
+        }
+
+        bool saved = false;
+        if (pendingCapture.format == CaptureFormat::Pfm)
+        {
+            saved = SavePfmFile(
+                pendingCapture.filePath,
+                pendingCapture.width,
+                pendingCapture.height,
+                pendingCapture.rowPitch,
+                pendingCapture.sampleCount,
+                mappedPixels);
+        }
+        else
+        {
+            saved = SavePngFile(
+                pendingCapture.filePath,
+                pendingCapture.width,
+                pendingCapture.height,
+                pendingCapture.rowPitch,
+                mappedPixels);
+        }
+
+        D3D12_RANGE writeRange = { 0, 0 };
+        pendingCapture.readbackBuffer->Unmap(0, &writeRange);
+        allSaved &= saved;
     }
 
-    m_pendingCapture = PendingCapture();
+    m_pendingCaptures.clear();
+    m_captureStatus = allSaved
+        ? "Saved PNG preview and linear HDR PFM."
+        : "One or more capture files failed to save.";
+
+    if (m_exitAfterCapture)
+    {
+        m_exitAfterCapture = false;
+        PostMessageW(m_hWnd, WM_CLOSE, 0, 0);
+    }
 }
 
 bool D3D12Renderer::SavePngFile(
@@ -837,8 +914,65 @@ bool D3D12Renderer::SavePngFile(
 
     return true;
 }
-std::wstring D3D12Renderer::BuildCaptureFilePath(UINT sampleCount) const
+
+bool D3D12Renderer::SavePfmFile(
+    const std::wstring& filePath,
+    UINT width,
+    UINT height,
+    UINT rowPitch,
+    UINT sampleCount,
+    const void* pixels) const
 {
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, filePath.c_str(), L"wb") != 0 || !file)
+        return false;
+
+    if (std::fprintf(file, "PF\n%u %u\n-1.0\n", width, height) < 0)
+    {
+        std::fclose(file);
+        DeleteFileW(filePath.c_str());
+        return false;
+    }
+
+    const float inverseSampleCount = 1.0f / static_cast<float>(sampleCount > 0 ? sampleCount : 1u);
+    const BYTE* sourcePixels = static_cast<const BYTE*>(pixels);
+    bool saved = true;
+    for (UINT outputY = 0; outputY < height && saved; ++outputY)
+    {
+        const UINT sourceY = height - 1u - outputY;
+        const float* sourceRow = reinterpret_cast<const float*>(
+            sourcePixels + static_cast<std::size_t>(sourceY) * rowPitch);
+
+        for (UINT x = 0; x < width; ++x)
+        {
+            const float rgb[3] =
+            {
+                sourceRow[x * 4 + 0] * inverseSampleCount,
+                sourceRow[x * 4 + 1] * inverseSampleCount,
+                sourceRow[x * 4 + 2] * inverseSampleCount
+            };
+            if (std::fwrite(rgb, sizeof(float), 3, file) != 3)
+            {
+                saved = false;
+                break;
+            }
+        }
+    }
+
+    if (std::fclose(file) != 0)
+        saved = false;
+
+    if (!saved)
+        DeleteFileW(filePath.c_str());
+
+    return saved;
+}
+
+std::wstring D3D12Renderer::BuildCaptureFilePath(UINT sampleCount, const wchar_t* extension) const
+{
+    if (!m_captureOutputPrefix.empty())
+        return m_captureOutputPrefix + extension;
+
     CreateDirectoryW(L"Captures", nullptr);
 
     SYSTEMTIME time = {};
@@ -856,7 +990,8 @@ std::wstring D3D12Renderer::BuildCaptureFilePath(UINT sampleCount) const
          << std::setw(2) << time.wSecond
          << L"_"
          << sampleCount
-         << L"spp.png";
+         << L"spp"
+         << extension;
 
     return path.str();
 }

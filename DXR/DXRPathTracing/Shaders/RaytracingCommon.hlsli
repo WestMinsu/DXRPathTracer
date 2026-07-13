@@ -31,8 +31,9 @@ static const float c_rayTMin = 0.001f;
 static const float c_rayTMax = 1000.0f;
 static const float c_rayOriginBias = 0.001f;
 static const float3 c_cameraPosition = float3(0.0f, 0.15f, -1.2f);
-static const float c_viewPlaneZ = 0.0f;
-static const float c_viewHalfHeight = 0.85f;
+static const float3 c_cameraTarget = float3(0.0f, 0.0f, 0.0f);
+static const float3 c_cameraUp = float3(0.0f, 1.0f, 0.0f);
+static const float c_verticalFovRadians = 1.221730476f; // 70 degrees.
 static const float c_pi = 3.141592654f;
 static const float c_invPi = 0.318309886f;
 static const float c_twoPi = 6.283185307f;
@@ -81,6 +82,7 @@ cbuffer RenderSettings : register(b0)
     float g_pbrMetallic;
     float g_pbrRoughness;
     float g_iblIntensity;
+    float g_exposure;
 };
 
 uint CreateRandomSeed(uint depth, uint primitiveIndex)
@@ -88,7 +90,8 @@ uint CreateRandomSeed(uint depth, uint primitiveIndex)
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
     uint seed = launchIndex.x + launchIndex.y * launchDim.x;
-    seed = seed * 1973u + g_frameIndex * 9277u + depth * 26699u + primitiveIndex * 911u + 1u;
+    uint sequenceIndex = g_enableAccumulation != 0 ? g_sampleIndex : g_frameIndex;
+    seed = seed * 1973u + sequenceIndex * 9277u + depth * 26699u + primitiveIndex * 911u + 1u;
     seed ^= seed >> 16;
     seed *= 2246822519u;
     seed ^= seed >> 13;

@@ -29,10 +29,12 @@ public:
     void SetPbrDebugView(UINT pbrDebugView);
     void SetPbrMaterial(float metallic, float roughness);
     void SetIblSettings(bool enableIbl, float intensity);
+    void SetExposure(float exposure);
     void ResetAccumulation() { m_accumulatedSampleCount = 0; }
     UINT GetAccumulatedSampleCount() const { return m_accumulatedSampleCount; }
 
     ID3D12Resource* GetOutputResource() const { return m_outputTexture.Get(); }
+    ID3D12Resource* GetAccumulationResource() const { return m_accumulationTexture.Get(); }
     ID3D12DescriptorHeap* GetDescriptorHeap() const { return m_descriptorHeap.Get(); }
     ID3D12RootSignature* GetGlobalRootSignature() const { return m_globalRootSignature.Get(); }
     ID3D12StateObject* GetStateObject() const { return m_stateObject.Get(); }
@@ -101,6 +103,7 @@ private:
     float m_pbrRoughness = 0.35f;
     bool m_enableIbl = true;
     float m_iblIntensity = 1.0f;
+    float m_exposure = 0.0f;
 
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;

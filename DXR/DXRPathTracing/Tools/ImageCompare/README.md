@@ -1,55 +1,33 @@
 # ImageCompare
 
-Compares PNG captures with simple spatial metrics.
+Creates spatial diagnostics from two linear RGB float32 PFM renders. It does not
+calculate MSE, PSNR, or another scalar image-quality score.
 
-The easiest path is no-argument mode. Run this from the project root, or from
-the built executable folder. The tool finds the nearest `Captures` folder,
-selects the highest `spp` PNG as the reference image, then compares every
-non-empty PNG in that folder.
+## Usage
 
-From `DXR\DXRPathTracing`:
+~~~powershell
+.\x64\Debug\ImageCompare\ImageCompare.exe reference.pfm test.pfm
+~~~
 
-```powershell
-.\x64\Debug\ImageCompare\ImageCompare.exe
-```
+An output folder and display exposure can be supplied explicitly:
 
-From the solution folder `DXR`:
+~~~powershell
+.\x64\Debug\ImageCompare\ImageCompare.exe reference.pfm test.pfm ComparisonOutputs -1.0
+~~~
 
-```powershell
-.\DXRPathTracing\x64\Debug\ImageCompare\ImageCompare.exe
-```
+The exposure affects only the side-by-side PNG preview. All diagnostics are
+computed from the original linear PFM values.
 
-You can also pass a capture folder explicitly.
+## Outputs
 
-```powershell
-x64\Debug\ImageCompare\ImageCompare.exe Captures
-```
+- side_by_side.png: reference on the left and test on the right, using identical
+  exposure, Reinhard tone mapping, and sRGB encoding.
+- signed_difference.png: red means the test has higher linear luminance; blue
+  means it has lower linear luminance. Its display scale is the 99th percentile
+  absolute difference and is printed by the tool.
+- relative_ratio.png: red means test/reference is brighter and blue means it is
+  darker. The visualization range is fixed to plus or minus 2 EV.
 
-Manual two-image comparison still works.
-
-```powershell
-x64\Debug\ImageCompare\ImageCompare.exe reference.png test.png
-```
-
-## MSE
-
-Mean Squared Error averages the squared RGB difference between a reference image
-and a test image.
-
-```text
-MSE = (1 / (width * height * 3)) * sum((reference - test)^2)
-```
-
-This tool normalizes each RGB channel to `[0, 1]` before calculating the error.
-Lower is closer to the reference.
-
-## PSNR
-
-Peak Signal-to-Noise Ratio expresses the same error on a decibel scale.
-
-```text
-PSNR = 10 * log10(1 / MSE)
-```
-
-Higher is closer to the reference. If two images are identical, PSNR is printed
-as `inf dB`.
+These images localize transport differences without reducing them to one score.
+Use normals and path-contribution AOVs alongside them to distinguish camera,
+geometry, direct-light, and indirect-light discrepancies.

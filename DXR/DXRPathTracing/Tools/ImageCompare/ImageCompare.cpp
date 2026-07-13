@@ -1,3 +1,4 @@
+#define NOMINMAX
 #include <Windows.h>
 #include <wincodec.h>
 #include <wrl/client.h>
@@ -5,10 +6,10 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <cwctype>
+#include <cstdio>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
-#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -18,29 +19,11 @@
 
 namespace
 {
-    const int c_maxParentSearchDepth = 8;
-
-    struct Image
+    struct HdrImage
     {
         UINT width = 0;
         UINT height = 0;
-        std::vector<uint8_t> rgbaPixels;
-    };
-
-    struct ImageError
-    {
-        double mse = 0.0;
-        double psnr = std::numeric_limits<double>::infinity();
-        double channelMse[3] = {};
-    };
-
-    struct CaptureInfo
-    {
-        std::wstring path;
-        std::wstring fileName;
-        int sampleCount = 0;
-        uint64_t fileSize = 0;
-        FILETIME lastWriteTime = {};
+        std::vector<float> rgb;
     };
 
     void ThrowIfFailed(HRESULT hr, const char* message)
@@ -54,12 +37,6 @@ namespace
         throw std::runtime_error(error.str());
     }
 
-    bool IsDirectory(const std::wstring& path)
-    {
-        const DWORD attributes = GetFileAttributesW(path.c_str());
-        return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-    }
-
     std::wstring JoinPath(const std::wstring& lhs, const std::wstring& rhs)
     {
         if (lhs.empty())
@@ -69,343 +46,367 @@ namespace
         if (last == L'\\' || last == L'/')
             return lhs + rhs;
 
-        return lhs + L"\\" + rhs;
+        return lhs + std::wstring(1, static_cast<wchar_t>(92)) + rhs;
     }
 
-    std::wstring GetParentPath(const std::wstring& path)
+    std::string ReadPfmHeaderLine(FILE* file)
     {
-        const std::size_t slash = path.find_last_of(L"\\/");
-        if (slash == std::wstring::npos)
-            return std::wstring();
-        return path.substr(0, slash);
-    }
-
-    std::string WideToNarrowLossy(const std::wstring& text)
-    {
-        std::string result;
-        result.reserve(text.size());
-        for (wchar_t ch : text)
+        char line[512] = {};
+        while (std::fgets(line, static_cast<int>(sizeof(line)), file))
         {
-            result.push_back(ch >= 0 && ch < 128 ? static_cast<char>(ch) : '?');
-        }
-        return result;
-    }
+            std::string text(line);
+            const std::size_t comment = text.find('#');
+            if (comment != std::string::npos)
+                text.erase(comment);
 
-    std::wstring GetCurrentDirectoryPath()
-    {
-        DWORD length = GetCurrentDirectoryW(0, nullptr);
-        if (length == 0)
-            throw std::runtime_error("Current directory query failed.");
-
-        std::wstring path(length, L'\0');
-        length = GetCurrentDirectoryW(static_cast<DWORD>(path.size()), &path[0]);
-        if (length == 0)
-            throw std::runtime_error("Current directory query failed.");
-
-        path.resize(length);
-        return path;
-    }
-
-    std::wstring GetExecutableDirectoryPath()
-    {
-        std::vector<wchar_t> buffer(MAX_PATH);
-        DWORD length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-        while (length == buffer.size())
-        {
-            buffer.resize(buffer.size() * 2);
-            length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-        }
-
-        if (length == 0)
-            throw std::runtime_error("Executable path query failed.");
-
-        std::wstring executablePath(buffer.data(), length);
-        return GetParentPath(executablePath);
-    }
-
-    std::wstring FindCapturesDirectoryFrom(std::wstring directory)
-    {
-        for (int depth = 0; depth < c_maxParentSearchDepth && !directory.empty(); ++depth)
-        {
-            const std::wstring capturesPath = JoinPath(directory, L"Captures");
-            if (IsDirectory(capturesPath))
-                return capturesPath;
-
-            directory = GetParentPath(directory);
-        }
-
-        return std::wstring();
-    }
-
-    std::wstring FindCapturesDirectory()
-    {
-        std::wstring capturesPath = FindCapturesDirectoryFrom(GetCurrentDirectoryPath());
-        if (!capturesPath.empty())
-            return capturesPath;
-
-        capturesPath = FindCapturesDirectoryFrom(GetExecutableDirectoryPath());
-        if (!capturesPath.empty())
-            return capturesPath;
-
-        return L"Captures";
-    }
-
-    int ParseSampleCount(const std::wstring& fileName)
-    {
-        const std::wstring suffix = L"spp.png";
-        if (fileName.size() <= suffix.size())
-            return 0;
-
-        const std::size_t suffixPos = fileName.rfind(suffix);
-        if (suffixPos == std::wstring::npos)
-            return 0;
-
-        std::size_t begin = suffixPos;
-        while (begin > 0 && std::iswdigit(fileName[begin - 1]) != 0)
-        {
-            --begin;
-        }
-
-        if (begin == suffixPos)
-            return 0;
-
-        return std::stoi(fileName.substr(begin, suffixPos - begin));
-    }
-
-    std::vector<CaptureInfo> LoadCaptureList(const std::wstring& capturesDirectory)
-    {
-        std::vector<CaptureInfo> captures;
-
-        WIN32_FIND_DATAW findData = {};
-        const std::wstring searchPath = JoinPath(capturesDirectory, L"*.png");
-        HANDLE findHandle = FindFirstFileW(searchPath.c_str(), &findData);
-        if (findHandle == INVALID_HANDLE_VALUE)
-            return captures;
-
-        do
-        {
-            if ((findData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+            const std::size_t first = text.find_first_not_of(" \t\r\n");
+            if (first == std::string::npos)
                 continue;
 
-            const uint64_t fileSize =
-                (static_cast<uint64_t>(findData.nFileSizeHigh) << 32) |
-                static_cast<uint64_t>(findData.nFileSizeLow);
-            if (fileSize == 0)
-                continue;
+            const std::size_t last = text.find_last_not_of(" \t\r\n");
+            return text.substr(first, last - first + 1);
+        }
 
-            CaptureInfo capture;
-            capture.fileName = findData.cFileName;
-            capture.path = JoinPath(capturesDirectory, capture.fileName);
-            capture.sampleCount = ParseSampleCount(capture.fileName);
-            capture.fileSize = fileSize;
-            capture.lastWriteTime = findData.ftLastWriteTime;
-            captures.push_back(capture);
-        } while (FindNextFileW(findHandle, &findData));
-
-        FindClose(findHandle);
-
-        std::sort(captures.begin(), captures.end(), [](const CaptureInfo& lhs, const CaptureInfo& rhs)
-        {
-            if (lhs.sampleCount != rhs.sampleCount)
-                return lhs.sampleCount < rhs.sampleCount;
-            return CompareFileTime(&lhs.lastWriteTime, &rhs.lastWriteTime) < 0;
-        });
-
-        return captures;
+        throw std::runtime_error("Unexpected end of PFM header.");
     }
 
-    CaptureInfo SelectReferenceCapture(const std::vector<CaptureInfo>& captures)
+    float ByteSwapFloat(float value)
     {
-        return *std::max_element(captures.begin(), captures.end(), [](const CaptureInfo& lhs, const CaptureInfo& rhs)
-        {
-            if (lhs.sampleCount != rhs.sampleCount)
-                return lhs.sampleCount < rhs.sampleCount;
-            return CompareFileTime(&lhs.lastWriteTime, &rhs.lastWriteTime) < 0;
-        });
+        uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        bits =
+            ((bits & 0x000000FFu) << 24) |
+            ((bits & 0x0000FF00u) << 8) |
+            ((bits & 0x00FF0000u) >> 8) |
+            ((bits & 0xFF000000u) >> 24);
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
     }
 
-    Image LoadImage(IWICImagingFactory* factory, const wchar_t* filePath)
+    HdrImage LoadPfm(const wchar_t* path)
     {
-        Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
-        ThrowIfFailed(
-            factory->CreateDecoderFromFilename(
-                filePath,
-                nullptr,
-                GENERIC_READ,
-                WICDecodeMetadataCacheOnLoad,
-                &decoder),
-            "Image decoder creation failed.");
+        FILE* file = nullptr;
+        if (_wfopen_s(&file, path, L"rb") != 0 || !file)
+            throw std::runtime_error("Could not open PFM image.");
 
-        Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
-        ThrowIfFailed(decoder->GetFrame(0, &frame), "Image frame loading failed.");
-
-        Image image;
-        ThrowIfFailed(frame->GetSize(&image.width, &image.height), "Image size query failed.");
-
-        Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
-        ThrowIfFailed(factory->CreateFormatConverter(&converter), "Format converter creation failed.");
-        ThrowIfFailed(
-            converter->Initialize(
-                frame.Get(),
-                GUID_WICPixelFormat32bppRGBA,
-                WICBitmapDitherTypeNone,
-                nullptr,
-                0.0,
-                WICBitmapPaletteTypeCustom),
-            "Image format conversion failed.");
-
-        const UINT rowPitch = image.width * 4;
-        const UINT imageSize = rowPitch * image.height;
-        image.rgbaPixels.resize(imageSize);
-        ThrowIfFailed(
-            converter->CopyPixels(nullptr, rowPitch, imageSize, image.rgbaPixels.data()),
-            "Image pixel copy failed.");
-
-        return image;
-    }
-
-    ImageError CompareImages(const Image& referenceImage, const Image& testImage)
-    {
-        if (referenceImage.width != testImage.width || referenceImage.height != testImage.height)
-            throw std::runtime_error("Image sizes do not match.");
-
-        const uint64_t pixelCount = static_cast<uint64_t>(referenceImage.width) * referenceImage.height;
-        const uint64_t channelCount = pixelCount * 3;
-
-        double channelErrorSum[3] = {};
-        double totalErrorSum = 0.0;
-
-        for (uint64_t pixelIndex = 0; pixelIndex < pixelCount; ++pixelIndex)
+        try
         {
-            const uint64_t baseIndex = pixelIndex * 4;
-            for (int channel = 0; channel < 3; ++channel)
+            if (ReadPfmHeaderLine(file) != "PF")
+                throw std::runtime_error("Only RGB PFM files are supported.");
+
+            const std::string sizeLine = ReadPfmHeaderLine(file);
+            unsigned int width = 0;
+            unsigned int height = 0;
+            if (sscanf_s(sizeLine.c_str(), "%u %u", &width, &height) != 2 ||
+                width == 0 || height == 0)
             {
-                const double referenceValue = referenceImage.rgbaPixels[baseIndex + channel] / 255.0;
-                const double testValue = testImage.rgbaPixels[baseIndex + channel] / 255.0;
-                const double difference = referenceValue - testValue;
-                const double squaredError = difference * difference;
-                channelErrorSum[channel] += squaredError;
-                totalErrorSum += squaredError;
+                throw std::runtime_error("Invalid PFM dimensions.");
+            }
+
+            const float scale = std::stof(ReadPfmHeaderLine(file));
+            if (scale == 0.0f)
+                throw std::runtime_error("Invalid PFM scale.");
+
+            const bool fileIsBigEndian = scale > 0.0f;
+            const float valueScale = std::abs(scale);
+            HdrImage image;
+            image.width = width;
+            image.height = height;
+            image.rgb.resize(static_cast<std::size_t>(width) * height * 3);
+
+            std::vector<float> row(static_cast<std::size_t>(width) * 3);
+            for (UINT fileY = 0; fileY < height; ++fileY)
+            {
+                if (std::fread(row.data(), sizeof(float), row.size(), file) != row.size())
+                    throw std::runtime_error("PFM pixel data is truncated.");
+
+                const UINT outputY = height - 1u - fileY;
+                float* output = image.rgb.data() +
+                    static_cast<std::size_t>(outputY) * width * 3;
+                for (std::size_t index = 0; index < row.size(); ++index)
+                {
+                    float value = fileIsBigEndian ? ByteSwapFloat(row[index]) : row[index];
+                    output[index] = value * valueScale;
+                }
+            }
+
+            std::fclose(file);
+            return image;
+        }
+        catch (...)
+        {
+            std::fclose(file);
+            throw;
+        }
+    }
+
+    float LinearToSrgb(float value)
+    {
+        value = std::max(0.0f, std::min(value, 1.0f));
+        return value <= 0.0031308f
+            ? value * 12.92f
+            : 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
+    }
+
+    uint8_t ToByte(float value)
+    {
+        value = std::max(0.0f, std::min(value, 1.0f));
+        return static_cast<uint8_t>(value * 255.0f + 0.5f);
+    }
+
+    void StorePixel(
+        std::vector<uint8_t>& pixels,
+        UINT width,
+        UINT x,
+        UINT y,
+        float red,
+        float green,
+        float blue)
+    {
+        const std::size_t index = (static_cast<std::size_t>(y) * width + x) * 4;
+        pixels[index + 0] = ToByte(red);
+        pixels[index + 1] = ToByte(green);
+        pixels[index + 2] = ToByte(blue);
+        pixels[index + 3] = 255;
+    }
+
+    float ToneMapChannel(float radiance, float exposureScale)
+    {
+        const float exposed = std::max(0.0f, radiance) * exposureScale;
+        return LinearToSrgb(exposed / (1.0f + exposed));
+    }
+
+    float Luminance(const float* rgb)
+    {
+        return rgb[0] * 0.2126f + rgb[1] * 0.7152f + rgb[2] * 0.0722f;
+    }
+
+    void ValidateMatchingImages(const HdrImage& reference, const HdrImage& test)
+    {
+        if (reference.width != test.width || reference.height != test.height)
+            throw std::runtime_error("PFM image dimensions do not match.");
+    }
+
+    std::vector<uint8_t> MakeSideBySide(
+        const HdrImage& reference,
+        const HdrImage& test,
+        float exposureEv)
+    {
+        ValidateMatchingImages(reference, test);
+        const UINT outputWidth = reference.width * 2u;
+        std::vector<uint8_t> output(
+            static_cast<std::size_t>(outputWidth) * reference.height * 4);
+        const float exposureScale = std::pow(2.0f, exposureEv);
+
+        for (UINT y = 0; y < reference.height; ++y)
+        {
+            for (UINT x = 0; x < reference.width; ++x)
+            {
+                const std::size_t inputIndex =
+                    (static_cast<std::size_t>(y) * reference.width + x) * 3;
+                StorePixel(
+                    output,
+                    outputWidth,
+                    x,
+                    y,
+                    ToneMapChannel(reference.rgb[inputIndex + 0], exposureScale),
+                    ToneMapChannel(reference.rgb[inputIndex + 1], exposureScale),
+                    ToneMapChannel(reference.rgb[inputIndex + 2], exposureScale));
+                StorePixel(
+                    output,
+                    outputWidth,
+                    x + reference.width,
+                    y,
+                    ToneMapChannel(test.rgb[inputIndex + 0], exposureScale),
+                    ToneMapChannel(test.rgb[inputIndex + 1], exposureScale),
+                    ToneMapChannel(test.rgb[inputIndex + 2], exposureScale));
             }
         }
 
-        ImageError error;
-        error.mse = totalErrorSum / static_cast<double>(channelCount);
-        for (int channel = 0; channel < 3; ++channel)
-        {
-            error.channelMse[channel] = channelErrorSum[channel] / static_cast<double>(pixelCount);
-        }
-
-        if (error.mse > 0.0)
-        {
-            error.psnr = 10.0 * std::log10(1.0 / error.mse);
-        }
-
-        return error;
+        return output;
     }
 
-    void PrintSingleComparison(
+    float FindDifferenceDisplayScale(const HdrImage& reference, const HdrImage& test)
+    {
+        std::vector<float> differences;
+        differences.reserve(static_cast<std::size_t>(reference.width) * reference.height);
+        for (std::size_t index = 0; index < reference.rgb.size(); index += 3)
+        {
+            differences.push_back(std::abs(
+                Luminance(test.rgb.data() + index) -
+                Luminance(reference.rgb.data() + index)));
+        }
+
+        const std::size_t percentileIndex =
+            differences.empty() ? 0 : (differences.size() - 1) * 99 / 100;
+        std::nth_element(
+            differences.begin(),
+            differences.begin() + percentileIndex,
+            differences.end());
+        return std::max(differences[percentileIndex], 1e-6f);
+    }
+
+    std::vector<uint8_t> MakeSignedDifference(
+        const HdrImage& reference,
+        const HdrImage& test,
+        float displayScale)
+    {
+        std::vector<uint8_t> output(
+            static_cast<std::size_t>(reference.width) * reference.height * 4);
+        for (UINT y = 0; y < reference.height; ++y)
+        {
+            for (UINT x = 0; x < reference.width; ++x)
+            {
+                const std::size_t index =
+                    (static_cast<std::size_t>(y) * reference.width + x) * 3;
+                const float difference =
+                    Luminance(test.rgb.data() + index) -
+                    Luminance(reference.rgb.data() + index);
+                const float magnitude = std::sqrt(std::min(
+                    std::abs(difference) / displayScale,
+                    1.0f));
+
+                StorePixel(
+                    output,
+                    reference.width,
+                    x,
+                    y,
+                    difference > 0.0f ? magnitude : 0.0f,
+                    0.08f * magnitude,
+                    difference < 0.0f ? magnitude : 0.0f);
+            }
+        }
+        return output;
+    }
+
+    std::vector<uint8_t> MakeRelativeRatio(
+        const HdrImage& reference,
+        const HdrImage& test)
+    {
+        const float epsilon = 1e-4f;
+        const float evRange = 2.0f;
+        std::vector<uint8_t> output(
+            static_cast<std::size_t>(reference.width) * reference.height * 4);
+        for (UINT y = 0; y < reference.height; ++y)
+        {
+            for (UINT x = 0; x < reference.width; ++x)
+            {
+                const std::size_t index =
+                    (static_cast<std::size_t>(y) * reference.width + x) * 3;
+                const float referenceY = std::max(0.0f, Luminance(reference.rgb.data() + index));
+                const float testY = std::max(0.0f, Luminance(test.rgb.data() + index));
+                const float logRatio = std::log2((testY + epsilon) / (referenceY + epsilon));
+                const float amount = std::min(std::abs(logRatio) / evRange, 1.0f);
+                const float neutral = 0.15f * (1.0f - amount);
+
+                StorePixel(
+                    output,
+                    reference.width,
+                    x,
+                    y,
+                    neutral + (logRatio > 0.0f ? amount : 0.0f),
+                    neutral,
+                    neutral + (logRatio < 0.0f ? amount : 0.0f));
+            }
+        }
+        return output;
+    }
+
+    void SavePng(
         IWICImagingFactory* factory,
-        const wchar_t* referencePath,
-        const wchar_t* testPath)
+        const std::wstring& path,
+        UINT width,
+        UINT height,
+        const std::vector<uint8_t>& rgba)
     {
-        const Image referenceImage = LoadImage(factory, referencePath);
-        const Image testImage = LoadImage(factory, testPath);
-        const ImageError error = CompareImages(referenceImage, testImage);
+        Microsoft::WRL::ComPtr<IWICStream> stream;
+        ThrowIfFailed(factory->CreateStream(&stream), "WIC stream creation failed.");
+        ThrowIfFailed(
+            stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE),
+            "PNG file creation failed.");
 
-        std::wcout << L"Reference : " << referencePath << L"\n";
-        std::wcout << L"Test      : " << testPath << L"\n";
-        std::wcout << L"Size      : " << referenceImage.width << L" x " << referenceImage.height << L"\n\n";
+        Microsoft::WRL::ComPtr<IWICBitmapEncoder> encoder;
+        ThrowIfFailed(
+            factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder),
+            "PNG encoder creation failed.");
+        ThrowIfFailed(
+            encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache),
+            "PNG encoder initialization failed.");
 
-        std::cout << std::fixed << std::setprecision(10);
-        std::cout << "MSE       : " << error.mse << "\n";
-        std::cout << "MSE R/G/B : "
-                  << error.channelMse[0] << " / "
-                  << error.channelMse[1] << " / "
-                  << error.channelMse[2] << "\n";
+        Microsoft::WRL::ComPtr<IWICBitmapFrameEncode> frame;
+        ThrowIfFailed(encoder->CreateNewFrame(&frame, nullptr), "PNG frame creation failed.");
+        ThrowIfFailed(frame->Initialize(nullptr), "PNG frame initialization failed.");
+        ThrowIfFailed(frame->SetSize(width, height), "PNG size setup failed.");
 
-        if (std::isinf(error.psnr))
-            std::cout << "PSNR      : inf dB\n";
-        else
-            std::cout << "PSNR      : " << std::setprecision(4) << error.psnr << " dB\n";
-    }
+        WICPixelFormatGUID pixelFormat = GUID_WICPixelFormat32bppBGRA;
+        ThrowIfFailed(frame->SetPixelFormat(&pixelFormat), "PNG pixel format setup failed.");
+        if (!IsEqualGUID(pixelFormat, GUID_WICPixelFormat32bppBGRA))
+            throw std::runtime_error("WIC did not accept BGRA8 PNG output.");
 
-    void PrintBatchComparison(IWICImagingFactory* factory, const std::wstring& capturesDirectory)
-    {
-        const std::vector<CaptureInfo> captures = LoadCaptureList(capturesDirectory);
-        if (captures.empty())
-        {
-            std::ostringstream message;
-            message << "Need at least one non-empty PNG file in " << WideToNarrowLossy(capturesDirectory);
-            throw std::runtime_error(message.str());
-        }
-
-        const CaptureInfo reference = SelectReferenceCapture(captures);
-        const Image referenceImage = LoadImage(factory, reference.path.c_str());
-
-        std::wcout << L"Captures  : " << capturesDirectory << L"\n";
-        std::wcout << L"Reference : " << reference.fileName
-                   << L" (" << reference.sampleCount << L" spp)\n";
-        std::wcout << L"Size      : " << referenceImage.width << L" x " << referenceImage.height << L"\n\n";
-        std::wcout << std::left
-                   << std::setw(44) << L"Test"
-                   << std::right
-                   << std::setw(8) << L"SPP"
-                   << std::setw(18) << L"MSE"
-                   << std::setw(14) << L"PSNR\n";
-        std::wcout << L"------------------------------------------------------------------------------------\n";
-
-        for (const CaptureInfo& capture : captures)
-        {
-            const Image testImage = LoadImage(factory, capture.path.c_str());
-            const ImageError error = CompareImages(referenceImage, testImage);
-
-            std::wcout << std::left << std::setw(44) << capture.fileName
-                       << std::right << std::setw(8) << capture.sampleCount
-                       << std::setw(18) << std::fixed << std::setprecision(10) << error.mse;
-
-            if (std::isinf(error.psnr))
-                std::wcout << std::setw(14) << L"inf";
-            else
-                std::wcout << std::setw(14) << std::fixed << std::setprecision(4) << error.psnr;
-
-            std::wcout << L"\n";
-        }
+        const UINT rowPitch = width * 4u;
+        std::vector<uint8_t> bgra = rgba;
+        for (std::size_t index = 0; index < bgra.size(); index += 4)
+            std::swap(bgra[index + 0], bgra[index + 2]);
+        ThrowIfFailed(
+            frame->WritePixels(
+                height,
+                rowPitch,
+                static_cast<UINT>(bgra.size()),
+                bgra.data()),
+            "PNG pixel write failed.");
+        ThrowIfFailed(frame->Commit(), "PNG frame commit failed.");
+        ThrowIfFailed(encoder->Commit(), "PNG encoder commit failed.");
     }
 
     void PrintUsage()
     {
-        std::wcout << L"Usage:\n"
-                   << L"  ImageCompare.exe\n"
-                   << L"  ImageCompare.exe <captures-folder>\n"
-                   << L"  ImageCompare.exe <reference.png> <test.png>\n\n"
-                   << L"No-argument mode finds the nearest Captures folder, selects the highest spp PNG\n"
-                   << L"as reference, and compares every non-empty PNG in that folder.\n\n"
-                   << L"Output:\n"
-                   << L"  MSE  : mean squared error in normalized RGB space [0, 1]\n"
-                   << L"  PSNR : 10 * log10(1 / MSE), higher is closer to reference\n";
+        std::wcout
+            << L"Usage:\n"
+            << L"  ImageCompare.exe <reference.pfm> <test.pfm> [output-folder] [exposure-EV]\n\n"
+            << L"Outputs:\n"
+            << L"  side_by_side.png       reference on the left, test on the right\n"
+            << L"  signed_difference.png  red=test brighter, blue=test darker\n"
+            << L"  relative_ratio.png     red=test/reference > 1, blue=< 1\n";
     }
 }
 
 int wmain(int argc, wchar_t* argv[])
 {
-    if (argc > 3)
+    if (argc < 3 || argc > 5)
     {
         PrintUsage();
         return 1;
+    }
+
+    const std::wstring outputFolder = argc >= 4 ? argv[3] : L"ComparisonOutputs";
+    const float exposureEv = argc >= 5
+        ? static_cast<float>(std::wcstod(argv[4], nullptr))
+        : 0.0f;
+
+    if (!CreateDirectoryW(outputFolder.c_str(), nullptr))
+    {
+        const DWORD error = GetLastError();
+        if (error != ERROR_ALREADY_EXISTS)
+        {
+            std::cerr << "Could not create comparison output folder.\n";
+            return 1;
+        }
     }
 
     HRESULT coHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool shouldUninitialize = SUCCEEDED(coHr);
     if (FAILED(coHr) && coHr != RPC_E_CHANGED_MODE)
     {
-        std::cerr << "COM initialization failed. HRESULT=0x"
-                  << std::hex << std::uppercase << static_cast<unsigned long>(coHr) << "\n";
+        std::cerr << "COM initialization failed.\n";
         return 1;
     }
 
     try
     {
+        const HdrImage reference = LoadPfm(argv[1]);
+        const HdrImage test = LoadPfm(argv[2]);
+        ValidateMatchingImages(reference, test);
+
         Microsoft::WRL::ComPtr<IWICImagingFactory> factory;
         ThrowIfFailed(
             CoCreateInstance(
@@ -415,23 +416,35 @@ int wmain(int argc, wchar_t* argv[])
                 IID_PPV_ARGS(&factory)),
             "WIC factory creation failed.");
 
-        if (argc == 1)
-        {
-            PrintBatchComparison(factory.Get(), FindCapturesDirectory());
-        }
-        else if (argc == 2)
-        {
-            if (!IsDirectory(argv[1]))
-            {
-                PrintUsage();
-                throw std::runtime_error("One-argument mode expects a captures folder.");
-            }
-            PrintBatchComparison(factory.Get(), argv[1]);
-        }
-        else
-        {
-            PrintSingleComparison(factory.Get(), argv[1], argv[2]);
-        }
+        const float differenceScale = FindDifferenceDisplayScale(reference, test);
+        SavePng(
+            factory.Get(),
+            JoinPath(outputFolder, L"side_by_side.png"),
+            reference.width * 2u,
+            reference.height,
+            MakeSideBySide(reference, test, exposureEv));
+        SavePng(
+            factory.Get(),
+            JoinPath(outputFolder, L"signed_difference.png"),
+            reference.width,
+            reference.height,
+            MakeSignedDifference(reference, test, differenceScale));
+        SavePng(
+            factory.Get(),
+            JoinPath(outputFolder, L"relative_ratio.png"),
+            reference.width,
+            reference.height,
+            MakeRelativeRatio(reference, test));
+
+        std::wcout << L"Reference : " << argv[1] << L"\n";
+        std::wcout << L"Test      : " << argv[2] << L"\n";
+        std::wcout << L"Size      : " << reference.width << L" x " << reference.height << L"\n";
+        std::wcout << L"Output    : " << outputFolder << L"\n";
+        std::cout << std::fixed << std::setprecision(6)
+                  << "Display exposure (EV)       : " << exposureEv << "\n"
+                  << "Signed-difference map scale : " << differenceScale
+                  << " linear radiance (99th percentile, visualization only)\n"
+                  << "Relative-ratio map range    : +/- 2 EV\n";
     }
     catch (const std::exception& exception)
     {
@@ -443,6 +456,5 @@ int wmain(int argc, wchar_t* argv[])
 
     if (shouldUninitialize)
         CoUninitialize();
-
     return 0;
 }

@@ -1,4 +1,7 @@
 #include <Windows.h>
+#include <shellapi.h>
+
+#include <string>
 
 #include "D3D12Renderer.h"
 #include "ThirdParty/imgui/imgui.h"
@@ -13,8 +16,20 @@ namespace
     D3D12Renderer gRenderer;
     bool gRendererReady = false;
 
+    struct AppOptions
+    {
+        UINT width = 960;
+        UINT height = 540;
+        UINT captureSamples = 0;
+        bool headless = false;
+        std::wstring outputPrefix;
+    };
+
+    AppOptions gOptions;
+
     ATOM RegisterMainWindowClass(HINSTANCE hInstance);
     bool CreateMainWindow(HINSTANCE hInstance, int nCmdShow);
+    void ParseCommandLine();
     LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 }
 
@@ -27,6 +42,7 @@ int APIENTRY wWinMain(
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
 
+    ParseCommandLine();
     RegisterMainWindowClass(hInstance);
 
     if (!CreateMainWindow(hInstance, nCmdShow))
@@ -53,6 +69,46 @@ int APIENTRY wWinMain(
 
 namespace
 {
+    void ParseCommandLine()
+    {
+        int argumentCount = 0;
+        wchar_t** arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
+        if (!arguments)
+            return;
+
+        for (int index = 1; index < argumentCount; ++index)
+        {
+            const std::wstring argument = arguments[index];
+            if (argument == L"--width" && index + 1 < argumentCount)
+            {
+                gOptions.width = static_cast<UINT>(_wtoi(arguments[++index]));
+            }
+            else if (argument == L"--height" && index + 1 < argumentCount)
+            {
+                gOptions.height = static_cast<UINT>(_wtoi(arguments[++index]));
+            }
+            else if (argument == L"--capture-samples" && index + 1 < argumentCount)
+            {
+                gOptions.captureSamples = static_cast<UINT>(_wtoi(arguments[++index]));
+            }
+            else if (argument == L"--output-prefix" && index + 1 < argumentCount)
+            {
+                gOptions.outputPrefix = arguments[++index];
+            }
+            else if (argument == L"--headless")
+            {
+                gOptions.headless = true;
+            }
+        }
+
+        if (gOptions.width == 0)
+            gOptions.width = 1;
+        if (gOptions.height == 0)
+            gOptions.height = 1;
+
+        LocalFree(arguments);
+    }
+
     ATOM RegisterMainWindowClass(HINSTANCE hInstance)
     {
         WNDCLASSEXW windowClass = {};
@@ -70,14 +126,23 @@ namespace
 
     bool CreateMainWindow(HINSTANCE hInstance, int nCmdShow)
     {
+        RECT windowRect =
+        {
+            0,
+            0,
+            static_cast<LONG>(gOptions.width),
+            static_cast<LONG>(gOptions.height)
+        };
+        AdjustWindowRect(&windowRect, WS_OVERLAPPEDWINDOW, FALSE);
+
         HWND hWnd = CreateWindowW(
             c_windowClassName,
             c_windowTitle,
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             0,
-            CW_USEDEFAULT,
-            0,
+            windowRect.right - windowRect.left,
+            windowRect.bottom - windowRect.top,
             nullptr,
             nullptr,
             hInstance,
@@ -86,8 +151,18 @@ namespace
         if (!hWnd)
             return false;
 
-        ShowWindow(hWnd, nCmdShow);
-        UpdateWindow(hWnd);
+        if (gOptions.captureSamples > 0)
+        {
+            gRenderer.ConfigureAutomatedCapture(
+                gOptions.captureSamples,
+                gOptions.outputPrefix);
+        }
+
+        if (!gOptions.headless)
+        {
+            ShowWindow(hWnd, nCmdShow);
+            UpdateWindow(hWnd);
+        }
 
         if (!gRenderer.Initialize(hWnd))
         {

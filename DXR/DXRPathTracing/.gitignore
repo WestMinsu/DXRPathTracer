@@ -6,5 +6,12 @@ imgui.ini
 # Local capture/reference outputs
 Captures/
 
+# Generated Cornell Box validation assets and renderer outputs.
+# Keep only the generator and validation README under version control.
+Validation/CornellBox/Results/
+Validation/CornellBox/Mitsuba/
+Validation/CornellBox/RTXPT/
+Validation/CornellBox/scene_manifest.json
+
 # Local texture/model assets
 Assets/

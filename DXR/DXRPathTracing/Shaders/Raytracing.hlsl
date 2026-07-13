@@ -2,21 +2,53 @@
 #include "RaytracingScene.hlsli"
 #include "RaytracingPbr.hlsli"
 
+float3 LinearToSrgb(float3 linearColor)
+{
+    float3 low = linearColor * 12.92f;
+    float3 high = 1.055f * pow(max(linearColor, 0.0f), 1.0f / 2.4f) - 0.055f;
+    return lerp(high, low, linearColor <= 0.0031308f);
+}
+
+float3 ToneMapForDisplay(float3 linearRadiance)
+{
+    float3 exposed = max(linearRadiance, 0.0f) * exp2(g_exposure);
+    float3 mapped = exposed / (1.0f + exposed);
+    return LinearToSrgb(saturate(mapped));
+}
+
+bool IsLinearDebugView()
+{
+    return g_showNormalColor != 0 ||
+        (g_sceneType == c_scenePbrGgx && g_pbrDebugView != c_pbrDebugBeauty);
+}
+
 [shader("raygeneration")]
 void MyRaygenShader_RadianceRay()
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
-    float2 uv = (float2(launchIndex) + 0.5f) / float2(launchDim);
+    float2 pixelOffset = float2(0.5f, 0.5f);
+    if (g_enableAccumulation != 0)
+    {
+        uint cameraSeed = CreateRandomSeed(0u, 0x9E3779B9u);
+        pixelOffset = float2(RandomFloat01(cameraSeed), RandomFloat01(cameraSeed));
+    }
+
+    float2 uv = (float2(launchIndex) + pixelOffset) / float2(launchDim);
     float aspectRatio = float(launchDim.x) / float(launchDim.y);
+    float tanHalfFov = tan(c_verticalFovRadians * 0.5f);
     float2 screenPosition = float2(
-        (uv.x * 2.0f - 1.0f) * aspectRatio * c_viewHalfHeight,
-        (1.0f - uv.y * 2.0f) * c_viewHalfHeight);
-    float3 viewPosition = float3(screenPosition, c_viewPlaneZ);
+        (uv.x * 2.0f - 1.0f) * aspectRatio * tanHalfFov,
+        (1.0f - uv.y * 2.0f) * tanHalfFov);
+
+    float3 cameraForward = normalize(c_cameraTarget - c_cameraPosition);
+    float3 cameraRight = normalize(cross(c_cameraUp, cameraForward));
+    float3 cameraUp = cross(cameraForward, cameraRight);
 
     RayDesc ray;
     ray.Origin = c_cameraPosition;
-    ray.Direction = normalize(viewPosition - c_cameraPosition);
+    ray.Direction = normalize(
+        cameraForward + cameraRight * screenPosition.x + cameraUp * screenPosition.y);
     ray.TMin = c_rayTMin;
     ray.TMax = c_rayTMax;
 
@@ -28,7 +60,10 @@ void MyRaygenShader_RadianceRay()
 
     if (g_enableAccumulation == 0)
     {
-        g_output[launchIndex] = float4(payload.color, 1.0f);
+        float3 displayColor = IsLinearDebugView()
+            ? saturate(payload.color)
+            : ToneMapForDisplay(payload.color);
+        g_output[launchIndex] = float4(displayColor, 1.0f);
         return;
     }
 
@@ -39,7 +74,8 @@ void MyRaygenShader_RadianceRay()
     }
 
     g_accumulation[launchIndex] = float4(accumulatedColor, 1.0f);
-    g_output[launchIndex] = float4(accumulatedColor / float(g_sampleIndex + 1), 1.0f);
+    float3 averageRadiance = accumulatedColor / float(g_sampleIndex + 1);
+    g_output[launchIndex] = float4(ToneMapForDisplay(averageRadiance), 1.0f);
 }
 
 [shader("closesthit")]
@@ -53,7 +89,8 @@ void MyClosestHitShader_RadianceRay(
     uint i2 = g_indices[indexOffset + 2];
 
     float3 normal = InterpolateNormal(i0, i1, i2, attributes);
-    if (dot(normal, WorldRayDirection()) > 0.0f)
+    bool frontFace = dot(normal, WorldRayDirection()) < 0.0f;
+    if (!frontFace)
     {
         normal = -normal;
     }
@@ -73,7 +110,7 @@ void MyClosestHitShader_RadianceRay(
 
     float3 hitPosition = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     float3 emission = SurfaceEmission(PrimitiveIndex());
-    if (any(emission > 0.0f))
+    if (frontFace && any(emission > 0.0f))
     {
         payload.color = emission;
         return;
