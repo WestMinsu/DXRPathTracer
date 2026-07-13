@@ -189,8 +189,9 @@ foreach ($group in $groups.Values)
 $mitsubaXml = @'
 <scene version="3.0.0">
     <default name="spp" value="4096"/>
+    <default name="max_depth" value="9"/>
     <integrator type="path">
-        <integer name="max_depth" value="9"/>
+        <integer name="max_depth" value="$max_depth"/>
         <integer name="rr_depth" value="10"/>
     </integrator>
     <sensor type="perspective">

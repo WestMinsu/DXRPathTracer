@@ -20,7 +20,7 @@ public:
     void Render();
     void Resize(UINT width, UINT height);
     void WaitForGpu();
-    void ConfigureAutomatedCapture(UINT sampleCount, const std::wstring& outputPrefix);
+    void ConfigureAutomatedCapture(UINT sampleCount, const std::wstring& outputPrefix, UINT maxBounce);
 
 private:
     static constexpr UINT c_frameCount = 2;

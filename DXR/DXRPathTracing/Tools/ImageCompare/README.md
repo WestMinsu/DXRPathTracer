@@ -27,7 +27,16 @@ computed from the original linear PFM values.
   absolute difference and is printed by the tool.
 - relative_ratio.png: red means test/reference is brighter and blue means it is
   darker. The visualization range is fixed to plus or minus 2 EV.
+- spatial_diagnostics.md: a presentation-ready 3 x 3 regional table of linear
+  luminance, test/reference ratios, and EV differences, followed by the p10,
+  median, and p90 of the 30 x 30-pixel block EV distribution.
+- block_ev.csv: the linear-luminance ratio and EV value for every 30 x 30-pixel
+  block. It can be imported into a spreadsheet to make a labelled heat map.
+- presentation_summary_ko.md: a concise Korean summary containing only the
+  resolution, 3 x 3 regional ratio range, block EV distribution, display scale,
+  and a presentation-ready sentence.
 
 These images localize transport differences without reducing them to one score.
-Use normals and path-contribution AOVs alongside them to distinguish camera,
-geometry, direct-light, and indirect-light discrepancies.
+The Markdown and CSV provide the corresponding numbers without using MSE or
+PSNR. Use normals and path-contribution AOVs alongside them to distinguish
+camera, geometry, direct-light, and indirect-light discrepancies.

@@ -21,6 +21,7 @@ namespace
         UINT width = 960;
         UINT height = 540;
         UINT captureSamples = 0;
+        UINT maxBounce = 8;
         bool headless = false;
         std::wstring outputPrefix;
     };
@@ -91,6 +92,10 @@ namespace
             {
                 gOptions.captureSamples = static_cast<UINT>(_wtoi(arguments[++index]));
             }
+            else if (argument == L"--max-bounce" && index + 1 < argumentCount)
+            {
+                gOptions.maxBounce = static_cast<UINT>(_wtoi(arguments[++index]));
+            }
             else if (argument == L"--output-prefix" && index + 1 < argumentCount)
             {
                 gOptions.outputPrefix = arguments[++index];
@@ -155,7 +160,8 @@ namespace
         {
             gRenderer.ConfigureAutomatedCapture(
                 gOptions.captureSamples,
-                gOptions.outputPrefix);
+                gOptions.outputPrefix,
+                gOptions.maxBounce);
         }
 
         if (!gOptions.headless)

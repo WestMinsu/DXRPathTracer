@@ -25,8 +25,8 @@ omitting it mirrors the rendered Cornell Box horizontally.
 
 ## DXRPathTracing capture
 
-Use a 960 x 540 client area, select Cornell Box, set Max Bounce to 8, and
-capture at the target sample count. A capture now creates:
+Use a 960 x 540 client area, select Cornell Box, set Max Bounce to the target
+depth, and capture at the target sample count. A capture now creates:
 
 - a tone-mapped sRGB PNG preview;
 - a linear RGB float32 PFM made from the accumulation buffer.
@@ -36,17 +36,23 @@ The PFM is the comparison source. Do not compare the PNG as radiance.
 An automated capture can be reproduced from the project root:
 
 ~~~powershell
-.\x64\Debug\DXRPathTracing.exe --width 960 --height 540 --capture-samples 512 --output-prefix Validation\CornellBox\Results\dxr_512spp --headless
+.\x64\Debug\DXRPathTracing.exe --width 960 --height 540 --capture-samples 512 --max-bounce 8 --output-prefix Validation\CornellBox\Results\dxr_8bounce_512spp --headless
 ~~~
+
+`--max-bounce` is clamped to 1--8 and applies to automated captures. It means
+the maximum number of **surface-scattering events** after the camera ray; use
+1, 2, and 8 to isolate direct illumination, early color bleeding, and the full
+transport result.
 
 ## Mitsuba 3
 
 The XML uses the same pure Lambertian reflectances and area-emitter radiance as
-DXRPathTracing. It also uses a 70-degree vertical FOV, a box filter, PFM output,
-and a path depth corresponding to eight surface-scattering events.
+DXRPathTracing. It also uses a 70-degree vertical FOV, a box filter, and PFM
+output. Mitsuba's `max_depth` includes the camera segment, so match DXR's
+`--max-bounce N` with Mitsuba's `-Dmax_depth=N+1`.
 
 ~~~powershell
-mitsuba -m scalar_rgb -Dspp=512 Validation/CornellBox/Mitsuba/cornell_box.xml -o Validation/CornellBox/Results/mitsuba_512spp.pfm
+mitsuba -m scalar_rgb -Dspp=512 -Dmax_depth=9 Validation/CornellBox/Mitsuba/cornell_box.xml -o Validation/CornellBox/Results/mitsuba_8bounce_512spp.pfm
 ~~~
 
 Mitsuba uses next-event estimation while the current DXR Cornell path only uses
@@ -56,7 +62,7 @@ linear radiance agrees.
 Compare the linear outputs without MSE or PSNR:
 
 ~~~powershell
-.\x64\Debug\ImageCompare\ImageCompare.exe Validation\CornellBox\Results\mitsuba_512spp.pfm Validation\CornellBox\Results\dxr_512spp.pfm Validation\CornellBox\Results\DxrVsMitsuba512 0
+.\x64\Debug\ImageCompare\ImageCompare.exe Validation\CornellBox\Results\mitsuba_8bounce_512spp.pfm Validation\CornellBox\Results\dxr_8bounce_512spp.pfm Validation\CornellBox\Results\DxrVsMitsuba8Bounce512 0
 ~~~
 
 ## Current 512 SPP observation
@@ -95,6 +101,10 @@ The patch does three validation-only things:
 - selects the Lambertian diffuse BRDF and disables Russian roulette;
 - sets the total and diffuse bounce limits to eight.
 
+The primary capture keeps NEE enabled as an unbiased variance-reduction
+estimator. ReSTIR, denoising, Russian roulette, and post-processing are
+disabled.
+
 Do not apply this patch to an RTXPT build used for normal real-time rendering.
 
 Copy the generated model to:
@@ -119,8 +129,23 @@ Run the patched RTXPT executable from its `bin` directory. The capture exits
 automatically after the reference accumulation completes:
 
 ~~~powershell
-.\Rtxpt.exe --scene cornell-box.scene.json --width 960 --height 540 --referenceSamplesPerPixel 512 --overrideToReferenceMode --useNEE 1 --NEEType 0 --useReSTIRDI 0 --useReSTIRGI 0 --standaloneDenoiser 0 --realtimeAA 0 --overrideAutoexposureOff --overrideExposureOffset 0 --disableFireflyFilters --disablePostProcessFilters --stopAnimations --captureSimple --capturePath <DXRPathTracing>\Validation\CornellBox\Results\rtxpt_lambert_512spp.pfm --nonInteractive
+.\Rtxpt.exe --scene cornell-box.scene.json --width 960 --height 540 --referenceSamplesPerPixel 512 --overrideToReferenceMode --useNEE 1 --NEEType 0 --useReSTIRDI 0 --useReSTIRGI 0 --standaloneDenoiser 0 --realtimeAA 0 --overrideAutoexposureOff --overrideExposureOffset 0 --disableFireflyFilters --disablePostProcessFilters --stopAnimations --captureSimple --capturePath <DXRPathTracing>\Validation\CornellBox\Results\rtxpt_lambert_8bounce_512spp.pfm --nonInteractive
 ~~~
+
+### BSDF-only RTXPT diagnostic
+
+To match DXR's current BSDF-only sampling strategy, set `--useNEE 0` while
+keeping the validation patch's Lambertian BRDF and disabled Russian roulette:
+
+~~~powershell
+.\Rtxpt.exe --scene cornell-box.scene.json --width 960 --height 540 --referenceSamplesPerPixel 4096 --overrideToReferenceMode --useNEE 0 --useReSTIRDI 0 --useReSTIRGI 0 --standaloneDenoiser 0 --realtimeAA 0 --overrideAutoexposureOff --overrideExposureOffset 0 --disableFireflyFilters --disablePostProcessFilters --stopAnimations --captureSimple --capturePath <DXRPathTracing>\Validation\CornellBox\Results\rtxpt_lambert_nonee_8bounce_4096spp.pfm --nonInteractive
+.\x64\Debug\ImageCompare\ImageCompare.exe Validation\CornellBox\Results\rtxpt_lambert_nonee_8bounce_4096spp.pfm Validation\CornellBox\Results\dxr_8bounce_4096spp.pfm Validation\CornellBox\Results\DxrVsRtxptLambertNoNee8Bounce4096 0
+~~~
+
+This is a sampling-strategy diagnostic, not the primary numerical reference:
+the NEE-off 4096 SPP result retains a 30 x 30 block EV p10/median/p90 of
+-0.0404 / +0.0179 / +0.2076 against DXR. The remaining difference is therefore
+not explained solely by NEE.
 
 Without the validation patch, stock RTXPT uses Frostbite diffuse and produces
 roughly 0.61 to 0.67 times the wall/floor radiance of the Lambertian Mitsuba
@@ -133,9 +158,9 @@ SPP the RTXPT/Mitsuba regional luminance ratios are 0.991 (top), 1.012 (middle),
 
 1. Compare normals to validate camera, winding, and geometry.
 2. Compare visible emission.
-3. Compare one surface-scattering event.
-4. Compare two surface-scattering events to expose color bleeding.
-5. Compare the full eight-event render.
+3. Capture DXR with `--max-bounce 1` and Mitsuba with `-Dmax_depth=2`.
+4. Capture DXR with `--max-bounce 2` and Mitsuba with `-Dmax_depth=3` to expose early color bleeding.
+5. Capture DXR with `--max-bounce 8` and Mitsuba with `-Dmax_depth=9` for the full render.
 
 Use the same exposure only for visualization. Signed or ratio heat maps must be
 computed from the linear PFM/EXR images.

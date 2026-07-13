@@ -706,10 +706,13 @@ bool D3D12Renderer::QueueTextureCapture(
 
 void D3D12Renderer::ConfigureAutomatedCapture(
     UINT sampleCount,
-    const std::wstring& outputPrefix)
+    const std::wstring& outputPrefix,
+    UINT maxBounce)
 {
     m_captureTargetSamples = static_cast<int>(sampleCount > 0 ? sampleCount : 1u);
     m_captureOutputPrefix = outputPrefix;
+    const UINT clampedMaxBounce = maxBounce < 1u ? 1u : (maxBounce > 8u ? 8u : maxBounce);
+    m_maxBounce = static_cast<int>(clampedMaxBounce);
     m_showNormalColor = false;
     m_pbrDebugView = static_cast<int>(RayTracingManager::c_pbrDebugBeauty);
     m_enableAccumulation = true;
