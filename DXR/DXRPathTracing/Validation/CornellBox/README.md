@@ -76,6 +76,27 @@ sequences and Mitsuba's next-event estimation.
 
 ## RTXPT
 
+RTXPT 1.8.1 needs a dedicated validation build. Its stock capture path only
+writes an 8-bit tone-mapped image, and its default Frostbite diffuse BRDF does
+not represent this scene's pure Lambertian materials. Apply the included patch
+to a separate RTXPT clone before configuring and building it:
+
+~~~powershell
+git -C <RTXPT> apply <DXRPathTracing>\Validation\CornellBox\RTXPT-Validation.patch
+cmake -S <RTXPT> -B <RTXPT>\build -G "Visual Studio 17 2022" -A x64
+$env:CL = "/utf-8"
+cmake --build <RTXPT>\build --config Release --target Rtxpt -j 16
+~~~
+
+The patch does three validation-only things:
+
+- writes the float32 `AccumulatedRadiance` texture as PFM when capturePath ends
+  in `.pfm`;
+- selects the Lambertian diffuse BRDF and disables Russian roulette;
+- sets the total and diffuse bounce limits to eight.
+
+Do not apply this patch to an RTXPT build used for normal real-time rendering.
+
 Copy the generated model to:
 
 ~~~text
@@ -91,14 +112,22 @@ Copy the generated scene to:
 The glTF uses KHR_materials_pbrSpecularGlossiness with a zero specular factor
 to represent the pure Lambertian surfaces used by DXRPathTracing. The area light
 uses KHR_materials_emissive_strength to encode linear emission (12, 10, 8).
+RTXPT 1.8.1's Donut importer does not apply this extension, so the generated
+scene additionally sets `material:light.emissiveIntensity` to 12 at time zero.
 
-Run RTXPT at 960 x 540 in reference/accumulation mode. Disable environment
-lighting, denoising, firefly filtering, bloom, auto exposure, and temporal
-reuse. Use fixed manual exposure only for the preview; preserve the linear HDR
-render for comparison.
+Run the patched RTXPT executable from its `bin` directory. The capture exits
+automatically after the reference accumulation completes:
 
-RTXPT uses Disney diffuse and a more advanced light sampler. Treat it as a
-cross-check after Mitsuba, not as a pixel-identical oracle.
+~~~powershell
+.\Rtxpt.exe --scene cornell-box.scene.json --width 960 --height 540 --referenceSamplesPerPixel 512 --overrideToReferenceMode --useNEE 1 --NEEType 0 --useReSTIRDI 0 --useReSTIRGI 0 --standaloneDenoiser 0 --realtimeAA 0 --overrideAutoexposureOff --overrideExposureOffset 0 --disableFireflyFilters --disablePostProcessFilters --stopAnimations --captureSimple --capturePath <DXRPathTracing>\Validation\CornellBox\Results\rtxpt_lambert_512spp.pfm --nonInteractive
+~~~
+
+Without the validation patch, stock RTXPT uses Frostbite diffuse and produces
+roughly 0.61 to 0.67 times the wall/floor radiance of the Lambertian Mitsuba
+reference. That is a BRDF-model difference, not evidence of an error in either
+path integrator. With the patch, the visible-light bounds match exactly; at 512
+SPP the RTXPT/Mitsuba regional luminance ratios are 0.991 (top), 1.012 (middle),
+1.055 (bottom), 1.018 (left), 1.005 (center), and 1.011 (right).
 
 ## Comparison order
 

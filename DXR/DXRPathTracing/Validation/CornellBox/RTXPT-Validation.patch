@@ -1,0 +1,98 @@
+diff --git a/Rtxpt/Sample.cpp b/Rtxpt/Sample.cpp
+index 029a078..faa2999 100644
+--- a/Rtxpt/Sample.cpp
++++ b/Rtxpt/Sample.cpp
+@@ -57,6 +57,7 @@ using namespace donut::engine;
+ using namespace donut::render;
+ 
+ #include <fstream>
++#include <filesystem>
+ #include <iostream>
+ 
+ #include <thread>
+@@ -89,6 +90,51 @@ const float c_envMapRadianceScale = 1.0f / 4.0f; // used to make input 32bit flo
+ 
+ static FPSLimiter g_FPSLimiter;
+ 
++namespace
++{
++    bool SaveLinearTextureToPfm(nvrhi::IDevice* device, nvrhi::ITexture* texture, const char* fileName)
++    {
++        if (device == nullptr || texture == nullptr || fileName == nullptr)
++            return false;
++
++        const nvrhi::TextureDesc desc = texture->getDesc();
++        if (desc.format != nvrhi::Format::RGBA32_FLOAT || desc.width == 0 || desc.height == 0)
++            return false;
++
++        nvrhi::CommandListHandle commandList = device->createCommandList();
++        nvrhi::StagingTextureHandle stagingTexture = device->createStagingTexture(desc, nvrhi::CpuAccessMode::Read);
++        commandList->open();
++        commandList->copyTexture(stagingTexture, nvrhi::TextureSlice(), texture, nvrhi::TextureSlice());
++        commandList->close();
++        device->executeCommandList(commandList);
++
++        size_t rowPitch = 0;
++        const uint8_t* mapped = static_cast<const uint8_t*>(device->mapStagingTexture(
++            stagingTexture, nvrhi::TextureSlice(), nvrhi::CpuAccessMode::Read, &rowPitch));
++        if (mapped == nullptr)
++            return false;
++
++        std::ofstream file(std::filesystem::path(fileName), std::ios::binary);
++        file << "PF\n" << desc.width << " " << desc.height << "\n-1.0\n";
++
++        for (int row = static_cast<int>(desc.height) - 1; row >= 0 && file.good(); --row)
++        {
++            const float* source = reinterpret_cast<const float*>(mapped + static_cast<size_t>(row) * rowPitch);
++            for (uint32_t column = 0; column < desc.width; ++column)
++            {
++                file.write(
++                    reinterpret_cast<const char*>(source + static_cast<size_t>(column) * 4),
++                    sizeof(float) * 3);
++            }
++        }
++
++        const bool succeeded = file.good();
++        file.close();
++        device->unmapStagingTexture(stagingTexture);
++        return succeeded;
++    }
++}
++
+ Sample::Sample(donut::app::DeviceManager& deviceManager,
+     const CommandLineOptions& cmdLine)
+     : app::ApplicationBase(&deviceManager )
+@@ -667,6 +713,11 @@ void Sample::SceneLoaded( )
+     if (m_cmdLine.cameraPosDirUp != "")
+         SetCurrentCameraPosDirUp(m_cmdLine.cameraPosDirUp);
+ 
++    // Cornell validation: match the eight diffuse surface-scattering events
++    // used by DXRPathTracing and the corresponding Mitsuba scene.
++    m_ui.BounceCount = 8;
++    m_ui.DiffuseBounceCount = 8;
++
+     m_ui.MaterialVariantIndex = 0;
+ 
+     m_asyncLoadingInProgress = true;
+@@ -1000,7 +1051,9 @@ void Sample::FillPTPipelineGlobalMacros(std::vector<donut::engine::ShaderMacro>
+     macros.push_back({ "USE_DX_HIT_OBJECT_EXTENSION", (m_ui.DXHitObjectExtension) ? ("1") : ("0") });
+     macros.push_back({ "USE_DX_MAYBE_REORDER_THREADS", (m_ui.DXHitObjectExtension && m_ui.DXMaybeReorderThreads) ? ("1") : ("0") });
+ 
+-    macros.push_back({ "PT_ENABLE_RUSSIAN_ROULETTE", (m_ui.EnableRussianRoulette) ? ("1") : ("0") });
++    // Cornell validation: match the DXR/Mitsuba pure-Lambertian integrator.
++    macros.push_back({ "DiffuseBrdf", "0" }); // DiffuseBrdfLambert
++    macros.push_back({ "PT_ENABLE_RUSSIAN_ROULETTE", "0" });
+ 
+     macros.push_back({ "PT_NEE_ENABLED", (m_ui.UseNEE)?("1"):("0") });
+ 
+@@ -2292,6 +2345,10 @@ void Sample::Render(nvrhi::IFramebuffer* framebuffer)
+ 
+     auto DumpScreenshot = [this, framebufferTexture](const char* fileName)
+     {
++        const std::filesystem::path outputPath(fileName);
++        if (outputPath.extension() == ".pfm" || outputPath.extension() == ".PFM")
++            return SaveLinearTextureToPfm(GetDevice(), m_renderTargets->AccumulatedRadiance, fileName);
++
+         return SaveTextureToFile(GetDevice(), m_CommonPasses.get(), framebufferTexture, nvrhi::ResourceStates::Common, fileName);
+     };
+
