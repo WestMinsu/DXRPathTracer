@@ -125,7 +125,7 @@ void MyClosestHitShader_RadianceRay(
     if (g_sceneType == c_scenePbrGgx)
     {
         PbrMaterial material = GetPbrMaterial(PrimitiveIndex());
-        payload.color = TracePbrBrdfWithGgxImportanceSampling(material, normal, hitPosition, payload.depth, PrimitiveIndex());
+        payload.color = TracePbrBrdfWithMixtureSampling(material, normal, hitPosition, payload.depth, PrimitiveIndex());
         return;
     }
 
