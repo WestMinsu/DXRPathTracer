@@ -92,6 +92,7 @@ void D3D12Renderer::Render()
     m_rayTracingManager->SetShowNormalColor(m_showNormalColor);
     m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
     m_rayTracingManager->SetEnableAccumulation(m_enableAccumulation);
+    m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
     m_rayTracingManager->SetPbrDebugView(static_cast<UINT>(m_pbrDebugView));
     m_rayTracingManager->SetPbrMaterial(m_pbrMetallic, m_pbrRoughness);
     m_rayTracingManager->SetIblSettings(m_enableIbl, m_iblIntensity);
@@ -707,12 +708,24 @@ bool D3D12Renderer::QueueTextureCapture(
 void D3D12Renderer::ConfigureAutomatedCapture(
     UINT sampleCount,
     const std::wstring& outputPrefix,
-    UINT maxBounce)
+    UINT maxBounce,
+    UINT sceneType,
+    float pbrMetallic,
+    float pbrRoughness,
+    bool enableIbl,
+    float iblIntensity)
 {
     m_captureTargetSamples = static_cast<int>(sampleCount > 0 ? sampleCount : 1u);
     m_captureOutputPrefix = outputPrefix;
     const UINT clampedMaxBounce = maxBounce < 1u ? 1u : (maxBounce > 8u ? 8u : maxBounce);
     m_maxBounce = static_cast<int>(clampedMaxBounce);
+    m_sceneType = sceneType == RayTracingManager::c_scenePbrGgx
+        ? static_cast<int>(RayTracingManager::c_scenePbrGgx)
+        : static_cast<int>(RayTracingManager::c_sceneCornellBox);
+    m_pbrMetallic = pbrMetallic;
+    m_pbrRoughness = pbrRoughness;
+    m_enableIbl = enableIbl;
+    m_iblIntensity = iblIntensity;
     m_showNormalColor = false;
     m_pbrDebugView = static_cast<int>(RayTracingManager::c_pbrDebugBeauty);
     m_enableAccumulation = true;

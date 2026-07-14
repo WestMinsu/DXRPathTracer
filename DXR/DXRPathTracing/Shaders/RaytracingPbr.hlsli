@@ -14,18 +14,28 @@ float DistributionGGX(float3 normal, float3 halfVector, float roughness)
     return alphaSquared / max(c_pi * denominator * denominator, 0.000001f);
 }
 
-float GeometrySchlickGGX(float nDotV, float roughness)
-{
-    float remappedRoughness = roughness + 1.0f;
-    float k = (remappedRoughness * remappedRoughness) / 8.0f;
-    return nDotV / max(nDotV * (1.0f - k) + k, 0.000001f);
-}
-
-float GeometrySmith(float3 normal, float3 viewDirection, float3 lightDirection, float roughness)
+float GeometrySmithHeightCorrelatedGGX(
+    float3 normal,
+    float3 viewDirection,
+    float3 lightDirection,
+    float roughness)
 {
     float nDotV = saturate(dot(normal, viewDirection));
     float nDotL = saturate(dot(normal, lightDirection));
-    return GeometrySchlickGGX(nDotV, roughness) * GeometrySchlickGGX(nDotL, roughness);
+    if (nDotV <= 0.0f || nDotL <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    float alpha = roughness * roughness;
+    float alphaSquared = alpha * alpha;
+    float smithV = nDotL * sqrt(max(
+        nDotV * nDotV * (1.0f - alphaSquared) + alphaSquared,
+        0.0f));
+    float smithL = nDotV * sqrt(max(
+        nDotL * nDotL * (1.0f - alphaSquared) + alphaSquared,
+        0.0f));
+    return (2.0f * nDotV * nDotL) / max(smithV + smithL, 0.000001f);
 }
 
 float3 FresnelSchlick(float cosTheta, float3 f0)
@@ -42,7 +52,11 @@ float3 EvaluateBrdf(PbrMaterial material, float3 normal, float3 viewDirection, f
 
     float3 f0 = lerp(float3(0.04f, 0.04f, 0.04f), material.baseColor, material.metallic);
     float d = DistributionGGX(normal, halfVector, material.roughness);
-    float g = GeometrySmith(normal, viewDirection, lightDirection, material.roughness);
+    float g = GeometrySmithHeightCorrelatedGGX(
+        normal,
+        viewDirection,
+        lightDirection,
+        material.roughness);
     float3 f = FresnelSchlick(vDotH, f0);
 
     float3 specular = (d * g * f) / max(4.0f * nDotV * nDotL, 0.0001f);

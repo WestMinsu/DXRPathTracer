@@ -13,5 +13,18 @@ Validation/CornellBox/Mitsuba/
 Validation/CornellBox/RTXPT/
 Validation/CornellBox/scene_manifest.json
 
+# Generated PBR Scene validation assets and renderer outputs.
+# Keep the generators and Mitsuba custom BRDF implementation under version control.
+Validation/PbrScene/Results/
+Validation/PbrScene/Mitsuba/environment_latlong.pfm
+Validation/PbrScene/Mitsuba/meshes/
+Validation/PbrScene/Mitsuba/pbr_scene.xml
+Validation/PbrScene/RTXPT/
+Validation/PbrScene/scene_manifest.json
+
+# Python-generated caches
+__pycache__/
+*.py[cod]
+
 # Local texture/model assets
 Assets/

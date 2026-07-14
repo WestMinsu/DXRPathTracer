@@ -22,6 +22,11 @@ namespace
         UINT height = 540;
         UINT captureSamples = 0;
         UINT maxBounce = 8;
+        UINT sceneType = RayTracingManager::c_sceneCornellBox;
+        float pbrMetallic = 1.0f;
+        float pbrRoughness = 0.35f;
+        bool enableIbl = true;
+        float iblIntensity = 0.5f;
         bool headless = false;
         std::wstring outputPrefix;
     };
@@ -96,6 +101,29 @@ namespace
             {
                 gOptions.maxBounce = static_cast<UINT>(_wtoi(arguments[++index]));
             }
+            else if (argument == L"--scene" && index + 1 < argumentCount)
+            {
+                const std::wstring scene = arguments[++index];
+                gOptions.sceneType = scene == L"pbr"
+                    ? RayTracingManager::c_scenePbrGgx
+                    : RayTracingManager::c_sceneCornellBox;
+            }
+            else if (argument == L"--pbr-metallic" && index + 1 < argumentCount)
+            {
+                gOptions.pbrMetallic = static_cast<float>(_wtof(arguments[++index]));
+            }
+            else if (argument == L"--pbr-roughness" && index + 1 < argumentCount)
+            {
+                gOptions.pbrRoughness = static_cast<float>(_wtof(arguments[++index]));
+            }
+            else if (argument == L"--ibl-intensity" && index + 1 < argumentCount)
+            {
+                gOptions.iblIntensity = static_cast<float>(_wtof(arguments[++index]));
+            }
+            else if (argument == L"--disable-ibl")
+            {
+                gOptions.enableIbl = false;
+            }
             else if (argument == L"--output-prefix" && index + 1 < argumentCount)
             {
                 gOptions.outputPrefix = arguments[++index];
@@ -161,7 +189,12 @@ namespace
             gRenderer.ConfigureAutomatedCapture(
                 gOptions.captureSamples,
                 gOptions.outputPrefix,
-                gOptions.maxBounce);
+                gOptions.maxBounce,
+                gOptions.sceneType,
+                gOptions.pbrMetallic,
+                gOptions.pbrRoughness,
+                gOptions.enableIbl,
+                gOptions.iblIntensity);
         }
 
         if (!gOptions.headless)

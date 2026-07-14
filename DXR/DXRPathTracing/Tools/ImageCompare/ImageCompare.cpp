@@ -37,7 +37,6 @@ namespace
         float referenceLuminance = 0.0f;
         float testLuminance = 0.0f;
         float ratio = 0.0f;
-        float ev = 0.0f;
     };
 
     struct BlockDiagnostic
@@ -51,18 +50,19 @@ namespace
         float referenceLuminance = 0.0f;
         float testLuminance = 0.0f;
         float ratio = 0.0f;
-        float ev = 0.0f;
-        bool includedInEvSummary = false;
     };
 
     struct SpatialDiagnostics
     {
+        float referenceLuminance = 0.0f;
+        float testLuminance = 0.0f;
+        float ratio = 0.0f;
         std::vector<RegionDiagnostic> regions;
         std::vector<BlockDiagnostic> blocks;
         UINT validBlockCount = 0;
-        float blockEvP10 = 0.0f;
-        float blockEvMedian = 0.0f;
-        float blockEvP90 = 0.0f;
+        float blockRatioP10 = 0.0f;
+        float blockRatioMedian = 0.0f;
+        float blockRatioP90 = 0.0f;
     };
 
     constexpr UINT c_regionColumns = 3;
@@ -255,11 +255,6 @@ namespace
         return test / reference;
     }
 
-    float LuminanceEv(float referenceLuminance, float testLuminance)
-    {
-        return std::log2(LuminanceRatio(referenceLuminance, testLuminance));
-    }
-
     float Percentile(const std::vector<float>& values, float percentile)
     {
         if (values.empty())
@@ -282,6 +277,12 @@ namespace
         ValidateMatchingImages(reference, test);
 
         SpatialDiagnostics diagnostics;
+        diagnostics.referenceLuminance =
+            MeanLuminance(reference, 0, 0, reference.width, reference.height);
+        diagnostics.testLuminance =
+            MeanLuminance(test, 0, 0, test.width, test.height);
+        diagnostics.ratio =
+            LuminanceRatio(diagnostics.referenceLuminance, diagnostics.testLuminance);
         constexpr const char* rowNames[c_regionRows] = { "top", "middle", "bottom" };
         constexpr const char* columnNames[c_regionColumns] = { "left", "center", "right" };
 
@@ -305,12 +306,11 @@ namespace
                 region.testLuminance =
                     MeanLuminance(test, x, y, region.width, region.height);
                 region.ratio = LuminanceRatio(region.referenceLuminance, region.testLuminance);
-                region.ev = LuminanceEv(region.referenceLuminance, region.testLuminance);
                 diagnostics.regions.push_back(region);
             }
         }
 
-        std::vector<float> validBlockEvs;
+        std::vector<float> validBlockRatios;
         for (UINT y = 0, row = 0; y < reference.height; y += c_blockSize, ++row)
         {
             const UINT blockHeight = std::min(c_blockSize, reference.height - y);
@@ -329,19 +329,16 @@ namespace
                 block.testLuminance =
                     MeanLuminance(test, x, y, blockWidth, blockHeight);
                 block.ratio = LuminanceRatio(block.referenceLuminance, block.testLuminance);
-                block.ev = LuminanceEv(block.referenceLuminance, block.testLuminance);
-                block.includedInEvSummary =
-                    block.referenceLuminance > c_minimumReferenceLuminance;
-                if (block.includedInEvSummary)
-                    validBlockEvs.push_back(block.ev);
+                if (block.referenceLuminance > c_minimumReferenceLuminance)
+                    validBlockRatios.push_back(block.ratio);
                 diagnostics.blocks.push_back(block);
             }
         }
 
-        diagnostics.validBlockCount = static_cast<UINT>(validBlockEvs.size());
-        diagnostics.blockEvP10 = Percentile(validBlockEvs, 0.10f);
-        diagnostics.blockEvMedian = Percentile(validBlockEvs, 0.50f);
-        diagnostics.blockEvP90 = Percentile(validBlockEvs, 0.90f);
+        diagnostics.validBlockCount = static_cast<UINT>(validBlockRatios.size());
+        diagnostics.blockRatioP10 = Percentile(validBlockRatios, 0.10f);
+        diagnostics.blockRatioMedian = Percentile(validBlockRatios, 0.50f);
+        diagnostics.blockRatioP90 = Percentile(validBlockRatios, 0.90f);
         return diagnostics;
     }
 
@@ -354,13 +351,13 @@ namespace
     std::vector<uint8_t> MakeSideBySide(
         const HdrImage& reference,
         const HdrImage& test,
-        float exposureEv)
+        float displayExposureStops)
     {
         ValidateMatchingImages(reference, test);
         const UINT outputWidth = reference.width * 2u;
         std::vector<uint8_t> output(
             static_cast<std::size_t>(outputWidth) * reference.height * 4);
-        const float exposureScale = std::pow(2.0f, exposureEv);
+        const float exposureScale = std::pow(2.0f, displayExposureStops);
 
         for (UINT y = 0; y < reference.height; ++y)
         {
@@ -448,7 +445,7 @@ namespace
         const HdrImage& test)
     {
         const float epsilon = 1e-4f;
-        const float evRange = 2.0f;
+        const float log2RatioRange = 2.0f;
         std::vector<uint8_t> output(
             static_cast<std::size_t>(reference.width) * reference.height * 4);
         for (UINT y = 0; y < reference.height; ++y)
@@ -460,7 +457,7 @@ namespace
                 const float referenceY = std::max(0.0f, Luminance(reference.rgb.data() + index));
                 const float testY = std::max(0.0f, Luminance(test.rgb.data() + index));
                 const float logRatio = std::log2((testY + epsilon) / (referenceY + epsilon));
-                const float amount = std::min(std::abs(logRatio) / evRange, 1.0f);
+                const float amount = std::min(std::abs(logRatio) / log2RatioRange, 1.0f);
                 const float neutral = 0.15f * (1.0f - amount);
 
                 StorePixel(
@@ -524,8 +521,7 @@ namespace
 
     void WriteSpatialDiagnostics(
         const std::wstring& outputFolder,
-        const SpatialDiagnostics& diagnostics,
-        float signedDifferenceDisplayScale)
+        const SpatialDiagnostics& diagnostics)
     {
         const std::wstring markdownPath = JoinPath(outputFolder, L"spatial_diagnostics.md");
         FILE* markdown = nullptr;
@@ -538,37 +534,42 @@ namespace
                 "# Spatial HDR diagnostics\n\n"
                 "All values use linear RGB luminance. They are spatial transport diagnostics, "
                 "not MSE, PSNR, or a single image-quality score.\n\n"
+                "## Whole image\n\n"
+                "| Test mean | Reference mean | Test / Reference |\n"
+                "| ---: | ---: | ---: |\n"
+                "| %.6f | %.6f | %.6f |\n\n"
                 "## 3 x 3 regional luminance\n\n"
-                "| Region | Reference mean | Test mean | Test / reference | EV |\n"
-                "| --- | ---: | ---: | ---: | ---: |\n");
+                "| Region | Test mean | Reference mean | Test / Reference |\n"
+                "| --- | ---: | ---: | ---: |\n",
+                diagnostics.testLuminance,
+                diagnostics.referenceLuminance,
+                diagnostics.ratio);
             for (const RegionDiagnostic& region : diagnostics.regions)
             {
                 std::fprintf(
                     markdown,
-                    "| %s | %.6f | %.6f | %.6f | %+.6f |\n",
+                    "| %s | %.6f | %.6f | %.6f |\n",
                     region.name.c_str(),
-                    region.referenceLuminance,
                     region.testLuminance,
-                    region.ratio,
-                    region.ev);
+                    region.referenceLuminance,
+                    region.ratio);
             }
 
             std::fprintf(markdown,
-                "\n## 30 x 30 pixel block EV distribution\n\n"
-                "Only blocks with reference mean luminance above %.6f are included "
+                "\n## 30 x 30 pixel block Test / Reference distribution\n\n"
+                "Only blocks with Reference mean above %.6f are included "
                 "(%u of %zu blocks).\n\n"
                 "| p10 | median | p90 |\n"
                 "| ---: | ---: | ---: |\n"
-                "| %+.6f EV | %+.6f EV | %+.6f EV |\n\n"
-                "Signed-difference visualization scale: +/- %.6f linear radiance "
-                "(99th percentile; display only).\n",
+                "| %.6f | %.6f | %.6f |\n\n"
+                "Detailed block Test mean, Reference mean, and Test / Reference values "
+                "are stored in `block_ratio.csv`.\n",
                 c_minimumReferenceLuminance,
                 diagnostics.validBlockCount,
                 diagnostics.blocks.size(),
-                diagnostics.blockEvP10,
-                diagnostics.blockEvMedian,
-                diagnostics.blockEvP90,
-                signedDifferenceDisplayScale);
+                diagnostics.blockRatioP10,
+                diagnostics.blockRatioMedian,
+                diagnostics.blockRatioP90);
             std::fclose(markdown);
         }
         catch (...)
@@ -577,33 +578,31 @@ namespace
             throw;
         }
 
-        const std::wstring csvPath = JoinPath(outputFolder, L"block_ev.csv");
+        const std::wstring csvPath = JoinPath(outputFolder, L"block_ratio.csv");
         FILE* csv = nullptr;
         if (_wfopen_s(&csv, csvPath.c_str(), L"wb") != 0 || !csv)
-            throw std::runtime_error("Could not create block EV CSV file.");
+            throw std::runtime_error("Could not create block ratio CSV file.");
 
         try
         {
             std::fprintf(
                 csv,
-                "column,row,x,y,width,height,reference_mean_luminance,"
-                "test_mean_luminance,test_to_reference_ratio,ev,included_in_ev_summary\n");
+                "column,row,x,y,width,height,test_mean_luminance,"
+                "reference_mean_luminance,test_to_reference_ratio\n");
             for (const BlockDiagnostic& block : diagnostics.blocks)
             {
                 std::fprintf(
                     csv,
-                    "%u,%u,%u,%u,%u,%u,%.8f,%.8f,%.8f,%+.8f,%u\n",
+                    "%u,%u,%u,%u,%u,%u,%.8f,%.8f,%.8f\n",
                     block.column,
                     block.row,
                     block.x,
                     block.y,
                     block.width,
                     block.height,
-                    block.referenceLuminance,
                     block.testLuminance,
-                    block.ratio,
-                    block.ev,
-                    block.includedInEvSummary ? 1u : 0u);
+                    block.referenceLuminance,
+                    block.ratio);
             }
             std::fclose(csv);
         }
@@ -650,8 +649,7 @@ namespace
     void WritePresentationSummaryKorean(
         const std::wstring& outputFolder,
         const HdrImage& reference,
-        const SpatialDiagnostics& diagnostics,
-        float signedDifferenceDisplayScale)
+        const SpatialDiagnostics& diagnostics)
     {
         const std::wstring path = JoinPath(outputFolder, L"presentation_summary_ko.md");
         FILE* file = nullptr;
@@ -664,33 +662,23 @@ namespace
             if (std::fwrite(utf8Bom, 1, sizeof(utf8Bom), file) != sizeof(utf8Bom))
                 throw std::runtime_error("Could not write Korean presentation summary UTF-8 BOM.");
 
-            const auto ratioRange = std::minmax_element(
-                diagnostics.regions.begin(),
-                diagnostics.regions.end(),
-                [](const RegionDiagnostic& lhs, const RegionDiagnostic& rhs)
-                {
-                    return lhs.ratio < rhs.ratio;
-                });
-
             std::wostringstream summary;
             summary << std::fixed << std::setprecision(6);
             summary << L"# \uBC1C\uD45C\uC6A9 HDR \uBE44\uAD50 \uC694\uC57D\n\n";
             summary << L"## \uD575\uC2EC \uC218\uCE58\n\n";
             summary << L"- \uD574\uC0C1\uB3C4: "
                     << reference.width << L" x " << reference.height << L"\n";
-            summary << L"- 3 x 3 \uC601\uC5ED \uBC1D\uAE30 \uBE44\uC728(Test / Reference): "
-                    << ratioRange.first->ratio << L" ~ " << ratioRange.second->ratio << L"\n";
-            summary << L"- 30 x 30 \uBE14\uB85D EV \uBD84\uD3EC(p10 / \uC911\uC559 / p90): "
-                    << diagnostics.blockEvP10 << L" / "
-                    << diagnostics.blockEvMedian << L" / "
-                    << diagnostics.blockEvP90 << L" EV\n";
-            summary << L"- \uCC28\uC774 \uC9C0\uB3C4 \uD45C\uC2DC \uAE30\uC900: +/- "
-                    << signedDifferenceDisplayScale
-                    << L" linear radiance (p99)\n\n";
+            summary << L"- Test mean: " << diagnostics.testLuminance << L"\n";
+            summary << L"- Reference mean: " << diagnostics.referenceLuminance << L"\n";
+            summary << L"- Test / Reference: " << diagnostics.ratio << L"\n\n";
+            summary << L"## \uD574\uC11D\n\n";
+            summary << L"- Test / Reference\uAC00 1.0\uC5D0 \uAC00\uAE4C\uC6B8\uC218\uB85D "
+                    << L"\uC804\uCCB4 \uD3C9\uADE0 \uBC1D\uAE30\uAC00 \uC77C\uCE58\uD569\uB2C8\uB2E4.\n\n";
             summary << L"## \uBC1C\uD45C \uBB38\uC7A5\n\n";
-            summary << L"> \uC120\uD615 HDR PFM\uC744 \uAE30\uC900\uC73C\uB85C 3 x 3 \uC601\uC5ED\uBCC4 \uBC1D\uAE30 \uBE44\uC728\uACFC "
-                    << L"30 x 30 \uBE14\uB85D\uBCC4 EV \uBD84\uD3EC\uB97C \uBE44\uAD50\uD558\uC5EC, "
-                    << L"\uC704\uCE58\uBCC4 radiance \uCC28\uC774\uB97C \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4.\n";
+            summary << L"> \uC120\uD615 HDR PFM\uC5D0\uC11C \uC804\uCCB4 \uC774\uBBF8\uC9C0\uC758 \uD3C9\uADE0 \uD718\uB3C4\uB97C \uBE44\uAD50\uD588\uC2B5\uB2C8\uB2E4. "
+                    << L"Test mean\uC740 " << diagnostics.testLuminance
+                    << L", Reference mean\uC740 " << diagnostics.referenceLuminance
+                    << L", Test / Reference\uB294 " << diagnostics.ratio << L"\uC785\uB2C8\uB2E4.\n";
             WriteUtf8(file, summary.str());
             std::fclose(file);
         }
@@ -705,13 +693,13 @@ namespace
     {
         std::wcout
             << L"Usage:\n"
-            << L"  ImageCompare.exe <reference.pfm> <test.pfm> [output-folder] [exposure-EV]\n\n"
+            << L"  ImageCompare.exe <reference.pfm> <test.pfm> [output-folder] [display-exposure-stops]\n\n"
             << L"Outputs:\n"
             << L"  side_by_side.png       reference on the left, test on the right\n"
             << L"  signed_difference.png  red=test brighter, blue=test darker\n"
             << L"  relative_ratio.png     red=test/reference > 1, blue=< 1\n"
-            << L"  spatial_diagnostics.md presentation-ready regional and EV tables\n"
-            << L"  block_ev.csv           per-30x30-pixel-block HDR diagnostics\n"
+            << L"  spatial_diagnostics.md whole-image and regional mean/ratio tables\n"
+            << L"  block_ratio.csv        per-30x30-pixel-block mean/ratio diagnostics\n"
             << L"  presentation_summary_ko.md concise Korean presentation summary\n";
     }
 }
@@ -725,7 +713,7 @@ int wmain(int argc, wchar_t* argv[])
     }
 
     const std::wstring outputFolder = argc >= 4 ? argv[3] : L"ComparisonOutputs";
-    const float exposureEv = argc >= 5
+    const float displayExposureStops = argc >= 5
         ? static_cast<float>(std::wcstod(argv[4], nullptr))
         : 0.0f;
 
@@ -769,7 +757,7 @@ int wmain(int argc, wchar_t* argv[])
             JoinPath(outputFolder, L"side_by_side.png"),
             reference.width * 2u,
             reference.height,
-            MakeSideBySide(reference, test, exposureEv));
+            MakeSideBySide(reference, test, displayExposureStops));
         SavePng(
             factory.Get(),
             JoinPath(outputFolder, L"signed_difference.png"),
@@ -782,23 +770,22 @@ int wmain(int argc, wchar_t* argv[])
             reference.width,
             reference.height,
             MakeRelativeRatio(reference, test));
-        WriteSpatialDiagnostics(outputFolder, diagnostics, differenceScale);
-        WritePresentationSummaryKorean(outputFolder, reference, diagnostics, differenceScale);
+        WriteSpatialDiagnostics(outputFolder, diagnostics);
+        WritePresentationSummaryKorean(outputFolder, reference, diagnostics);
 
         std::wcout << L"Reference : " << argv[1] << L"\n";
         std::wcout << L"Test      : " << argv[2] << L"\n";
         std::wcout << L"Size      : " << reference.width << L" x " << reference.height << L"\n";
         std::wcout << L"Output    : " << outputFolder << L"\n";
         std::cout << std::fixed << std::setprecision(6)
-                  << "Display exposure (EV)       : " << exposureEv << "\n"
+                  << "Display exposure (stops)    : " << displayExposureStops << "\n"
                   << "Signed-difference map scale : " << differenceScale
                   << " linear radiance (99th percentile, visualization only)\n"
-                  << "Relative-ratio map range    : +/- 2 EV\n"
-                  << "Block EV p10 / median / p90 : "
-                  << diagnostics.blockEvP10 << " / "
-                  << diagnostics.blockEvMedian << " / "
-                  << diagnostics.blockEvP90 << "\n"
-                  << "Numeric outputs             : spatial_diagnostics.md, block_ev.csv, "
+                  << "Relative-ratio map range    : 0.25x to 4.00x\n"
+                  << "Test mean                   : " << diagnostics.testLuminance << "\n"
+                  << "Reference mean              : " << diagnostics.referenceLuminance << "\n"
+                  << "Test / Reference            : " << diagnostics.ratio << "\n"
+                  << "Numeric outputs             : spatial_diagnostics.md, block_ratio.csv, "
                      "presentation_summary_ko.md\n";
     }
     catch (const std::exception& exception)

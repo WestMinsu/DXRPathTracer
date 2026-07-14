@@ -20,7 +20,15 @@ public:
     void Render();
     void Resize(UINT width, UINT height);
     void WaitForGpu();
-    void ConfigureAutomatedCapture(UINT sampleCount, const std::wstring& outputPrefix, UINT maxBounce);
+    void ConfigureAutomatedCapture(
+        UINT sampleCount,
+        const std::wstring& outputPrefix,
+        UINT maxBounce,
+        UINT sceneType,
+        float pbrMetallic,
+        float pbrRoughness,
+        bool enableIbl,
+        float iblIntensity);
 
 private:
     static constexpr UINT c_frameCount = 2;
