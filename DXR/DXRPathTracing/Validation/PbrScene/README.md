@@ -22,6 +22,7 @@ Validation/PbrScene/Results/BrdfPhysicalValidation/
 - white_furnace.csv: 재질·roughness·시선 각도별 방향 반사율
 - pdf_consistency.csv: 실제 GGX 표본 분포와 셰이더 PDF의 일치도
 - sampling_convergence.csv: 결정론적 적분값과 Monte Carlo 추정값의 수렴
+- gpu_validation.csv: 실제 GPU HLSL 추정값과 CPU 기준 적분값 비교
 
 ## 판정 의미
 
@@ -37,6 +38,33 @@ Validation/PbrScene/Results/BrdfPhysicalValidation/
 cosine-weighted diffuse를 혼합 샘플링한다. throughput에는 두 proposal을 합한
 mixture PDF를 사용한다.
 
+## 실제 GPU HLSL 교차검증
+
+먼저 Debug x64 프로젝트를 빌드한 뒤 GPU 검증 PFM을 생성한다.
+
+~~~powershell
+.\x64\Debug\DXRPathTracing.exe --gpu-brdf-validation --width 512 --height 512 --capture-samples 16 --output-prefix Validation\PbrScene\Results\BrdfPhysicalValidation\gpu_brdf_validation --headless
+~~~
+
+생성된 PFM을 CPU 고정밀 기준값과 비교한다.
+
+~~~powershell
+python Validation\PbrScene\validate_brdf.py --gpu-pfm Validation\PbrScene\Results\BrdfPhysicalValidation\gpu_brdf_validation.pfm --gpu-spp 16
+~~~
+
+GPU ray-generation shader는 화면을 네 개의 가로 영역으로 나누고 다음 조건에서
+실제 EvaluateBrdf, GGX/cosine mixture sampler 및 mixture PDF를 실행한다.
+
+- conductor gold, roughness 0.35, NdotV 1.0
+- conductor gold, roughness 0.10, NdotV 1.0
+- dielectric gold color, roughness 0.35, NdotV 1.0
+- dielectric gold color, roughness 0.80, NdotV 0.5
+
+512 x 512 해상도와 16 spp에서는 조건당
+512 x 128 x 16 = 1,048,576개의 GPU 표본을 사용한다. 각 영역의 평균
+throughput을 CPU 결정론적 반구 적분값과 비교하며 최대 상대 오차 0.5% 이내를
+통과 조건으로 사용한다.
+
 ## 구현상의 수치 범위
 
 - perceptual roughness는 셰이더 입력에서 0~1로 제한한다.
@@ -47,3 +75,15 @@ mixture PDF를 사용한다.
 이 검증은 BRDF의 수학적 성질과 현재 샘플링 구현을 검사한다. 실제 재질을 완벽하게
 재현한다는 의미는 아니며, single-scatter GGX의 다중 산란 에너지 손실 같은 모델
 한계는 결과에 별도로 기록한다.
+
+## 독립 시드 반복 GPU 검증
+
+Debug x64 빌드 후 다음 명령으로 독립 시드 12개를 자동 실행하고 99% 신뢰구간
+그래프를 생성한다.
+
+~~~powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Validation\PbrScene\Run-GpuValidationRepeats.ps1
+~~~
+
+결과 폴더에는 발표용 1920 x 1080 PNG, 편집 가능한 SVG, 반복별 원시 CSV와
+한글 요약 문서가 생성된다.

@@ -27,6 +27,7 @@ namespace
         float pbrRoughness = 0.35f;
         bool enableIbl = true;
         float iblIntensity = 0.5f;
+        UINT validationSeed = 0;
         bool headless = false;
         std::wstring outputPrefix;
     };
@@ -104,9 +105,31 @@ namespace
             else if (argument == L"--scene" && index + 1 < argumentCount)
             {
                 const std::wstring scene = arguments[++index];
-                gOptions.sceneType = scene == L"pbr"
-                    ? RayTracingManager::c_scenePbrGgx
-                    : RayTracingManager::c_sceneCornellBox;
+                if (scene == L"pbr")
+                {
+                    gOptions.sceneType = RayTracingManager::c_scenePbrGgx;
+                }
+                else if (scene == L"pbr-validation")
+                {
+                    gOptions.sceneType =
+                        RayTracingManager::c_scenePbrGpuValidation;
+                }
+                else
+                {
+                    gOptions.sceneType = RayTracingManager::c_sceneCornellBox;
+                }
+            }
+            else if (argument == L"--gpu-brdf-validation")
+            {
+                gOptions.sceneType =
+                    RayTracingManager::c_scenePbrGpuValidation;
+            }
+            else if (argument == L"--validation-seed" && index + 1 < argumentCount)
+            {
+                gOptions.validationSeed = static_cast<UINT>(_wcstoui64(
+                    arguments[++index],
+                    nullptr,
+                    0));
             }
             else if (argument == L"--pbr-metallic" && index + 1 < argumentCount)
             {
@@ -194,7 +217,8 @@ namespace
                 gOptions.pbrMetallic,
                 gOptions.pbrRoughness,
                 gOptions.enableIbl,
-                gOptions.iblIntensity);
+                gOptions.iblIntensity,
+                gOptions.validationSeed);
         }
 
         if (!gOptions.headless)

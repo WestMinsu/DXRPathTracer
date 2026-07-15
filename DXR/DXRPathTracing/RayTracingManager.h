@@ -14,6 +14,7 @@ public:
 
     static constexpr UINT c_sceneCornellBox = 0;
     static constexpr UINT c_scenePbrGgx = 1;
+    static constexpr UINT c_scenePbrGpuValidation = 2;
     static constexpr UINT c_pbrDebugBeauty = 0;
     static constexpr UINT c_pbrDebugAlbedo = 1;
     static constexpr UINT c_pbrDebugMetallic = 2;
@@ -29,6 +30,7 @@ public:
     void SetPbrDebugView(UINT pbrDebugView);
     void SetPbrMaterial(float metallic, float roughness);
     void SetIblSettings(bool enableIbl, float intensity);
+    void SetValidationSeed(UINT validationSeed) { m_validationSeed = validationSeed; }
     void SetExposure(float exposure);
     void ResetAccumulation() { m_accumulatedSampleCount = 0; }
     UINT GetAccumulatedSampleCount() const { return m_accumulatedSampleCount; }
@@ -103,6 +105,7 @@ private:
     float m_pbrRoughness = 0.35f;
     bool m_enableIbl = true;
     float m_iblIntensity = 1.0f;
+    UINT m_validationSeed = 0;
     float m_exposure = 0.0f;
 
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;

@@ -96,6 +96,7 @@ void D3D12Renderer::Render()
     m_rayTracingManager->SetPbrDebugView(static_cast<UINT>(m_pbrDebugView));
     m_rayTracingManager->SetPbrMaterial(m_pbrMetallic, m_pbrRoughness);
     m_rayTracingManager->SetIblSettings(m_enableIbl, m_iblIntensity);
+    m_rayTracingManager->SetValidationSeed(m_validationSeed);
     m_rayTracingManager->SetExposure(m_exposure);
 
     HRESULT hr = m_commandAllocator->Reset();
@@ -503,7 +504,12 @@ void D3D12Renderer::BuildImGuiFrame()
     ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin("DXR Debug");
-    const char* sceneNames[] = { "Cornell Box", "PBR" };
+    const char* sceneNames[] =
+    {
+        "Cornell Box",
+        "PBR",
+        "PBR GPU Validation"
+    };
     if (ImGui::Combo("Scene", &m_sceneType, sceneNames, _countof(sceneNames)) && m_rayTracingManager)
     {
         m_captureActive = false;
@@ -713,19 +719,21 @@ void D3D12Renderer::ConfigureAutomatedCapture(
     float pbrMetallic,
     float pbrRoughness,
     bool enableIbl,
-    float iblIntensity)
+    float iblIntensity,
+    UINT validationSeed)
 {
     m_captureTargetSamples = static_cast<int>(sampleCount > 0 ? sampleCount : 1u);
     m_captureOutputPrefix = outputPrefix;
     const UINT clampedMaxBounce = maxBounce < 1u ? 1u : (maxBounce > 8u ? 8u : maxBounce);
     m_maxBounce = static_cast<int>(clampedMaxBounce);
-    m_sceneType = sceneType == RayTracingManager::c_scenePbrGgx
-        ? static_cast<int>(RayTracingManager::c_scenePbrGgx)
+    m_sceneType = sceneType <= RayTracingManager::c_scenePbrGpuValidation
+        ? static_cast<int>(sceneType)
         : static_cast<int>(RayTracingManager::c_sceneCornellBox);
     m_pbrMetallic = pbrMetallic;
     m_pbrRoughness = pbrRoughness;
     m_enableIbl = enableIbl;
     m_iblIntensity = iblIntensity;
+    m_validationSeed = validationSeed;
     m_showNormalColor = false;
     m_pbrDebugView = static_cast<int>(RayTracingManager::c_pbrDebugBeauty);
     m_enableAccumulation = true;

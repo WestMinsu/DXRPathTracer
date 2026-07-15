@@ -291,6 +291,7 @@ namespace
         float pbrRoughness;
         float iblIntensity;
         float exposure;
+        UINT validationSeed;
     };
 
     UINT AlignUp(UINT value, UINT alignment)
@@ -479,7 +480,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     renderSettings.pbrRoughness = m_pbrRoughness;
     renderSettings.iblIntensity = m_iblIntensity;
     renderSettings.exposure = m_exposure;
-    commandList->SetComputeRoot32BitConstants(4, 12, &renderSettings, 0);
+    renderSettings.validationSeed = m_validationSeed;
+    commandList->SetComputeRoot32BitConstants(4, 13, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
     commandList->SetComputeRootDescriptorTable(5, environmentHandle);
@@ -599,7 +601,9 @@ void RayTracingManager::SetExposure(float exposure)
 }
 void RayTracingManager::SetSceneType(UINT sceneType)
 {
-    const UINT clampedSceneType = sceneType == c_scenePbrGgx ? c_scenePbrGgx : c_sceneCornellBox;
+    const UINT clampedSceneType = sceneType <= c_scenePbrGpuValidation
+        ? sceneType
+        : c_sceneCornellBox;
     if (m_sceneType == clampedSceneType)
         return;
 
@@ -908,7 +912,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 12;
+    rootParameters[4].Constants.Num32BitValues = 13;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     rootParameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -1183,7 +1187,8 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
 
-    if (m_sceneType == c_scenePbrGgx)
+    if (m_sceneType == c_scenePbrGgx ||
+        m_sceneType == c_scenePbrGpuValidation)
     {
         AddPbrGgxSceneGeometry(vertices, indices);
     }

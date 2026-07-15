@@ -23,6 +23,7 @@ struct PbrMaterial
 
 static const uint c_sceneCornellBox = 0;
 static const uint c_scenePbrGgx = 1;
+static const uint c_scenePbrGpuValidation = 2;
 static const uint c_pbrDebugBeauty = 0;
 static const uint c_pbrDebugAlbedo = 1;
 static const uint c_pbrDebugMetallic = 2;
@@ -83,6 +84,7 @@ cbuffer RenderSettings : register(b0)
     float g_pbrRoughness;
     float g_iblIntensity;
     float g_exposure;
+    uint g_validationSeed;
 };
 
 uint CreateRandomSeed(uint depth, uint primitiveIndex)
@@ -92,6 +94,7 @@ uint CreateRandomSeed(uint depth, uint primitiveIndex)
     uint seed = launchIndex.x + launchIndex.y * launchDim.x;
     uint sequenceIndex = g_enableAccumulation != 0 ? g_sampleIndex : g_frameIndex;
     seed = seed * 1973u + sequenceIndex * 9277u + depth * 26699u + primitiveIndex * 911u + 1u;
+    seed ^= g_validationSeed * 0x85EBCA6Bu;
     seed ^= seed >> 16;
     seed *= 2246822519u;
     seed ^= seed >> 13;

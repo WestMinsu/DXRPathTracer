@@ -22,52 +22,101 @@ bool IsLinearDebugView()
         (g_sceneType == c_scenePbrGgx && g_pbrDebugView != c_pbrDebugBeauty);
 }
 
+float3 EvaluateGpuBrdfValidationSample(uint2 launchIndex, uint2 launchDim)
+{
+    uint caseIndex = min(
+        launchIndex.y * 4u / max(launchDim.y, 1u),
+        3u);
+
+    PbrMaterial material;
+    material.baseColor = float3(1.0f, 0.766f, 0.336f);
+    material.metallic = caseIndex < 2u ? 1.0f : 0.0f;
+    material.roughness = caseIndex == 0u || caseIndex == 2u
+        ? 0.35f
+        : (caseIndex == 1u ? 0.1f : 0.8f);
+    material.emission = float3(0.0f, 0.0f, 0.0f);
+
+    float nDotV = caseIndex == 3u ? 0.5f : 1.0f;
+    float3 normal = float3(0.0f, 0.0f, 1.0f);
+    float3 viewDirection = float3(
+        sqrt(max(0.0f, 1.0f - nDotV * nDotV)),
+        0.0f,
+        nDotV);
+
+    uint seed = CreateRandomSeed(0u, 0xA511E9B3u + caseIndex * 0x9E3779B9u);
+    float3 sampleDirection;
+    float3 weightedBrdf;
+    if (!SamplePbrBrdfWithMixtureSampling(
+        material,
+        normal,
+        viewDirection,
+        seed,
+        sampleDirection,
+        weightedBrdf))
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+    return weightedBrdf;
+}
+
 [shader("raygeneration")]
 void MyRaygenShader_RadianceRay()
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
-    float2 pixelOffset = float2(0.5f, 0.5f);
-    if (g_enableAccumulation != 0)
+    float3 sampleRadiance = float3(0.0f, 0.0f, 0.0f);
+
+    if (g_sceneType == c_scenePbrGpuValidation)
     {
-        uint cameraSeed = CreateRandomSeed(0u, 0x9E3779B9u);
-        pixelOffset = float2(RandomFloat01(cameraSeed), RandomFloat01(cameraSeed));
+        sampleRadiance = EvaluateGpuBrdfValidationSample(
+            launchIndex,
+            launchDim);
     }
+    else
+    {
+        float2 pixelOffset = float2(0.5f, 0.5f);
+        if (g_enableAccumulation != 0)
+        {
+            uint cameraSeed = CreateRandomSeed(0u, 0x9E3779B9u);
+            pixelOffset = float2(RandomFloat01(cameraSeed), RandomFloat01(cameraSeed));
+        }
 
-    float2 uv = (float2(launchIndex) + pixelOffset) / float2(launchDim);
-    float aspectRatio = float(launchDim.x) / float(launchDim.y);
-    float tanHalfFov = tan(c_verticalFovRadians * 0.5f);
-    float2 screenPosition = float2(
-        (uv.x * 2.0f - 1.0f) * aspectRatio * tanHalfFov,
-        (1.0f - uv.y * 2.0f) * tanHalfFov);
+        float2 uv = (float2(launchIndex) + pixelOffset) / float2(launchDim);
+        float aspectRatio = float(launchDim.x) / float(launchDim.y);
+        float tanHalfFov = tan(c_verticalFovRadians * 0.5f);
+        float2 screenPosition = float2(
+            (uv.x * 2.0f - 1.0f) * aspectRatio * tanHalfFov,
+            (1.0f - uv.y * 2.0f) * tanHalfFov);
 
-    float3 cameraForward = normalize(c_cameraTarget - c_cameraPosition);
-    float3 cameraRight = normalize(cross(c_cameraUp, cameraForward));
-    float3 cameraUp = cross(cameraForward, cameraRight);
+        float3 cameraForward = normalize(c_cameraTarget - c_cameraPosition);
+        float3 cameraRight = normalize(cross(c_cameraUp, cameraForward));
+        float3 cameraUp = cross(cameraForward, cameraRight);
 
-    RayDesc ray;
-    ray.Origin = c_cameraPosition;
-    ray.Direction = normalize(
-        cameraForward + cameraRight * screenPosition.x + cameraUp * screenPosition.y);
-    ray.TMin = c_rayTMin;
-    ray.TMax = c_rayTMax;
+        RayDesc ray;
+        ray.Origin = c_cameraPosition;
+        ray.Direction = normalize(
+            cameraForward + cameraRight * screenPosition.x + cameraUp * screenPosition.y);
+        ray.TMin = c_rayTMin;
+        ray.TMax = c_rayTMax;
 
-    RadiancePayload payload;
-    payload.color = float3(0.0f, 0.0f, 0.0f);
-    payload.depth = 0;
+        RadiancePayload payload;
+        payload.color = float3(0.0f, 0.0f, 0.0f);
+        payload.depth = 0;
 
-    TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
+        TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
+        sampleRadiance = payload.color;
+    }
 
     if (g_enableAccumulation == 0)
     {
         float3 displayColor = IsLinearDebugView()
-            ? saturate(payload.color)
-            : ToneMapForDisplay(payload.color);
+            ? saturate(sampleRadiance)
+            : ToneMapForDisplay(sampleRadiance);
         g_output[launchIndex] = float4(displayColor, 1.0f);
         return;
     }
 
-    float3 accumulatedColor = payload.color;
+    float3 accumulatedColor = sampleRadiance;
     if (g_sampleIndex > 0)
     {
         accumulatedColor += g_accumulation[launchIndex].rgb;

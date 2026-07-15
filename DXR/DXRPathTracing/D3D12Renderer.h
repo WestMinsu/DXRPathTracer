@@ -28,7 +28,8 @@ public:
         float pbrMetallic,
         float pbrRoughness,
         bool enableIbl,
-        float iblIntensity);
+        float iblIntensity,
+        UINT validationSeed);
 
 private:
     static constexpr UINT c_frameCount = 2;
@@ -105,6 +106,7 @@ private:
     float m_pbrRoughness = 0.35f;
     bool m_enableIbl = true;
     float m_iblIntensity = 0.5f;
+    UINT m_validationSeed = 0;
     float m_exposure = 0.0f;
     std::string m_captureStatus;
     bool m_exitAfterCapture = false;

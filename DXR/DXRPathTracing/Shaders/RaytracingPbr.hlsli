@@ -142,14 +142,19 @@ float PbrSpecularSamplingProbability(PbrMaterial material)
     return lerp(0.5f, 1.0f, saturate(material.metallic));
 }
 
-float3 TracePbrBrdfWithMixtureSampling(PbrMaterial material, float3 normal, float3 hitPosition, uint depth, uint primitiveIndex)
+bool SamplePbrBrdfWithMixtureSampling(
+    PbrMaterial material,
+    float3 normal,
+    float3 viewDirection,
+    inout uint seed,
+    out float3 sampleDirection,
+    out float3 weightedBrdf)
 {
-    uint seed = CreateRandomSeed(depth, primitiveIndex);
-    float3 viewDirection = normalize(-WorldRayDirection());
+    sampleDirection = normal;
+    weightedBrdf = float3(0.0f, 0.0f, 0.0f);
     float specularProbability = PbrSpecularSamplingProbability(material);
     bool sampleSpecular = RandomFloat01(seed) < specularProbability;
 
-    float3 sampleDirection;
     if (sampleSpecular)
     {
         float2 sampleValue = float2(RandomFloat01(seed), RandomFloat01(seed));
@@ -160,7 +165,7 @@ float3 TracePbrBrdfWithMixtureSampling(PbrMaterial material, float3 normal, floa
         float sampledVDotH = saturate(dot(viewDirection, sampledHalfVector));
         if (sampledVDotH <= 0.0f)
         {
-            return float3(0.0f, 0.0f, 0.0f);
+            return false;
         }
         sampleDirection = normalize(
             2.0f * sampledVDotH * sampledHalfVector - viewDirection);
@@ -173,7 +178,7 @@ float3 TracePbrBrdfWithMixtureSampling(PbrMaterial material, float3 normal, floa
     float nDotL = saturate(dot(normal, sampleDirection));
     if (nDotL <= 0.0f)
     {
-        return float3(0.0f, 0.0f, 0.0f);
+        return false;
     }
 
     float3 halfVector = normalize(viewDirection + sampleDirection);
@@ -187,6 +192,31 @@ float3 TracePbrBrdfWithMixtureSampling(PbrMaterial material, float3 normal, floa
     float pdf = specularProbability * specularPdf +
         (1.0f - specularProbability) * diffusePdf;
     if (pdf <= 0.0f)
+    {
+        return false;
+    }
+
+    weightedBrdf = EvaluateBrdf(
+        material,
+        normal,
+        viewDirection,
+        sampleDirection) / pdf;
+    return true;
+}
+
+float3 TracePbrBrdfWithMixtureSampling(PbrMaterial material, float3 normal, float3 hitPosition, uint depth, uint primitiveIndex)
+{
+    uint seed = CreateRandomSeed(depth, primitiveIndex);
+    float3 viewDirection = normalize(-WorldRayDirection());
+    float3 sampleDirection;
+    float3 weightedBrdf;
+    if (!SamplePbrBrdfWithMixtureSampling(
+        material,
+        normal,
+        viewDirection,
+        seed,
+        sampleDirection,
+        weightedBrdf))
     {
         return float3(0.0f, 0.0f, 0.0f);
     }
@@ -203,7 +233,6 @@ float3 TracePbrBrdfWithMixtureSampling(PbrMaterial material, float3 normal, floa
 
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
 
-    float3 weightedBrdf = EvaluateBrdf(material, normal, viewDirection, sampleDirection) / pdf;
     return weightedBrdf * bouncePayload.color;
 }
 #endif
