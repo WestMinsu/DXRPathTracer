@@ -153,7 +153,11 @@ void MyClosestHitShader_RadianceRay(
 
     if (g_sceneType == c_scenePbrGgx && g_pbrDebugView != c_pbrDebugBeauty)
     {
-        if (g_pbrDebugView == c_pbrDebugDepth)
+        if (g_pbrDebugView == c_pbrDebugNormal)
+        {
+            payload.color = normalColor;
+        }
+        else if (g_pbrDebugView == c_pbrDebugDepth)
         {
             payload.color = DepthDebugColor(RayTCurrent());
         }

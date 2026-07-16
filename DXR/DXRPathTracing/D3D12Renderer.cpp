@@ -76,6 +76,7 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         return false;
 
     m_rayTracingManager.reset(new RayTracingManager());
+    m_rayTracingManager->SetSceneFilePath(m_sceneFilePath);
     if (!m_rayTracingManager->Initialize(m_hWnd, m_device.Get(), m_width, m_height))
         return false;
 
@@ -532,7 +533,8 @@ void D3D12Renderer::BuildImGuiFrame()
             "Metallic",
             "Roughness",
             "Depth",
-            "Material ID"
+            "Material ID",
+            "Normal"
         };
         if (ImGui::Combo("PBR Debug", &m_pbrDebugView, pbrDebugNames, _countof(pbrDebugNames)) && m_rayTracingManager)
         {
@@ -751,7 +753,7 @@ void D3D12Renderer::ConfigureAutomatedCapture(
     m_validationSeed = validationSeed;
     m_showNormalColor = false;
     m_pbrDebugView = static_cast<int>(
-        pbrDebugView <= RayTracingManager::c_pbrDebugMaterialId
+        pbrDebugView <= RayTracingManager::c_pbrDebugNormal
         ? pbrDebugView
         : RayTracingManager::c_pbrDebugBeauty);
     m_enableAccumulation = true;

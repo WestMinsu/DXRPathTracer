@@ -1,4 +1,5 @@
 #include "RayTracingManager.h"
+#include "GltfSceneLoader.h"
 #include "SceneData.h"
 
 #include <algorithm>
@@ -320,7 +321,7 @@ void RayTracingManager::SetEnableAccumulation(bool enableAccumulation)
 
 void RayTracingManager::SetPbrDebugView(UINT pbrDebugView)
 {
-    const UINT clampedPbrDebugView = pbrDebugView <= c_pbrDebugMaterialId
+    const UINT clampedPbrDebugView = pbrDebugView <= c_pbrDebugNormal
         ? pbrDebugView
         : c_pbrDebugBeauty;
     if (m_pbrDebugView == clampedPbrDebugView)
@@ -956,10 +957,26 @@ bool RayTracingManager::CreateBuildCommandObjects()
 
 bool RayTracingManager::CreateStaticGeometryBuffers()
 {
-    const SceneData scene = m_sceneType == c_scenePbrGgx ||
-        m_sceneType == c_scenePbrGpuValidation
-        ? CreatePbrGgxSceneData()
-        : CreateCornellBoxSceneData();
+    SceneData scene;
+    const bool isPbrScene = m_sceneType == c_scenePbrGgx ||
+        m_sceneType == c_scenePbrGpuValidation;
+    if (isPbrScene && !m_sceneFilePath.empty())
+    {
+        std::wstring errorMessage;
+        if (!LoadGltfSceneData(m_sceneFilePath, scene, errorMessage))
+        {
+            ReportMessage(
+                L"glTF scene load failed.\nPath: " + m_sceneFilePath +
+                L"\nReason: " + errorMessage);
+            return false;
+        }
+    }
+    else
+    {
+        scene = isPbrScene
+            ? CreatePbrGgxSceneData()
+            : CreateCornellBoxSceneData();
+    }
     if (!scene.IsValid())
     {
         ReportMessage(L"Generated scene data is invalid.");

@@ -21,6 +21,7 @@ public:
     static constexpr UINT c_pbrDebugRoughness = 3;
     static constexpr UINT c_pbrDebugDepth = 4;
     static constexpr UINT c_pbrDebugMaterialId = 5;
+    static constexpr UINT c_pbrDebugNormal = 6;
 
     bool Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height);
     bool Resize(UINT width, UINT height);
@@ -29,6 +30,7 @@ public:
     void SetMaxBounce(UINT maxBounce);
     void SetEnableAccumulation(bool enableAccumulation);
     void SetSceneType(UINT sceneType);
+    void SetSceneFilePath(const std::wstring& sceneFilePath) { m_sceneFilePath = sceneFilePath; }
     void SetPbrDebugView(UINT pbrDebugView);
     void SetPbrMaterial(float metallic, float roughness);
     void SetIblSettings(bool enableIbl, float intensity);
@@ -109,6 +111,7 @@ private:
     float m_iblIntensity = 1.0f;
     UINT m_validationSeed = 0;
     float m_exposure = 0.0f;
+    std::wstring m_sceneFilePath;
 
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;

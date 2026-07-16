@@ -17,6 +17,7 @@ public:
     ~D3D12Renderer();
 
     bool Initialize(HWND hWnd);
+    void SetSceneFilePath(const std::wstring& sceneFilePath) { m_sceneFilePath = sceneFilePath; }
     void Render();
     void Resize(UINT width, UINT height);
     void WaitForGpu();
@@ -112,6 +113,7 @@ private:
     std::string m_captureStatus;
     bool m_exitAfterCapture = false;
     std::wstring m_captureOutputPrefix;
+    std::wstring m_sceneFilePath;
 
     Microsoft::WRL::ComPtr<IDXGIFactory4> m_factory;
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;

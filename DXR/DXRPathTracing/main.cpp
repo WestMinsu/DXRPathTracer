@@ -31,6 +31,7 @@ namespace
         UINT validationSeed = 0;
         bool headless = false;
         std::wstring outputPrefix;
+        std::wstring sceneFilePath;
     };
 
     AppOptions gOptions;
@@ -155,6 +156,10 @@ namespace
                 {
                     gOptions.pbrDebugView = RayTracingManager::c_pbrDebugMaterialId;
                 }
+                else if (debugView == L"normal")
+                {
+                    gOptions.pbrDebugView = RayTracingManager::c_pbrDebugNormal;
+                }
                 else
                 {
                     gOptions.pbrDebugView = RayTracingManager::c_pbrDebugBeauty;
@@ -180,6 +185,11 @@ namespace
             {
                 gOptions.outputPrefix = arguments[++index];
             }
+            else if ((argument == L"--model" || argument == L"--gltf") &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.sceneFilePath = arguments[++index];
+            }
             else if (argument == L"--headless")
             {
                 gOptions.headless = true;
@@ -190,6 +200,8 @@ namespace
             gOptions.width = 1;
         if (gOptions.height == 0)
             gOptions.height = 1;
+        if (!gOptions.sceneFilePath.empty())
+            gOptions.sceneType = RayTracingManager::c_scenePbrGgx;
 
         LocalFree(arguments);
     }
@@ -235,6 +247,8 @@ namespace
 
         if (!hWnd)
             return false;
+
+        gRenderer.SetSceneFilePath(gOptions.sceneFilePath);
 
         if (gOptions.captureSamples > 0)
         {

@@ -40,6 +40,7 @@ static const uint c_pbrDebugMetallic = 2;
 static const uint c_pbrDebugRoughness = 3;
 static const uint c_pbrDebugDepth = 4;
 static const uint c_pbrDebugMaterialId = 5;
+static const uint c_pbrDebugNormal = 6;
 static const float c_rayTMin = 0.001f;
 static const float c_rayTMax = 1000.0f;
 static const float c_rayOriginBias = 0.001f;
