@@ -55,4 +55,25 @@ float3 PbrMaterialDebugColor(uint primitiveIndex)
 
     return float3(0.0f, 0.0f, 0.0f);
 }
+
+float3 DepthDebugColor(float rayDistance)
+{
+    float normalizedDepth = max(rayDistance, 0.0f) /
+        (1.0f + max(rayDistance, 0.0f));
+    return float3(normalizedDepth, normalizedDepth, normalizedDepth);
+}
+
+float3 MaterialIdDebugColor(uint primitiveIndex)
+{
+    uint value = g_primitiveMaterialIndices[primitiveIndex] + 1u;
+    value ^= value >> 16;
+    value *= 0x7FEB352Du;
+    value ^= value >> 15;
+    value *= 0x846CA68Bu;
+    value ^= value >> 16;
+    return float3(
+        float((value >> 0) & 0xFFu),
+        float((value >> 8) & 0xFFu),
+        float((value >> 16) & 0xFFu)) / 255.0f;
+}
 #endif

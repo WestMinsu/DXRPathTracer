@@ -25,6 +25,7 @@ public:
         const std::wstring& outputPrefix,
         UINT maxBounce,
         UINT sceneType,
+        UINT pbrDebugView,
         float pbrMetallic,
         float pbrRoughness,
         bool enableIbl,

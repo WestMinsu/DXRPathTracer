@@ -23,6 +23,7 @@ namespace
         UINT captureSamples = 0;
         UINT maxBounce = 8;
         UINT sceneType = RayTracingManager::c_sceneCornellBox;
+        UINT pbrDebugView = RayTracingManager::c_pbrDebugBeauty;
         float pbrMetallic = 1.0f;
         float pbrRoughness = 0.35f;
         bool enableIbl = true;
@@ -131,6 +132,34 @@ namespace
                     nullptr,
                     0));
             }
+            else if (argument == L"--pbr-debug" && index + 1 < argumentCount)
+            {
+                const std::wstring debugView = arguments[++index];
+                if (debugView == L"albedo")
+                {
+                    gOptions.pbrDebugView = RayTracingManager::c_pbrDebugAlbedo;
+                }
+                else if (debugView == L"metallic")
+                {
+                    gOptions.pbrDebugView = RayTracingManager::c_pbrDebugMetallic;
+                }
+                else if (debugView == L"roughness")
+                {
+                    gOptions.pbrDebugView = RayTracingManager::c_pbrDebugRoughness;
+                }
+                else if (debugView == L"depth")
+                {
+                    gOptions.pbrDebugView = RayTracingManager::c_pbrDebugDepth;
+                }
+                else if (debugView == L"material-id" || debugView == L"material")
+                {
+                    gOptions.pbrDebugView = RayTracingManager::c_pbrDebugMaterialId;
+                }
+                else
+                {
+                    gOptions.pbrDebugView = RayTracingManager::c_pbrDebugBeauty;
+                }
+            }
             else if (argument == L"--pbr-metallic" && index + 1 < argumentCount)
             {
                 gOptions.pbrMetallic = static_cast<float>(_wtof(arguments[++index]));
@@ -214,6 +243,7 @@ namespace
                 gOptions.outputPrefix,
                 gOptions.maxBounce,
                 gOptions.sceneType,
+                gOptions.pbrDebugView,
                 gOptions.pbrMetallic,
                 gOptions.pbrRoughness,
                 gOptions.enableIbl,

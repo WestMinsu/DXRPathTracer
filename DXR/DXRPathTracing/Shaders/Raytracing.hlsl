@@ -153,7 +153,18 @@ void MyClosestHitShader_RadianceRay(
 
     if (g_sceneType == c_scenePbrGgx && g_pbrDebugView != c_pbrDebugBeauty)
     {
-        payload.color = PbrMaterialDebugColor(PrimitiveIndex());
+        if (g_pbrDebugView == c_pbrDebugDepth)
+        {
+            payload.color = DepthDebugColor(RayTCurrent());
+        }
+        else if (g_pbrDebugView == c_pbrDebugMaterialId)
+        {
+            payload.color = MaterialIdDebugColor(PrimitiveIndex());
+        }
+        else
+        {
+            payload.color = PbrMaterialDebugColor(PrimitiveIndex());
+        }
         return;
     }
 
@@ -189,6 +200,13 @@ void MyClosestHitShader_RadianceRay(
 [shader("miss")]
 void MyMissShader_RadianceRay(inout RadiancePayload payload)
 {
+    if (g_showNormalColor != 0 ||
+        (g_sceneType == c_scenePbrGgx && g_pbrDebugView != c_pbrDebugBeauty))
+    {
+        payload.color = float3(0.0f, 0.0f, 0.0f);
+        return;
+    }
+
     payload.color = g_sceneType == c_scenePbrGgx && g_enableIbl != 0
         ? SampleEnvironmentMap(WorldRayDirection())
         : float3(0.0f, 0.0f, 0.0f);

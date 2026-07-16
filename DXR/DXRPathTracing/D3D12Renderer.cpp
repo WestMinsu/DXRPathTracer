@@ -11,12 +11,14 @@
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
+#include <shlobj.h>
 #include <sstream>
 #include <vector>
 #include <wincodec.h>
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "windowscodecs.lib")
 
 namespace
@@ -128,7 +130,11 @@ void D3D12Renderer::Render()
 
     const UINT accumulatedSamples = m_rayTracingManager->GetAccumulatedSampleCount();
     const UINT captureTargetSamples = static_cast<UINT>(m_captureTargetSamples > 1 ? m_captureTargetSamples : 1);
-    const bool targetCaptureReached = m_captureActive && accumulatedSamples >= captureTargetSamples;
+    const bool isDebugFrame = m_showNormalColor ||
+        (m_sceneType == static_cast<int>(RayTracingManager::c_scenePbrGgx) &&
+         m_pbrDebugView != static_cast<int>(RayTracingManager::c_pbrDebugBeauty));
+    const bool targetCaptureReached = m_captureActive &&
+        (isDebugFrame || accumulatedSamples >= captureTargetSamples);
     if (m_pendingCaptures.empty() && (m_saveCurrentRequested || targetCaptureReached))
     {
         bool queuedCapture = QueueTextureCapture(
@@ -519,7 +525,15 @@ void D3D12Renderer::BuildImGuiFrame()
     }
     if (m_sceneType == static_cast<int>(RayTracingManager::c_scenePbrGgx))
     {
-        const char* pbrDebugNames[] = { "Beauty", "Albedo", "Metallic", "Roughness" };
+        const char* pbrDebugNames[] =
+        {
+            "Beauty",
+            "Albedo",
+            "Metallic",
+            "Roughness",
+            "Depth",
+            "Material ID"
+        };
         if (ImGui::Combo("PBR Debug", &m_pbrDebugView, pbrDebugNames, _countof(pbrDebugNames)) && m_rayTracingManager)
         {
             m_captureActive = false;
@@ -716,6 +730,7 @@ void D3D12Renderer::ConfigureAutomatedCapture(
     const std::wstring& outputPrefix,
     UINT maxBounce,
     UINT sceneType,
+    UINT pbrDebugView,
     float pbrMetallic,
     float pbrRoughness,
     bool enableIbl,
@@ -735,7 +750,10 @@ void D3D12Renderer::ConfigureAutomatedCapture(
     m_iblIntensity = iblIntensity;
     m_validationSeed = validationSeed;
     m_showNormalColor = false;
-    m_pbrDebugView = static_cast<int>(RayTracingManager::c_pbrDebugBeauty);
+    m_pbrDebugView = static_cast<int>(
+        pbrDebugView <= RayTracingManager::c_pbrDebugMaterialId
+        ? pbrDebugView
+        : RayTracingManager::c_pbrDebugBeauty);
     m_enableAccumulation = true;
     m_captureActive = true;
     m_exitAfterCapture = true;
@@ -995,7 +1013,26 @@ bool D3D12Renderer::SavePfmFile(
 std::wstring D3D12Renderer::BuildCaptureFilePath(UINT sampleCount, const wchar_t* extension) const
 {
     if (!m_captureOutputPrefix.empty())
-        return m_captureOutputPrefix + extension;
+    {
+        const std::wstring filePath = m_captureOutputPrefix + extension;
+        wchar_t absolutePath[MAX_PATH] = {};
+        const DWORD absolutePathLength = GetFullPathNameW(
+            filePath.c_str(),
+            _countof(absolutePath),
+            absolutePath,
+            nullptr);
+        const std::wstring directorySource =
+            absolutePathLength > 0 && absolutePathLength < _countof(absolutePath)
+            ? std::wstring(absolutePath, absolutePathLength)
+            : filePath;
+        const size_t separator = directorySource.find_last_of(L"\\/");
+        if (separator != std::wstring::npos)
+        {
+            const std::wstring directory = directorySource.substr(0, separator);
+            SHCreateDirectoryExW(nullptr, directory.c_str(), nullptr);
+        }
+        return filePath;
+    }
 
     CreateDirectoryW(L"Captures", nullptr);
 

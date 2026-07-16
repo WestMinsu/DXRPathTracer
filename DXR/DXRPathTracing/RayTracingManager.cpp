@@ -320,7 +320,7 @@ void RayTracingManager::SetEnableAccumulation(bool enableAccumulation)
 
 void RayTracingManager::SetPbrDebugView(UINT pbrDebugView)
 {
-    const UINT clampedPbrDebugView = pbrDebugView <= c_pbrDebugRoughness
+    const UINT clampedPbrDebugView = pbrDebugView <= c_pbrDebugMaterialId
         ? pbrDebugView
         : c_pbrDebugBeauty;
     if (m_pbrDebugView == clampedPbrDebugView)

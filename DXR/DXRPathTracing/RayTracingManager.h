@@ -19,6 +19,8 @@ public:
     static constexpr UINT c_pbrDebugAlbedo = 1;
     static constexpr UINT c_pbrDebugMetallic = 2;
     static constexpr UINT c_pbrDebugRoughness = 3;
+    static constexpr UINT c_pbrDebugDepth = 4;
+    static constexpr UINT c_pbrDebugMaterialId = 5;
 
     bool Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height);
     bool Resize(UINT width, UINT height);
