@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import math
+import shutil
 import struct
 from pathlib import Path
 
@@ -15,8 +16,11 @@ RTXPT = ROOT / "RTXPT"
 ENV_SOURCE = ROOT.parents[1] / "Assets/Textures/Cubemaps/HDRI/autumn_hill_view_4kSpecularHDR.dds"
 SPHERE_COLOR = (1.0, 0.766, 0.336, 1.0)
 FLOOR_COLOR = (0.55, 0.55, 0.55, 1.0)
-METALLIC = 1.0
-ROUGHNESS = 0.35
+CASES = tuple(
+    (f"m{int(metallic)}_r{int(round(roughness * 100)):03d}", metallic, roughness)
+    for metallic in (0.0, 1.0)
+    for roughness in (0.10, 0.35, 0.65, 0.80)
+)
 
 
 def add_sphere(center: tuple[float, float, float], radius: float):
@@ -102,7 +106,7 @@ def align4(data: bytearray) -> None:
         data.append(0)
 
 
-def write_gltf(path: Path, meshes) -> None:
+def write_gltf(path: Path, meshes, metallic: float, roughness: float) -> None:
     data = bytearray()
     views: list[dict] = []
     accessors: list[dict] = []
@@ -151,8 +155,8 @@ def write_gltf(path: Path, meshes) -> None:
         "accessors": accessors,
         "materials": [
             {"name": "dxr_spheres", "pbrMetallicRoughness": {
-                "baseColorFactor": list(SPHERE_COLOR), "metallicFactor": METALLIC,
-                "roughnessFactor": ROUGHNESS}},
+                "baseColorFactor": list(SPHERE_COLOR), "metallicFactor": metallic,
+                "roughnessFactor": roughness}},
             {"name": "dxr_floor", "pbrMetallicRoughness": {
                 "baseColorFactor": list(FLOOR_COLOR), "metallicFactor": 0.0,
                 "roughnessFactor": 0.65}},
@@ -163,8 +167,8 @@ def write_gltf(path: Path, meshes) -> None:
     path.write_text(json.dumps(gltf, indent=2), encoding="utf-8")
 
 
-def write_scene_files() -> None:
-    xml = f'''<scene version="3.0.0">
+def mitsuba_xml(metallic: float, roughness: float) -> str:
+    return f'''<scene version="3.0.0">
     <default name="spp" value="512"/>
     <default name="max_depth" value="9"/>
     <integrator type="path">
@@ -188,12 +192,12 @@ def write_scene_files() -> None:
             <rfilter type="box"/>
         </film>
     </sensor>
-    <bsdf type="dxr_pbr" id="sphere_material">
+    <bsdf type="principled" id="sphere_material">
         <rgb name="base_color" value="1.0, 0.766, 0.336"/>
-        <float name="metallic" value="{METALLIC}"/>
-        <float name="roughness" value="{ROUGHNESS}"/>
+        <float name="metallic" value="{metallic}"/>
+        <float name="roughness" value="{roughness}"/>
     </bsdf>
-    <bsdf type="dxr_pbr" id="floor_material">
+    <bsdf type="principled" id="floor_material">
         <rgb name="base_color" value="0.55, 0.55, 0.55"/>
         <float name="metallic" value="0.0"/>
         <float name="roughness" value="0.65"/>
@@ -208,10 +212,10 @@ def write_scene_files() -> None:
     </emitter>
 </scene>
 '''
-    (MITSUBA / "pbr_scene.xml").write_text(xml, encoding="utf-8")
 
-    rtxpt_scene = {
-        "models": ["Models/DxrPbrValidation/pbr_scene.gltf"],
+def rtxpt_scene(case_name: str) -> dict:
+    return {
+        "models": [f"Models/DxrPbrValidation/pbr_scene_{case_name}.gltf"],
         "graph": [
             {"name": "DxrPbrValidation", "model": 0},
             {"name": "Lights", "children": [{
@@ -232,11 +236,34 @@ def write_scene_files() -> None:
              "maxBounces": 8, "maxDiffuseBounces": 8},
         ],
     }
-    (RTXPT / "pbr-scene.scene.json").write_text(
-        json.dumps(rtxpt_scene, indent=2), encoding="utf-8")
+
+
+def write_scene_files(meshes) -> None:
+    case_manifest = []
+    for case_name, metallic, roughness in CASES:
+        xml_path = MITSUBA / f"pbr_scene_{case_name}.xml"
+        gltf_path = RTXPT / f"pbr_scene_{case_name}.gltf"
+        scene_path = RTXPT / f"pbr-scene-{case_name}.scene.json"
+        xml_path.write_text(mitsuba_xml(metallic, roughness), encoding="utf-8")
+        write_gltf(gltf_path, meshes, metallic, roughness)
+        scene_path.write_text(
+            json.dumps(rtxpt_scene(case_name), indent=2), encoding="utf-8")
+        case_manifest.append({
+            "name": case_name,
+            "metallic": metallic,
+            "roughness": roughness,
+            "mitsuba_scene": str(xml_path.relative_to(ROOT)),
+            "rtxpt_scene": str(scene_path.relative_to(ROOT)),
+        })
+
+    # Preserve the original names as aliases for the current DXR default.
+    default_case = "m1_r035"
+    shutil.copyfile(MITSUBA / f"pbr_scene_{default_case}.xml", MITSUBA / "pbr_scene.xml")
+    shutil.copyfile(RTXPT / f"pbr_scene_{default_case}.gltf", RTXPT / "pbr_scene.gltf")
+    shutil.copyfile(RTXPT / f"pbr-scene-{default_case}.scene.json", RTXPT / "pbr-scene.scene.json")
 
     manifest = {
-        "purpose": "Match the current DXR PBR implementation without changing it",
+        "purpose": "Independent native PBR comparison under matched geometry, camera, lighting, and sample count",
         "resolution": [960, 540], "spp": 512, "max_surface_bounces": 8,
         "camera_dxr": {"origin": [0, 0.15, -1.2], "target": [0, 0, 0],
                        "vertical_fov_degrees": 70},
@@ -244,14 +271,28 @@ def write_scene_files() -> None:
         "sphere_mesh": {"count": 3, "slices": 24, "stacks": 12,
                         "radius": 0.42, "centers": [[-0.92, -0.43, 1.8],
                         [0, -0.43, 1.8], [0.92, -0.43, 1.8]]},
-        "sphere_material": {"base_color": list(SPHERE_COLOR[:3]),
-                            "metallic": METALLIC, "roughness": ROUGHNESS},
+        "sphere_material_cases": case_manifest,
         "floor_material": {"base_color": list(FLOOR_COLOR[:3]),
                            "metallic": 0.0, "roughness": 0.65},
         "ibl": {"source": str(ENV_SOURCE.relative_to(ROOT.parents[1])),
-                "intensity": 0.5, "dxr_mip": 0},
-        "brdf": {"D": "GGX alpha=roughness^2", "G": "height-correlated Smith-GGX",
-                 "F": "Schlick", "sampling": "GGX NDF", "multiscatter": False},
+                "dxr_and_mitsuba_intensity": 0.5,
+                "rtxpt_scene_scale": 0.5,
+                "rtxpt_baker_scale": 0.25,
+                "rtxpt_pfm_export_scale": 0.5,
+                "rtxpt_scale_note": "raw AccumulatedRadiance is pre-exposed by 2x at exposure 0; PFM export removes that factor, verified on background miss rays",
+                "dxr_mip": 0},
+        "renderer_brdfs": {
+            "dxr": "project GGX + correlated Smith + Schlick + Lambert diffuse; single scatter",
+            "mitsuba": "built-in principled BSDF",
+            "rtxpt": "native glTF PBR/Falcor BSDF with project defaults",
+        },
+        "integrator_controls": {
+            "dxr": {"nee": False, "russian_roulette": False},
+            "mitsuba": {"nee": "built-in path integrator; cannot disable independently", "rr_depth": 10},
+            "rtxpt": {"nee": False, "russian_roulette": False,
+                      "restir_di": False, "restir_gi": False,
+                      "firefly_filter": False, "denoiser": False},
+        },
     }
     (ROOT / "scene_manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8")
@@ -271,9 +312,8 @@ def main() -> None:
     for index, mesh in enumerate(meshes[:3]):
         write_ply(MITSUBA / "meshes" / f"sphere_{index}.ply", mesh)
     write_ply(MITSUBA / "meshes" / "floor.ply", meshes[3])
-    write_gltf(RTXPT / "pbr_scene.gltf", meshes)
-    write_scene_files()
-    print("Generated exact DXR PBR geometry for Mitsuba and RTXPT.")
+    write_scene_files(meshes)
+    print("Generated native PBR sweep scenes for Mitsuba and RTXPT.")
 
 
 if __name__ == "__main__":

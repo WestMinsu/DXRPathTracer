@@ -19,6 +19,7 @@ Validation/PbrScene/Results/
 Validation/PbrScene/Mitsuba/environment_latlong.pfm
 Validation/PbrScene/Mitsuba/meshes/
 Validation/PbrScene/Mitsuba/pbr_scene.xml
+Validation/PbrScene/Mitsuba/pbr_scene_*.xml
 Validation/PbrScene/RTXPT/
 Validation/PbrScene/scene_manifest.json
 

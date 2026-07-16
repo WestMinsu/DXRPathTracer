@@ -87,3 +87,46 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Validation\PbrScene\Ru
 
 결과 폴더에는 발표용 1920 x 1080 PNG, 편집 가능한 SVG, 반복별 원시 CSV와
 한글 요약 문서가 생성된다.
+
+## Mitsuba·RTXPT 독립 PBR 비교
+
+내부 수치 검증이 끝난 뒤에는 DXR 공식을 다른 렌더러에 복사하지 않고 각 렌더러의
+기본 PBR 구현과 비교한다. metallic 0/1과 roughness 0.10/0.35/0.65/0.80의
+8개 조건을 동일한 카메라·구/바닥 메시·환경맵으로 렌더링한다.
+
+- DXR: 현재 프로젝트의 GGX + height-correlated Smith + Schlick 구현
+- Mitsuba: 내장 `principled` BSDF와 `path` integrator
+- RTXPT: glTF `pbrMetallicRoughness`와 RTXPT/Falcor 기본 BSDF
+- 공통: 960 x 540, 512 spp, 최대 8회 표면 산란, raw HDR PFM 비교
+- DXR·RTXPT: NEE, Russian roulette, ReSTIR, denoiser, firefly filter 비활성화
+- Mitsuba: Russian roulette는 최대 깊이 뒤로 이동해 사실상 비활성화한다.
+  표준 `path` integrator의 NEE는 별도 off 옵션이 없어 그대로 둔다.
+
+씬과 manifest를 생성한다.
+
+~~~powershell
+python Validation\PbrScene\generate_geometry.py
+~~~
+
+Mitsuba의 8개 조건을 렌더링한다.
+
+~~~powershell
+python Validation\PbrScene\Mitsuba\render_native_pbr.py --spp 512
+~~~
+
+세 렌더러의 PFM이 준비된 뒤 구 내부 ROI 평균과 roughness 추세 그래프를 만든다.
+
+~~~powershell
+python Validation\PbrScene\analyze_native_comparison.py
+~~~
+
+결과는 Git에서 제외되는 `Validation/PbrScene/Results/IndependentNative512/`에
+생성된다. `presentation_summary_ko.md`는 발표용 해석, CSV는 원시 수치,
+SVG는 roughness별 DXR/reference 비율 그래프다.
+
+`Visuals/*/side_by_side.png`의 순서는 왼쪽 기준 렌더러, 오른쪽 DXR이다.
+수치 판정에는 배경이 대부분인 전체 화면 평균 대신 세 구 내부 ROI 평균을 사용한다.
+
+이 비교는 서로 독립적인 구현에서 비슷한 광학적 추세가 나타나는지를 확인한다.
+정확한 픽셀 일치를 합격 조건으로 삼지 않으며, BRDF 자체의 상호성·에너지 보존과
+sampler/PDF 일치는 앞의 수치 검증 결과를 근거로 사용한다.
