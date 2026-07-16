@@ -61,7 +61,9 @@ namespace
         return
         {
             { position.x, position.y, position.z },
-            { normal.x, normal.y, normal.z }
+            { normal.x, normal.y, normal.z },
+            { 0.0f, 0.0f },
+            { 1.0f, 0.0f, 0.0f, 1.0f }
         };
     }
 
@@ -78,7 +80,11 @@ namespace
             metallic,
             roughness,
             { emission.x, emission.y, emission.z },
-            useGlobalPbrParameters ? 1u : 0u
+            useGlobalPbrParameters ? 1u : 0u,
+            c_invalidSceneTextureIndex,
+            c_invalidSceneTextureIndex,
+            c_invalidSceneTextureIndex,
+            1.0f
         };
     }
 
@@ -261,6 +267,32 @@ bool SceneData::IsValid() const
     {
         if (materialIndex >= materials.size())
             return false;
+    }
+
+    for (const SceneTexture& texture : textures)
+    {
+        const std::uint64_t requiredSize =
+            static_cast<std::uint64_t>(texture.width) * texture.height * 4u;
+        if (texture.width == 0 || texture.height == 0 ||
+            requiredSize != texture.rgba8.size())
+        {
+            return false;
+        }
+    }
+
+    const auto validTextureIndex = [this](std::uint32_t textureIndex)
+    {
+        return textureIndex == c_invalidSceneTextureIndex ||
+            textureIndex < textures.size();
+    };
+    for (const SceneMaterial& material : materials)
+    {
+        if (!validTextureIndex(material.baseColorTextureIndex) ||
+            !validTextureIndex(material.metallicRoughnessTextureIndex) ||
+            !validTextureIndex(material.normalTextureIndex))
+        {
+            return false;
+        }
     }
 
     return vertices.size() <= std::numeric_limits<std::uint32_t>::max() &&

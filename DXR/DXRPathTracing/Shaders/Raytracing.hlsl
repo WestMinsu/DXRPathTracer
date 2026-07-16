@@ -138,10 +138,20 @@ void MyClosestHitShader_RadianceRay(
     uint i2 = g_indices[indexOffset + 2];
 
     float3 normal = InterpolateNormal(i0, i1, i2, attributes);
+    float2 texCoord = InterpolateTexCoord(i0, i1, i2, attributes);
+    float4 tangent = InterpolateTangent(i0, i1, i2, attributes);
     bool frontFace = dot(normal, WorldRayDirection()) < 0.0f;
     if (!frontFace)
     {
         normal = -normal;
+    }
+    if (g_sceneType == c_scenePbrGgx)
+    {
+        normal = ApplySceneNormalMap(
+            PrimitiveIndex(),
+            texCoord,
+            tangent,
+            normal);
     }
 
     float3 normalColor = normal * 0.5f + 0.5f;
@@ -167,7 +177,7 @@ void MyClosestHitShader_RadianceRay(
         }
         else
         {
-            payload.color = PbrMaterialDebugColor(PrimitiveIndex());
+            payload.color = PbrMaterialDebugColor(PrimitiveIndex(), texCoord);
         }
         return;
     }
@@ -188,7 +198,7 @@ void MyClosestHitShader_RadianceRay(
 
     if (g_sceneType == c_scenePbrGgx)
     {
-        PbrMaterial material = GetPbrMaterial(PrimitiveIndex());
+        PbrMaterial material = GetPbrMaterial(PrimitiveIndex(), texCoord);
         payload.color = TracePbrBrdfWithMixtureSampling(material, normal, hitPosition, payload.depth, PrimitiveIndex());
         return;
     }

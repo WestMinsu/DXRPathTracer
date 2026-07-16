@@ -54,7 +54,6 @@ private:
     static constexpr UINT c_shaderAttributeSize = 2 * sizeof(float);
     static constexpr UINT c_maxBounce = 8;
     static constexpr UINT c_maxRecursionDepth = c_maxBounce + 1;
-
     bool CreateOutputTexture();
     bool CreateEnvironmentMap();
     bool CreateGlobalRootSignature();
@@ -67,6 +66,7 @@ private:
     bool CreateAccelerationStructures();
     bool CreateBuildCommandObjects();
     bool CreateStaticGeometryBuffers();
+    bool CreateMaterialTextures(const struct SceneData& scene);
     bool BuildBottomLevelAccelerationStructure();
     bool BuildTopLevelAccelerationStructure();
     bool ExecuteBuildCommandListAndWait();
@@ -131,6 +131,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_indexBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_sceneMaterialBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_primitiveMaterialIndexBuffer;
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> m_materialTextures;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_bottomLevelAS;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_topLevelAS;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_instanceDescBuffer;

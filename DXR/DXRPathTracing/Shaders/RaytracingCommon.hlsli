@@ -5,6 +5,8 @@ struct Vertex
 {
     float3 position;
     float3 normal;
+    float2 texCoord;
+    float4 tangent;
 };
 
 struct RadiancePayload
@@ -29,6 +31,10 @@ struct SceneMaterial
     float roughness;
     float3 emission;
     uint useGlobalPbrParameters;
+    uint baseColorTextureIndex;
+    uint metallicRoughnessTextureIndex;
+    uint normalTextureIndex;
+    float normalTextureScale;
 };
 
 static const uint c_sceneCornellBox = 0;
@@ -41,6 +47,8 @@ static const uint c_pbrDebugRoughness = 3;
 static const uint c_pbrDebugDepth = 4;
 static const uint c_pbrDebugMaterialId = 5;
 static const uint c_pbrDebugNormal = 6;
+static const uint c_invalidSceneTextureIndex = 0xFFFFFFFFu;
+static const uint c_maxMaterialTextures = 64u;
 static const float c_rayTMin = 0.001f;
 static const float c_rayTMax = 1000.0f;
 static const float c_rayOriginBias = 0.001f;
@@ -60,7 +68,9 @@ StructuredBuffer<uint> g_indices : register(t2);
 TextureCube<float4> g_environmentMap : register(t3);
 StructuredBuffer<SceneMaterial> g_sceneMaterials : register(t4);
 StructuredBuffer<uint> g_primitiveMaterialIndices : register(t5);
+Texture2D<float4> g_materialTextures[c_maxMaterialTextures] : register(t6);
 SamplerState g_environmentSampler : register(s0);
+SamplerState g_materialSampler : register(s1);
 
 cbuffer RenderSettings : register(b0)
 {
@@ -145,6 +155,32 @@ float3 InterpolateNormal(uint i0, uint i1, uint i2, BuiltInTriangleIntersectionA
     float3 n1 = g_vertices[i1].normal;
     float3 n2 = g_vertices[i2].normal;
     return normalize(n0 * barycentrics.x + n1 * barycentrics.y + n2 * barycentrics.z);
+}
+
+float2 InterpolateTexCoord(uint i0, uint i1, uint i2, BuiltInTriangleIntersectionAttributes attributes)
+{
+    float3 barycentrics = float3(
+        1.0f - attributes.barycentrics.x - attributes.barycentrics.y,
+        attributes.barycentrics.x,
+        attributes.barycentrics.y);
+    return
+        g_vertices[i0].texCoord * barycentrics.x +
+        g_vertices[i1].texCoord * barycentrics.y +
+        g_vertices[i2].texCoord * barycentrics.z;
+}
+
+float4 InterpolateTangent(uint i0, uint i1, uint i2, BuiltInTriangleIntersectionAttributes attributes)
+{
+    float3 barycentrics = float3(
+        1.0f - attributes.barycentrics.x - attributes.barycentrics.y,
+        attributes.barycentrics.x,
+        attributes.barycentrics.y);
+    float4 tangent =
+        g_vertices[i0].tangent * barycentrics.x +
+        g_vertices[i1].tangent * barycentrics.y +
+        g_vertices[i2].tangent * barycentrics.z;
+    tangent.w = tangent.w < 0.0f ? -1.0f : 1.0f;
+    return tangent;
 }
 
 

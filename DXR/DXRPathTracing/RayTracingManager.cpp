@@ -20,7 +20,10 @@ namespace
     constexpr wchar_t c_hitGroupName[] = L"MyHitGroup_Triangle_RadianceRay";
     constexpr wchar_t c_compiledShaderRelativePath[] = L"Shaders\\Raytracing.dxil";
     constexpr wchar_t c_environmentMapRelativePath[] = L"Assets\\Textures\\Cubemaps\\HDRI\\autumn_hill_view_4kSpecularHDR.dds";
-    constexpr UINT c_descriptorCount = 3;
+    constexpr UINT c_materialTextureDescriptorIndex = 3;
+    constexpr UINT c_materialTextureDescriptorCount = 64;
+    constexpr UINT c_descriptorCount =
+        c_materialTextureDescriptorIndex + c_materialTextureDescriptorCount;
     constexpr UINT c_environmentDescriptorIndex = 2;
     constexpr UINT c_cubeFaceCount = 6;
     constexpr UINT c_ddsHeaderSize = 128;
@@ -248,6 +251,11 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     commandList->SetComputeRootDescriptorTable(5, environmentHandle);
     commandList->SetComputeRootShaderResourceView(6, m_sceneMaterialBuffer->GetGPUVirtualAddress());
     commandList->SetComputeRootShaderResourceView(7, m_primitiveMaterialIndexBuffer->GetGPUVirtualAddress());
+    D3D12_GPU_DESCRIPTOR_HANDLE materialTextureHandle =
+        m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
+    materialTextureHandle.ptr +=
+        static_cast<SIZE_T>(c_materialTextureDescriptorIndex) * m_descriptorSize;
+    commandList->SetComputeRootDescriptorTable(8, materialTextureHandle);
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -377,6 +385,7 @@ void RayTracingManager::SetSceneType(UINT sceneType)
 
 bool RayTracingManager::CreateOutputTexture()
 {
+    bool createdDescriptorHeap = false;
     if (!m_descriptorHeap)
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
@@ -389,6 +398,7 @@ bool RayTracingManager::CreateOutputTexture()
             return false;
 
         m_descriptorSize = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        createdDescriptorHeap = true;
     }
 
     m_outputTexture.Reset();
@@ -472,6 +482,29 @@ bool RayTracingManager::CreateOutputTexture()
         D3D12_CPU_DESCRIPTOR_HANDLE environmentSrvHandle = m_descriptorHeap->GetCPUDescriptorHandleForHeapStart();
         environmentSrvHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
         m_device->CreateShaderResourceView(m_environmentMap.Get(), &srvDesc, environmentSrvHandle);
+    }
+
+    if (createdDescriptorHeap)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC nullSrvDesc = {};
+        nullSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        nullSrvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        nullSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        nullSrvDesc.Texture2D.MostDetailedMip = 0;
+        nullSrvDesc.Texture2D.MipLevels = 1;
+        nullSrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE handle =
+            m_descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr +=
+            static_cast<SIZE_T>(c_materialTextureDescriptorIndex) * m_descriptorSize;
+        for (UINT descriptorIndex = 0;
+             descriptorIndex < c_materialTextureDescriptorCount;
+             ++descriptorIndex)
+        {
+            m_device->CreateShaderResourceView(nullptr, &nullSrvDesc, handle);
+            handle.ptr += m_descriptorSize;
+        }
     }
 
     return true;
@@ -651,7 +684,15 @@ bool RayTracingManager::CreateGlobalRootSignature()
     environmentRange.RegisterSpace = 0;
     environmentRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParameters[8] = {};
+    D3D12_DESCRIPTOR_RANGE materialTextureRange = {};
+    materialTextureRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    materialTextureRange.NumDescriptors = c_materialTextureDescriptorCount;
+    materialTextureRange.BaseShaderRegister = 6;
+    materialTextureRange.RegisterSpace = 0;
+    materialTextureRange.OffsetInDescriptorsFromTableStart =
+        D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParameters[9] = {};
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParameters[0].DescriptorTable.NumDescriptorRanges = 1;
     rootParameters[0].DescriptorTable.pDescriptorRanges = &outputRange;
@@ -693,26 +734,37 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[7].Descriptor.RegisterSpace = 0;
     rootParameters[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
+    rootParameters[8].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParameters[8].DescriptorTable.NumDescriptorRanges = 1;
+    rootParameters[8].DescriptorTable.pDescriptorRanges = &materialTextureRange;
+    rootParameters[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
-    D3D12_STATIC_SAMPLER_DESC environmentSampler = {};
-    environmentSampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    environmentSampler.AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    environmentSampler.AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    environmentSampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
-    environmentSampler.MipLODBias = 0.0f;
-    environmentSampler.MaxAnisotropy = 1;
-    environmentSampler.ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
-    environmentSampler.BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK;
-    environmentSampler.MinLOD = 0.0f;
-    environmentSampler.MaxLOD = D3D12_FLOAT32_MAX;
-    environmentSampler.ShaderRegister = 0;
-    environmentSampler.RegisterSpace = 0;
-    environmentSampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    D3D12_STATIC_SAMPLER_DESC staticSamplers[2] = {};
+    staticSamplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    staticSamplers[0].AddressU = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    staticSamplers[0].AddressV = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    staticSamplers[0].AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+    staticSamplers[0].MipLODBias = 0.0f;
+    staticSamplers[0].MaxAnisotropy = 1;
+    staticSamplers[0].ComparisonFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    staticSamplers[0].BorderColor = D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK;
+    staticSamplers[0].MinLOD = 0.0f;
+    staticSamplers[0].MaxLOD = D3D12_FLOAT32_MAX;
+    staticSamplers[0].ShaderRegister = 0;
+    staticSamplers[0].RegisterSpace = 0;
+    staticSamplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    staticSamplers[1] = staticSamplers[0];
+    staticSamplers[1].AddressU = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    staticSamplers[1].AddressV = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    staticSamplers[1].AddressW = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    staticSamplers[1].ShaderRegister = 1;
+
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
     rootSignatureDesc.NumParameters = _countof(rootParameters);
     rootSignatureDesc.pParameters = rootParameters;
-    rootSignatureDesc.NumStaticSamplers = 1;
-    rootSignatureDesc.pStaticSamplers = &environmentSampler;
+    rootSignatureDesc.NumStaticSamplers = _countof(staticSamplers);
+    rootSignatureDesc.pStaticSamplers = staticSamplers;
     rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
 
     Microsoft::WRL::ComPtr<ID3DBlob> signature;
@@ -1013,11 +1065,192 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         return false;
     }
 
-    return CreateUploadBuffer(
+    if (!CreateUploadBuffer(
         scene.primitiveMaterialIndices.data(),
         sizeof(std::uint32_t) * scene.primitiveMaterialIndices.size(),
         L"Raytracing primitive material index buffer",
-        m_primitiveMaterialIndexBuffer);
+        m_primitiveMaterialIndexBuffer))
+    {
+        return false;
+    }
+
+    return CreateMaterialTextures(scene);
+}
+
+bool RayTracingManager::CreateMaterialTextures(const SceneData& scene)
+{
+    if (scene.textures.size() > c_materialTextureDescriptorCount)
+    {
+        ReportMessage(L"The scene exceeds the 64 material texture limit.");
+        return false;
+    }
+
+    m_materialTextures.clear();
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC nullSrvDesc = {};
+    nullSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    nullSrvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    nullSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    nullSrvDesc.Texture2D.MostDetailedMip = 0;
+    nullSrvDesc.Texture2D.MipLevels = 1;
+    nullSrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+    D3D12_CPU_DESCRIPTOR_HANDLE descriptorHandle =
+        m_descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+    descriptorHandle.ptr +=
+        static_cast<SIZE_T>(c_materialTextureDescriptorIndex) * m_descriptorSize;
+    for (UINT descriptorIndex = 0;
+         descriptorIndex < c_materialTextureDescriptorCount;
+         ++descriptorIndex)
+    {
+        m_device->CreateShaderResourceView(nullptr, &nullSrvDesc, descriptorHandle);
+        descriptorHandle.ptr += m_descriptorSize;
+    }
+
+    if (scene.textures.empty())
+        return true;
+
+    HRESULT hr = m_buildCommandAllocator->Reset();
+    if (ReportFailure(hr, L"Material texture command allocator reset failed."))
+        return false;
+    hr = m_buildCommandList->Reset(m_buildCommandAllocator.Get(), nullptr);
+    if (ReportFailure(hr, L"Material texture command list reset failed."))
+        return false;
+
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> uploadBuffers;
+    uploadBuffers.reserve(scene.textures.size());
+    m_materialTextures.reserve(scene.textures.size());
+
+    for (std::size_t textureIndex = 0;
+         textureIndex < scene.textures.size();
+         ++textureIndex)
+    {
+        const SceneTexture& source = scene.textures[textureIndex];
+
+        D3D12_RESOURCE_DESC textureDesc = {};
+        textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        textureDesc.Alignment = 0;
+        textureDesc.Width = source.width;
+        textureDesc.Height = source.height;
+        textureDesc.DepthOrArraySize = 1;
+        textureDesc.MipLevels = 1;
+        textureDesc.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS;
+        textureDesc.SampleDesc.Count = 1;
+        textureDesc.SampleDesc.Quality = 0;
+        textureDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
+
+        Microsoft::WRL::ComPtr<ID3D12Resource> gpuTexture;
+        const D3D12_HEAP_PROPERTIES defaultHeap =
+            CreateHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+        hr = m_device->CreateCommittedResource(
+            &defaultHeap,
+            D3D12_HEAP_FLAG_NONE,
+            &textureDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr,
+            IID_PPV_ARGS(&gpuTexture));
+        if (ReportFailure(hr, L"Material texture creation failed."))
+            return false;
+
+        std::wstring textureName =
+            L"Material texture " + std::to_wstring(textureIndex);
+        gpuTexture->SetName(textureName.c_str());
+
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+        UINT rowCount = 0;
+        UINT64 rowSizeInBytes = 0;
+        UINT64 uploadSize = 0;
+        m_device->GetCopyableFootprints(
+            &textureDesc,
+            0,
+            1,
+            0,
+            &footprint,
+            &rowCount,
+            &rowSizeInBytes,
+            &uploadSize);
+
+        Microsoft::WRL::ComPtr<ID3D12Resource> uploadBuffer;
+        const D3D12_HEAP_PROPERTIES uploadHeap =
+            CreateHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+        const D3D12_RESOURCE_DESC uploadDesc = CreateBufferDesc(uploadSize);
+        hr = m_device->CreateCommittedResource(
+            &uploadHeap,
+            D3D12_HEAP_FLAG_NONE,
+            &uploadDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ,
+            nullptr,
+            IID_PPV_ARGS(&uploadBuffer));
+        if (ReportFailure(hr, L"Material texture upload buffer creation failed."))
+            return false;
+
+        void* mappedData = nullptr;
+        const D3D12_RANGE readRange = { 0, 0 };
+        hr = uploadBuffer->Map(0, &readRange, &mappedData);
+        if (ReportFailure(hr, L"Material texture upload buffer mapping failed."))
+            return false;
+
+        const std::size_t sourceRowPitch =
+            static_cast<std::size_t>(source.width) * 4u;
+        std::uint8_t* destination =
+            static_cast<std::uint8_t*>(mappedData) + footprint.Offset;
+        for (UINT row = 0; row < source.height; ++row)
+        {
+            std::memcpy(
+                destination + static_cast<std::size_t>(row) * footprint.Footprint.RowPitch,
+                source.rgba8.data() + static_cast<std::size_t>(row) * sourceRowPitch,
+                sourceRowPitch);
+        }
+        uploadBuffer->Unmap(0, nullptr);
+
+        D3D12_TEXTURE_COPY_LOCATION destinationLocation = {};
+        destinationLocation.pResource = gpuTexture.Get();
+        destinationLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        destinationLocation.SubresourceIndex = 0;
+
+        D3D12_TEXTURE_COPY_LOCATION sourceLocation = {};
+        sourceLocation.pResource = uploadBuffer.Get();
+        sourceLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        sourceLocation.PlacedFootprint = footprint;
+        m_buildCommandList->CopyTextureRegion(
+            &destinationLocation,
+            0,
+            0,
+            0,
+            &sourceLocation,
+            nullptr);
+
+        D3D12_RESOURCE_BARRIER barrier = {};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = gpuTexture.Get();
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        m_buildCommandList->ResourceBarrier(1, &barrier);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format = source.isSrgb != 0
+            ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB
+            : DXGI_FORMAT_R8G8B8A8_UNORM;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MostDetailedMip = 0;
+        srvDesc.Texture2D.MipLevels = 1;
+        srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+        D3D12_CPU_DESCRIPTOR_HANDLE srvHandle =
+            m_descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        srvHandle.ptr +=
+            static_cast<SIZE_T>(c_materialTextureDescriptorIndex + textureIndex) *
+            m_descriptorSize;
+        m_device->CreateShaderResourceView(gpuTexture.Get(), &srvDesc, srvHandle);
+
+        m_materialTextures.push_back(gpuTexture);
+        uploadBuffers.push_back(uploadBuffer);
+    }
+
+    return ExecuteBuildCommandListAndWait();
 }
 
 bool RayTracingManager::BuildBottomLevelAccelerationStructure()

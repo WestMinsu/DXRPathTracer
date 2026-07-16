@@ -18,7 +18,7 @@ float3 CornellSurfaceAlbedo(uint primitiveIndex)
     return GetSceneMaterial(primitiveIndex).baseColor;
 }
 
-PbrMaterial GetPbrMaterial(uint primitiveIndex)
+PbrMaterial GetPbrMaterial(uint primitiveIndex, float2 texCoord)
 {
     SceneMaterial sceneMaterial = GetSceneMaterial(primitiveIndex);
     PbrMaterial material;
@@ -26,17 +26,68 @@ PbrMaterial GetPbrMaterial(uint primitiveIndex)
     material.metallic = sceneMaterial.metallic;
     material.roughness = sceneMaterial.roughness;
     material.emission = sceneMaterial.emission;
+    if (sceneMaterial.baseColorTextureIndex != c_invalidSceneTextureIndex)
+    {
+        uint textureIndex = NonUniformResourceIndex(
+            sceneMaterial.baseColorTextureIndex);
+        material.baseColor *= g_materialTextures[textureIndex].SampleLevel(
+                g_materialSampler, texCoord, 0.0f).rgb;
+    }
+    if (sceneMaterial.metallicRoughnessTextureIndex != c_invalidSceneTextureIndex)
+    {
+        uint textureIndex = NonUniformResourceIndex(
+            sceneMaterial.metallicRoughnessTextureIndex);
+        float4 metallicRoughness = g_materialTextures[textureIndex].SampleLevel(
+                g_materialSampler, texCoord, 0.0f);
+        material.roughness *= metallicRoughness.g;
+        material.metallic *= metallicRoughness.b;
+    }
     if (sceneMaterial.useGlobalPbrParameters != 0)
     {
         material.metallic = g_pbrMetallic;
         material.roughness = g_pbrRoughness;
     }
+    material.metallic = saturate(material.metallic);
+    material.roughness = saturate(material.roughness);
     return material;
 }
 
-float3 PbrMaterialDebugColor(uint primitiveIndex)
+float3 ApplySceneNormalMap(
+    uint primitiveIndex,
+    float2 texCoord,
+    float4 interpolatedTangent,
+    float3 normal)
 {
-    PbrMaterial material = GetPbrMaterial(primitiveIndex);
+    SceneMaterial sceneMaterial = GetSceneMaterial(primitiveIndex);
+    if (sceneMaterial.normalTextureIndex == c_invalidSceneTextureIndex)
+    {
+        return normal;
+    }
+
+    float3 tangent = interpolatedTangent.xyz -
+        normal * dot(normal, interpolatedTangent.xyz);
+    float tangentLengthSquared = dot(tangent, tangent);
+    if (tangentLengthSquared <= 1.0e-12f)
+    {
+        return normal;
+    }
+    tangent *= rsqrt(tangentLengthSquared);
+    float3 bitangent = cross(normal, tangent) * interpolatedTangent.w;
+
+    uint textureIndex = NonUniformResourceIndex(
+        sceneMaterial.normalTextureIndex);
+    float3 tangentNormal = g_materialTextures[textureIndex].SampleLevel(
+            g_materialSampler, texCoord, 0.0f).xyz * 2.0f - 1.0f;
+    tangentNormal.xy *= sceneMaterial.normalTextureScale;
+    return normalize(
+        tangent * tangentNormal.x +
+        bitangent * tangentNormal.y +
+        normal * tangentNormal.z);
+}
+
+float3 PbrMaterialDebugColor(uint primitiveIndex, float2 texCoord)
+{
+    PbrMaterial material = GetPbrMaterial(primitiveIndex, texCoord);
 
     if (g_pbrDebugView == c_pbrDebugAlbedo)
     {
