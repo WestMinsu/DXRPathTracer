@@ -88,33 +88,6 @@ float3 EvaluateBrdf(PbrMaterial material, float3 normal, float3 viewDirection, f
     return (diffuse + specular) * nDotL;
 }
 
-float3 ShadePbrGgx(uint primitiveIndex, float3 normal, float3 hitPosition)
-{
-    PbrMaterial material = GetPbrMaterial(primitiveIndex);
-    if (any(material.emission > 0.0f))
-    {
-        return material.emission;
-    }
-
-    float3 toLight = c_pbrLightCenter - hitPosition;
-    float lightDistance = length(toLight);
-    float3 lightDirection = toLight / max(lightDistance, 0.0001f);
-
-    RayDesc shadowRay;
-    shadowRay.Origin = hitPosition + normal * c_rayOriginBias;
-    shadowRay.Direction = lightDirection;
-    shadowRay.TMin = c_rayTMin;
-    shadowRay.TMax = max(c_rayTMin, lightDistance - c_rayOriginBias);
-
-    RadiancePayload shadowPayload;
-    shadowPayload.color = float3(0.0f, 0.0f, 0.0f);
-    shadowPayload.depth = g_maxBounce;
-    TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, shadowRay, shadowPayload);
-
-    float3 viewDirection = normalize(-WorldRayDirection());
-    return EvaluateBrdf(material, normal, viewDirection, lightDirection) * shadowPayload.color;
-}
-
 float3 ImportanceSampleGGX(float2 sampleValue, float3 normal, float roughness)
 {
     float alpha = GgxAlpha(roughness);

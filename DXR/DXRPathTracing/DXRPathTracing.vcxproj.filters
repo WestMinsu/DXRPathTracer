@@ -33,6 +33,9 @@
     <ClInclude Include="RayTracingManager.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="SceneData.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="ThirdParty\imgui\imconfig.h">
       <Filter>ThirdParty\ImGui</Filter>
     </ClInclude>
@@ -66,6 +69,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="RayTracingManager.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SceneData.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ThirdParty\imgui\imgui.cpp">

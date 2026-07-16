@@ -21,6 +21,16 @@ struct PbrMaterial
     float3 emission;
 };
 
+// Mirrored by SceneMaterial in SceneData.h.
+struct SceneMaterial
+{
+    float3 baseColor;
+    float metallic;
+    float roughness;
+    float3 emission;
+    uint useGlobalPbrParameters;
+};
+
 static const uint c_sceneCornellBox = 0;
 static const uint c_scenePbrGgx = 1;
 static const uint c_scenePbrGpuValidation = 2;
@@ -38,29 +48,6 @@ static const float c_verticalFovRadians = 1.221730476f; // 70 degrees.
 static const float c_pi = 3.141592654f;
 static const float c_invPi = 0.318309886f;
 static const float c_twoPi = 6.283185307f;
-static const uint c_blockPrimitiveCount = 24;
-static const uint c_floorPrimitiveStart = c_blockPrimitiveCount;
-static const uint c_ceilingPrimitiveStart = 26;
-static const uint c_backWallPrimitiveStart = 28;
-static const uint c_leftWallPrimitiveStart = 30;
-static const uint c_rightWallPrimitiveStart = 32;
-static const uint c_lightPrimitiveStart = 34;
-static const uint c_lightPrimitiveCount = 2;
-static const uint c_pbrSpherePrimitiveCount = 528;
-static const uint c_pbrSphereCount = 3;
-static const uint c_pbrFloorPrimitiveStart = c_pbrSpherePrimitiveCount * c_pbrSphereCount;
-static const uint c_pbrBackWallPrimitiveStart = c_pbrFloorPrimitiveStart + 2;
-static const uint c_pbrLightPrimitiveStart = c_pbrBackWallPrimitiveStart + 2;
-static const uint c_pbrLightPrimitiveCount = 2;
-static const float3 c_pbrLightCenter = float3(0.0f, 1.55f, 2.05f);
-static const float3 c_blockAlbedo = float3(0.74f, 0.74f, 0.74f);
-static const float3 c_floorAlbedo = float3(0.75f, 0.75f, 0.75f);
-static const float3 c_ceilingAlbedo = float3(0.75f, 0.75f, 0.75f);
-static const float3 c_backWallAlbedo = float3(0.75f, 0.75f, 0.75f);
-static const float3 c_leftWallAlbedo = float3(0.65f, 0.08f, 0.05f);
-static const float3 c_rightWallAlbedo = float3(0.12f, 0.45f, 0.10f);
-static const float3 c_cornellLightEmission = float3(12.0f, 10.0f, 8.0f);
-static const float3 c_pbrLightEmission = float3(1.0f, 1.0f, 1.0f);
 
 RWTexture2D<float4> g_output : register(u0);
 RWTexture2D<float4> g_accumulation : register(u1);
@@ -68,6 +55,8 @@ RaytracingAccelerationStructure g_scene : register(t0);
 StructuredBuffer<Vertex> g_vertices : register(t1);
 StructuredBuffer<uint> g_indices : register(t2);
 TextureCube<float4> g_environmentMap : register(t3);
+StructuredBuffer<SceneMaterial> g_sceneMaterials : register(t4);
+StructuredBuffer<uint> g_primitiveMaterialIndices : register(t5);
 SamplerState g_environmentSampler : register(s0);
 
 cbuffer RenderSettings : register(b0)

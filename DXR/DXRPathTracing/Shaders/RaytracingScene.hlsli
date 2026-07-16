@@ -3,98 +3,34 @@
 
 #include "RaytracingCommon.hlsli"
 
-bool IsCornellLightPrimitive(uint primitiveIndex)
+SceneMaterial GetSceneMaterial(uint primitiveIndex)
 {
-    return primitiveIndex >= c_lightPrimitiveStart &&
-        primitiveIndex < c_lightPrimitiveStart + c_lightPrimitiveCount;
-}
-
-bool IsPbrLightPrimitive(uint primitiveIndex)
-{
-    return primitiveIndex >= c_pbrLightPrimitiveStart &&
-        primitiveIndex < c_pbrLightPrimitiveStart + c_pbrLightPrimitiveCount;
-}
-
-bool IsLightPrimitive(uint primitiveIndex)
-{
-    return g_sceneType == c_scenePbrGgx
-        ? IsPbrLightPrimitive(primitiveIndex)
-        : IsCornellLightPrimitive(primitiveIndex);
+    return g_sceneMaterials[g_primitiveMaterialIndices[primitiveIndex]];
 }
 
 float3 SurfaceEmission(uint primitiveIndex)
 {
-    if (g_sceneType == c_scenePbrGgx)
-    {
-        return IsPbrLightPrimitive(primitiveIndex) ? c_pbrLightEmission : float3(0.0f, 0.0f, 0.0f);
-    }
-
-    return IsCornellLightPrimitive(primitiveIndex) ? c_cornellLightEmission : float3(0.0f, 0.0f, 0.0f);
+    return GetSceneMaterial(primitiveIndex).emission;
 }
 
 float3 CornellSurfaceAlbedo(uint primitiveIndex)
 {
-    if (IsCornellLightPrimitive(primitiveIndex))
-    {
-        return float3(0.0f, 0.0f, 0.0f);
-    }
-
-    if (primitiveIndex >= c_rightWallPrimitiveStart)
-    {
-        return c_rightWallAlbedo;
-    }
-
-    if (primitiveIndex >= c_leftWallPrimitiveStart)
-    {
-        return c_leftWallAlbedo;
-    }
-
-    if (primitiveIndex >= c_backWallPrimitiveStart)
-    {
-        return c_backWallAlbedo;
-    }
-
-    if (primitiveIndex >= c_ceilingPrimitiveStart)
-    {
-        return c_ceilingAlbedo;
-    }
-
-    if (primitiveIndex >= c_floorPrimitiveStart)
-    {
-        return c_floorAlbedo;
-    }
-
-    return c_blockAlbedo;
+    return GetSceneMaterial(primitiveIndex).baseColor;
 }
-
 
 PbrMaterial GetPbrMaterial(uint primitiveIndex)
 {
+    SceneMaterial sceneMaterial = GetSceneMaterial(primitiveIndex);
     PbrMaterial material;
-    material.baseColor = float3(0.55f, 0.55f, 0.55f);
-    material.metallic = 0.0f;
-    material.roughness = 0.65f;
-    material.emission = float3(0.0f, 0.0f, 0.0f);
-
-    if (IsPbrLightPrimitive(primitiveIndex))
+    material.baseColor = sceneMaterial.baseColor;
+    material.metallic = sceneMaterial.metallic;
+    material.roughness = sceneMaterial.roughness;
+    material.emission = sceneMaterial.emission;
+    if (sceneMaterial.useGlobalPbrParameters != 0)
     {
-        material.baseColor = float3(0.0f, 0.0f, 0.0f);
-        material.emission = c_pbrLightEmission;
-        return material;
-    }
-
-    if (primitiveIndex < c_pbrSpherePrimitiveCount * c_pbrSphereCount)
-    {
-        material.baseColor = float3(1.0f, 0.766f, 0.336f);
         material.metallic = g_pbrMetallic;
         material.roughness = g_pbrRoughness;
     }
-    else if (primitiveIndex >= c_pbrBackWallPrimitiveStart)
-    {
-        material.baseColor = float3(0.48f, 0.50f, 0.55f);
-        material.roughness = 0.75f;
-    }
-
     return material;
 }
 

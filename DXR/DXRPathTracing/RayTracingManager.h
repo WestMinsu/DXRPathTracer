@@ -124,6 +124,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Fence> m_buildFence;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_vertexBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_indexBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_sceneMaterialBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_primitiveMaterialIndexBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_bottomLevelAS;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_topLevelAS;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_instanceDescBuffer;

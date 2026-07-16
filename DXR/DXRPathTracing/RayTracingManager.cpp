@@ -1,7 +1,7 @@
 #include "RayTracingManager.h"
+#include "SceneData.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstring>
 #include <cstddef>
 #include <cstdint>
@@ -26,63 +26,6 @@ namespace
     constexpr UINT c_ddsMagic = 0x20534444u;
     constexpr UINT c_d3dFormatA16B16G16R16F = 113;
     constexpr UINT c_bytesPerRgba16FloatPixel = 8;
-    constexpr float c_pi = 3.141592654f;
-    constexpr float c_twoPi = 6.283185307f;
-
-    constexpr float c_shortBlockHalfWidth = 0.42f;
-    constexpr float c_shortBlockHeight = 0.58f;
-    constexpr float c_shortBlockHalfDepth = 0.42f;
-    constexpr float c_shortBlockCenterX = -0.68f;
-    constexpr float c_shortBlockCenterZ = 1.28f;
-    constexpr float c_shortBlockCosY = 0.951056516f;
-    constexpr float c_shortBlockSinY = -0.309016994f;
-    constexpr float c_tallBlockHalfWidth = 0.42f;
-    constexpr float c_tallBlockHeight = 1.15f;
-    constexpr float c_tallBlockHalfDepth = 0.42f;
-    constexpr float c_tallBlockCenterX = 0.62f;
-    constexpr float c_tallBlockCenterZ = 2.35f;
-    constexpr float c_tallBlockCosY = 0.965925826f;
-    constexpr float c_tallBlockSinY = 0.258819045f;
-    constexpr float c_boxFloorY = -0.85f;
-    constexpr float c_boxCeilingY = 1.25f;
-    constexpr float c_boxHalfWidth = 2.25f;
-    constexpr float c_boxNearZ = 0.0f;
-    constexpr float c_boxFarZ = 4.0f;
-    constexpr float c_cornellLightY = c_boxCeilingY - 0.002f;
-    constexpr float c_cornellLightHalfWidth = 0.55f;
-    constexpr float c_cornellLightNearZ = 1.10f;
-    constexpr float c_cornellLightFarZ = 2.25f;
-
-    constexpr UINT c_sphereCount = 3;
-    constexpr UINT c_sphereSlices = 24;
-    constexpr UINT c_sphereStacks = 12;
-    constexpr float c_sphereRadius = 0.42f;
-    constexpr float c_sphereStartX = -0.92f;
-    constexpr float c_sphereSpacingX = 0.92f;
-    constexpr float c_sphereCenterZ = 1.80f;
-    constexpr float c_pbrFloorY = -0.85f;
-    constexpr float c_pbrSceneHalfWidth = 2.05f;
-    constexpr float c_pbrSceneNearZ = 0.0f;
-    constexpr float c_pbrSceneBackZ = 4.25f;
-    constexpr float c_pbrSceneCeilingY = 1.65f;
-    constexpr float c_pbrLightY = 1.55f;
-    constexpr float c_pbrLightHalfWidth = 1.90f;
-    constexpr float c_pbrLightNearZ = 0.70f;
-    constexpr float c_pbrLightFarZ = 3.40f;
-
-    struct Float3
-    {
-        float x;
-        float y;
-        float z;
-    };
-
-    struct Vertex
-    {
-        float position[3];
-        float normal[3];
-    };
-
     struct DdsCubemapData
     {
         UINT width = 0;
@@ -92,190 +35,6 @@ namespace
         UINT bytesPerPixel = 0;
         std::vector<std::uint8_t> texels;
     };
-
-    Float3 MakeFloat3(float x, float y, float z)
-    {
-        return { x, y, z };
-    }
-
-    Vertex MakeVertex(Float3 position, Float3 normal)
-    {
-        return
-        {
-            { position.x, position.y, position.z },
-            { normal.x, normal.y, normal.z }
-        };
-    }
-
-    Float3 RotateY(Float3 value, float cosY, float sinY)
-    {
-        return MakeFloat3(
-            value.x * cosY + value.z * sinY,
-            value.y,
-            -value.x * sinY + value.z * cosY);
-    }
-
-    Float3 MakeBlockPoint(float x, float y, float z, float centerX, float centerZ, float cosY, float sinY)
-    {
-        const Float3 rotated = RotateY(MakeFloat3(x, y, z), cosY, sinY);
-        return MakeFloat3(centerX + rotated.x, c_boxFloorY + rotated.y, centerZ + rotated.z);
-    }
-
-    Float3 MakeBlockNormal(float x, float y, float z, float cosY, float sinY)
-    {
-        return RotateY(MakeFloat3(x, y, z), cosY, sinY);
-    }
-
-    void AddQuad(
-        std::vector<Vertex>& vertices,
-        std::vector<std::uint32_t>& indices,
-        Float3 p0,
-        Float3 p1,
-        Float3 p2,
-        Float3 p3,
-        Float3 normal)
-    {
-        const std::uint32_t baseIndex = static_cast<std::uint32_t>(vertices.size());
-        vertices.push_back(MakeVertex(p0, normal));
-        vertices.push_back(MakeVertex(p1, normal));
-        vertices.push_back(MakeVertex(p2, normal));
-        vertices.push_back(MakeVertex(p3, normal));
-
-        indices.push_back(baseIndex + 0);
-        indices.push_back(baseIndex + 1);
-        indices.push_back(baseIndex + 2);
-        indices.push_back(baseIndex + 0);
-        indices.push_back(baseIndex + 2);
-        indices.push_back(baseIndex + 3);
-    }
-
-    void AddCornellBlock(
-        std::vector<Vertex>& vertices,
-        std::vector<std::uint32_t>& indices,
-        float halfWidth,
-        float height,
-        float halfDepth,
-        float centerX,
-        float centerZ,
-        float cosY,
-        float sinY)
-    {
-        const auto point = [=](float x, float y, float z)
-        {
-            return MakeBlockPoint(x, y, z, centerX, centerZ, cosY, sinY);
-        };
-        const auto normal = [=](float x, float y, float z)
-        {
-            return MakeBlockNormal(x, y, z, cosY, sinY);
-        };
-
-        AddQuad(vertices, indices, point(-halfWidth, height, -halfDepth), point( halfWidth, height, -halfDepth), point( halfWidth, 0.0f, -halfDepth), point(-halfWidth, 0.0f, -halfDepth), normal( 0.0f,  0.0f, -1.0f));
-        AddQuad(vertices, indices, point(-halfWidth, height,  halfDepth), point(-halfWidth, 0.0f,  halfDepth), point( halfWidth, 0.0f,  halfDepth), point( halfWidth, height,  halfDepth), normal( 0.0f,  0.0f,  1.0f));
-        AddQuad(vertices, indices, point(-halfWidth, height,  halfDepth), point(-halfWidth, height, -halfDepth), point(-halfWidth, 0.0f, -halfDepth), point(-halfWidth, 0.0f,  halfDepth), normal(-1.0f,  0.0f,  0.0f));
-        AddQuad(vertices, indices, point( halfWidth, height, -halfDepth), point( halfWidth, height,  halfDepth), point( halfWidth, 0.0f,  halfDepth), point( halfWidth, 0.0f, -halfDepth), normal( 1.0f,  0.0f,  0.0f));
-        AddQuad(vertices, indices, point(-halfWidth, height,  halfDepth), point( halfWidth, height,  halfDepth), point( halfWidth, height, -halfDepth), point(-halfWidth, height, -halfDepth), normal( 0.0f,  1.0f,  0.0f));
-        AddQuad(vertices, indices, point(-halfWidth, 0.0f, -halfDepth), point( halfWidth, 0.0f, -halfDepth), point( halfWidth, 0.0f,  halfDepth), point(-halfWidth, 0.0f,  halfDepth), normal( 0.0f, -1.0f,  0.0f));
-    }
-
-    void AddCornellBoxGeometry(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices)
-    {
-        vertices.reserve(72);
-        indices.reserve(108);
-
-        AddCornellBlock(vertices, indices, c_shortBlockHalfWidth, c_shortBlockHeight, c_shortBlockHalfDepth, c_shortBlockCenterX, c_shortBlockCenterZ, c_shortBlockCosY, c_shortBlockSinY);
-        AddCornellBlock(vertices, indices, c_tallBlockHalfWidth, c_tallBlockHeight, c_tallBlockHalfDepth, c_tallBlockCenterX, c_tallBlockCenterZ, c_tallBlockCosY, c_tallBlockSinY);
-
-        AddQuad(vertices, indices, MakeFloat3(-c_boxHalfWidth, c_boxFloorY, c_boxNearZ), MakeFloat3(-c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxFloorY, c_boxNearZ), MakeFloat3(0.0f, 1.0f, 0.0f));
-        AddQuad(vertices, indices, MakeFloat3(-c_boxHalfWidth, c_boxCeilingY, c_boxNearZ), MakeFloat3( c_boxHalfWidth, c_boxCeilingY, c_boxNearZ), MakeFloat3( c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3(-c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3(0.0f, -1.0f, 0.0f));
-        AddQuad(vertices, indices, MakeFloat3(-c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3(-c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3(0.0f, 0.0f, -1.0f));
-        AddQuad(vertices, indices, MakeFloat3(-c_boxHalfWidth, c_boxFloorY, c_boxNearZ), MakeFloat3(-c_boxHalfWidth, c_boxCeilingY, c_boxNearZ), MakeFloat3(-c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3(-c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3(1.0f, 0.0f, 0.0f));
-        AddQuad(vertices, indices, MakeFloat3( c_boxHalfWidth, c_boxFloorY, c_boxNearZ), MakeFloat3( c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxCeilingY, c_boxNearZ), MakeFloat3(-1.0f, 0.0f, 0.0f));
-        AddQuad(vertices, indices, MakeFloat3(-c_cornellLightHalfWidth, c_cornellLightY, c_cornellLightNearZ), MakeFloat3( c_cornellLightHalfWidth, c_cornellLightY, c_cornellLightNearZ), MakeFloat3( c_cornellLightHalfWidth, c_cornellLightY, c_cornellLightFarZ), MakeFloat3(-c_cornellLightHalfWidth, c_cornellLightY, c_cornellLightFarZ), MakeFloat3(0.0f, -1.0f, 0.0f));
-    }
-
-    void AddPbrSphere(
-        std::vector<Vertex>& vertices,
-        std::vector<std::uint32_t>& indices,
-        Float3 center,
-        float radius)
-    {
-        const std::uint32_t baseIndex = static_cast<std::uint32_t>(vertices.size());
-        for (UINT stack = 0; stack <= c_sphereStacks; ++stack)
-        {
-            const float theta = c_pi * static_cast<float>(stack) / static_cast<float>(c_sphereStacks);
-            const float sinTheta = std::sin(theta);
-            const float cosTheta = std::cos(theta);
-
-            for (UINT slice = 0; slice <= c_sphereSlices; ++slice)
-            {
-                const float phi = c_twoPi * static_cast<float>(slice) / static_cast<float>(c_sphereSlices);
-                const float sinPhi = std::sin(phi);
-                const float cosPhi = std::cos(phi);
-                const Float3 normal = MakeFloat3(sinTheta * cosPhi, cosTheta, sinTheta * sinPhi);
-                const Float3 position = MakeFloat3(
-                    center.x + normal.x * radius,
-                    center.y + normal.y * radius,
-                    center.z + normal.z * radius);
-                vertices.push_back(MakeVertex(position, normal));
-            }
-        }
-
-        const auto vertexIndex = [baseIndex](UINT stack, UINT slice) -> std::uint32_t
-        {
-            return baseIndex + stack * (c_sphereSlices + 1) + slice;
-        };
-
-        for (UINT stack = 0; stack < c_sphereStacks; ++stack)
-        {
-            for (UINT slice = 0; slice < c_sphereSlices; ++slice)
-            {
-                const std::uint32_t i0 = vertexIndex(stack, slice);
-                const std::uint32_t i1 = vertexIndex(stack + 1, slice);
-                const std::uint32_t i2 = vertexIndex(stack + 1, slice + 1);
-                const std::uint32_t i3 = vertexIndex(stack, slice + 1);
-
-                if (stack == 0)
-                {
-                    indices.push_back(i0);
-                    indices.push_back(i1);
-                    indices.push_back(i2);
-                }
-                else if (stack == c_sphereStacks - 1)
-                {
-                    indices.push_back(i0);
-                    indices.push_back(i1);
-                    indices.push_back(i3);
-                }
-                else
-                {
-                    indices.push_back(i0);
-                    indices.push_back(i1);
-                    indices.push_back(i2);
-                    indices.push_back(i0);
-                    indices.push_back(i2);
-                    indices.push_back(i3);
-                }
-            }
-        }
-    }
-
-    void AddPbrGgxSceneGeometry(std::vector<Vertex>& vertices, std::vector<std::uint32_t>& indices)
-    {
-        vertices.reserve(c_sphereCount * (c_sphereStacks + 1) * (c_sphereSlices + 1) + 12);
-        indices.reserve(c_sphereCount * c_sphereSlices * (c_sphereStacks - 1) * 6 + 18);
-
-        for (UINT sphereIndex = 0; sphereIndex < c_sphereCount; ++sphereIndex)
-        {
-            const float sphereX = c_sphereStartX + c_sphereSpacingX * static_cast<float>(sphereIndex);
-            AddPbrSphere(
-                vertices,
-                indices,
-                MakeFloat3(sphereX, c_pbrFloorY + c_sphereRadius, c_sphereCenterZ),
-                c_sphereRadius);
-        }
-
-        AddQuad(vertices, indices, MakeFloat3(-c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneNearZ), MakeFloat3(-c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneBackZ), MakeFloat3( c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneNearZ), MakeFloat3(0.0f, 1.0f, 0.0f));
-    }
 
     struct RenderSettingsConstants
     {
@@ -454,7 +213,8 @@ bool RayTracingManager::Initialize(HWND hWnd, ID3D12Device5* device, UINT width,
 void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
 {
     if (!commandList || !m_stateObject || !m_rayGenShaderTable || !m_missShaderTable ||
-        !m_hitGroupShaderTable || !m_descriptorHeap || !m_topLevelAS || !m_accumulationTexture || !m_environmentMap)
+        !m_hitGroupShaderTable || !m_descriptorHeap || !m_topLevelAS || !m_accumulationTexture ||
+        !m_environmentMap || !m_sceneMaterialBuffer || !m_primitiveMaterialIndexBuffer)
     {
         return;
     }
@@ -485,6 +245,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
     commandList->SetComputeRootDescriptorTable(5, environmentHandle);
+    commandList->SetComputeRootShaderResourceView(6, m_sceneMaterialBuffer->GetGPUVirtualAddress());
+    commandList->SetComputeRootShaderResourceView(7, m_primitiveMaterialIndexBuffer->GetGPUVirtualAddress());
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -888,7 +650,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     environmentRange.RegisterSpace = 0;
     environmentRange.OffsetInDescriptorsFromTableStart = D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParameters[6] = {};
+    D3D12_ROOT_PARAMETER rootParameters[8] = {};
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParameters[0].DescriptorTable.NumDescriptorRanges = 1;
     rootParameters[0].DescriptorTable.pDescriptorRanges = &outputRange;
@@ -919,6 +681,16 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[5].DescriptorTable.NumDescriptorRanges = 1;
     rootParameters[5].DescriptorTable.pDescriptorRanges = &environmentRange;
     rootParameters[5].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParameters[6].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParameters[6].Descriptor.ShaderRegister = 4;
+    rootParameters[6].Descriptor.RegisterSpace = 0;
+    rootParameters[6].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParameters[7].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParameters[7].Descriptor.ShaderRegister = 5;
+    rootParameters[7].Descriptor.RegisterSpace = 0;
+    rootParameters[7].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
 
     D3D12_STATIC_SAMPLER_DESC environmentSampler = {};
@@ -1184,36 +956,51 @@ bool RayTracingManager::CreateBuildCommandObjects()
 
 bool RayTracingManager::CreateStaticGeometryBuffers()
 {
-    std::vector<Vertex> vertices;
-    std::vector<std::uint32_t> indices;
-
-    if (m_sceneType == c_scenePbrGgx ||
-        m_sceneType == c_scenePbrGpuValidation)
+    const SceneData scene = m_sceneType == c_scenePbrGgx ||
+        m_sceneType == c_scenePbrGpuValidation
+        ? CreatePbrGgxSceneData()
+        : CreateCornellBoxSceneData();
+    if (!scene.IsValid())
     {
-        AddPbrGgxSceneGeometry(vertices, indices);
-    }
-    else
-    {
-        AddCornellBoxGeometry(vertices, indices);
+        ReportMessage(L"Generated scene data is invalid.");
+        return false;
     }
 
-    m_vertexCount = static_cast<UINT>(vertices.size());
-    m_indexCount = static_cast<UINT>(indices.size());
+    m_vertexCount = static_cast<UINT>(scene.vertices.size());
+    m_indexCount = static_cast<UINT>(scene.indices.size());
 
     if (!CreateUploadBuffer(
-        vertices.data(),
-        sizeof(Vertex) * vertices.size(),
+        scene.vertices.data(),
+        sizeof(SceneVertex) * scene.vertices.size(),
         L"Raytracing scene vertex buffer",
         m_vertexBuffer))
     {
         return false;
     }
 
-    return CreateUploadBuffer(
-        indices.data(),
-        sizeof(std::uint32_t) * indices.size(),
+    if (!CreateUploadBuffer(
+        scene.indices.data(),
+        sizeof(std::uint32_t) * scene.indices.size(),
         L"Raytracing scene index buffer",
-        m_indexBuffer);
+        m_indexBuffer))
+    {
+        return false;
+    }
+
+    if (!CreateUploadBuffer(
+        scene.materials.data(),
+        sizeof(SceneMaterial) * scene.materials.size(),
+        L"Raytracing scene material buffer",
+        m_sceneMaterialBuffer))
+    {
+        return false;
+    }
+
+    return CreateUploadBuffer(
+        scene.primitiveMaterialIndices.data(),
+        sizeof(std::uint32_t) * scene.primitiveMaterialIndices.size(),
+        L"Raytracing primitive material index buffer",
+        m_primitiveMaterialIndexBuffer);
 }
 
 bool RayTracingManager::BuildBottomLevelAccelerationStructure()
@@ -1222,7 +1009,7 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure()
     geometryDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
     geometryDesc.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
     geometryDesc.Triangles.VertexBuffer.StartAddress = m_vertexBuffer->GetGPUVirtualAddress();
-    geometryDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(Vertex);
+    geometryDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(SceneVertex);
     geometryDesc.Triangles.VertexCount = m_vertexCount;
     geometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
     geometryDesc.Triangles.IndexBuffer = m_indexBuffer->GetGPUVirtualAddress();
