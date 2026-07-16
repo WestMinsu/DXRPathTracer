@@ -52,8 +52,6 @@ static const uint c_maxMaterialTextures = 64u;
 static const float c_rayTMin = 0.001f;
 static const float c_rayTMax = 1000.0f;
 static const float c_rayOriginBias = 0.001f;
-static const float3 c_cameraPosition = float3(0.0f, 0.15f, -1.2f);
-static const float3 c_cameraTarget = float3(0.0f, 0.0f, 0.0f);
 static const float3 c_cameraUp = float3(0.0f, 1.0f, 0.0f);
 static const float c_verticalFovRadians = 1.221730476f; // 70 degrees.
 static const float c_pi = 3.141592654f;
@@ -87,6 +85,8 @@ cbuffer RenderSettings : register(b0)
     float g_iblIntensity;
     float g_exposure;
     uint g_validationSeed;
+    float3 g_cameraPosition;
+    float3 g_cameraTarget;
 };
 
 uint CreateRandomSeed(uint depth, uint primitiveIndex)

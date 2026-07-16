@@ -1,12 +1,18 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "RayTracingManager.h"
 #include "GltfSceneLoader.h"
 #include "SceneData.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <vector>
 
@@ -30,6 +36,8 @@ namespace
     constexpr UINT c_ddsMagic = 0x20534444u;
     constexpr UINT c_d3dFormatA16B16G16R16F = 113;
     constexpr UINT c_bytesPerRgba16FloatPixel = 8;
+    constexpr float c_verticalFovRadians = 1.221730476f;
+    constexpr float c_cameraFrameMargin = 1.15f;
     struct DdsCubemapData
     {
         UINT width = 0;
@@ -55,7 +63,10 @@ namespace
         float iblIntensity;
         float exposure;
         UINT validationSeed;
+        float cameraPosition[3];
+        float cameraTarget[3];
     };
+    static_assert(sizeof(RenderSettingsConstants) == 19 * sizeof(std::uint32_t));
 
     UINT AlignUp(UINT value, UINT alignment)
     {
@@ -245,7 +256,15 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     renderSettings.iblIntensity = m_iblIntensity;
     renderSettings.exposure = m_exposure;
     renderSettings.validationSeed = m_validationSeed;
-    commandList->SetComputeRoot32BitConstants(4, 13, &renderSettings, 0);
+    std::copy(
+        m_cameraPosition.begin(),
+        m_cameraPosition.end(),
+        renderSettings.cameraPosition);
+    std::copy(
+        m_cameraTarget.begin(),
+        m_cameraTarget.end(),
+        renderSettings.cameraTarget);
+    commandList->SetComputeRoot32BitConstants(4, 19, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
     commandList->SetComputeRootDescriptorTable(5, environmentHandle);
@@ -286,6 +305,8 @@ bool RayTracingManager::Resize(UINT width, UINT height)
 
     m_width = width;
     m_height = height;
+    if (m_autoFrameCamera)
+        UpdateCameraFromSceneBounds();
     ResetAccumulation();
     return CreateOutputTexture();
 }
@@ -716,7 +737,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 13;
+    rootParameters[4].Constants.Num32BitValues = 19;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     rootParameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -1035,6 +1056,41 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         return false;
     }
 
+    m_autoFrameCamera = isPbrScene && !m_sceneFilePath.empty();
+    if (m_autoFrameCamera)
+    {
+        m_sceneBoundsMin =
+        {
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max()
+        };
+        m_sceneBoundsMax =
+        {
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest()
+        };
+        for (const SceneVertex& vertex : scene.vertices)
+        {
+            for (std::size_t component = 0; component < 3; ++component)
+            {
+                m_sceneBoundsMin[component] = std::min(
+                    m_sceneBoundsMin[component],
+                    vertex.position[component]);
+                m_sceneBoundsMax[component] = std::max(
+                    m_sceneBoundsMax[component],
+                    vertex.position[component]);
+            }
+        }
+        UpdateCameraFromSceneBounds();
+    }
+    else
+    {
+        m_cameraPosition = { 0.0f, 0.15f, -1.2f };
+        m_cameraTarget = { 0.0f, 0.0f, 0.0f };
+    }
+
     m_vertexCount = static_cast<UINT>(scene.vertices.size());
     m_indexCount = static_cast<UINT>(scene.indices.size());
 
@@ -1075,6 +1131,43 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     }
 
     return CreateMaterialTextures(scene);
+}
+
+void RayTracingManager::UpdateCameraFromSceneBounds()
+{
+    const float aspectRatio = static_cast<float>(std::max(m_width, 1u)) /
+        static_cast<float>(std::max(m_height, 1u));
+    const float tanHalfVerticalFov = std::tan(c_verticalFovRadians * 0.5f);
+    const float tanHalfHorizontalFov = tanHalfVerticalFov * aspectRatio;
+
+    std::array<float, 3> halfExtent = {};
+    for (std::size_t component = 0; component < 3; ++component)
+    {
+        m_cameraTarget[component] =
+            (m_sceneBoundsMin[component] + m_sceneBoundsMax[component]) * 0.5f;
+        halfExtent[component] =
+            (m_sceneBoundsMax[component] - m_sceneBoundsMin[component]) * 0.5f;
+    }
+
+    const float verticalFitDistance =
+        halfExtent[1] / std::max(tanHalfVerticalFov, 1.0e-4f);
+    const float horizontalFitDistance =
+        halfExtent[0] / std::max(tanHalfHorizontalFov, 1.0e-4f);
+    const float maximumExtent = std::max(
+        halfExtent[0],
+        std::max(halfExtent[1], halfExtent[2]));
+    const float fitDistance = std::max(
+        std::max(verticalFitDistance, horizontalFitDistance),
+        std::max(maximumExtent * 0.05f, 0.01f));
+    const float cameraDistance =
+        halfExtent[2] + fitDistance * c_cameraFrameMargin;
+
+    m_cameraPosition =
+    {
+        m_cameraTarget[0],
+        m_cameraTarget[1],
+        m_cameraTarget[2] - cameraDistance
+    };
 }
 
 bool RayTracingManager::CreateMaterialTextures(const SceneData& scene)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -67,6 +68,7 @@ private:
     bool CreateBuildCommandObjects();
     bool CreateStaticGeometryBuffers();
     bool CreateMaterialTextures(const struct SceneData& scene);
+    void UpdateCameraFromSceneBounds();
     bool BuildBottomLevelAccelerationStructure();
     bool BuildTopLevelAccelerationStructure();
     bool ExecuteBuildCommandListAndWait();
@@ -112,6 +114,11 @@ private:
     UINT m_validationSeed = 0;
     float m_exposure = 0.0f;
     std::wstring m_sceneFilePath;
+    bool m_autoFrameCamera = false;
+    std::array<float, 3> m_sceneBoundsMin = { 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> m_sceneBoundsMax = { 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> m_cameraPosition = { 0.0f, 0.15f, -1.2f };
+    std::array<float, 3> m_cameraTarget = { 0.0f, 0.0f, 0.0f };
 
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;

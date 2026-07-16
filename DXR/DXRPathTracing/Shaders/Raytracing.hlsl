@@ -88,12 +88,12 @@ void MyRaygenShader_RadianceRay()
             (uv.x * 2.0f - 1.0f) * aspectRatio * tanHalfFov,
             (1.0f - uv.y * 2.0f) * tanHalfFov);
 
-        float3 cameraForward = normalize(c_cameraTarget - c_cameraPosition);
+        float3 cameraForward = normalize(g_cameraTarget - g_cameraPosition);
         float3 cameraRight = normalize(cross(c_cameraUp, cameraForward));
         float3 cameraUp = cross(cameraForward, cameraRight);
 
         RayDesc ray;
-        ray.Origin = c_cameraPosition;
+        ray.Origin = g_cameraPosition;
         ray.Direction = normalize(
             cameraForward + cameraRight * screenPosition.x + cameraUp * screenPosition.y);
         ray.TMin = c_rayTMin;
