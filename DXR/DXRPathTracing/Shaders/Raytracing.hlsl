@@ -103,6 +103,7 @@ void MyRaygenShader_RadianceRay()
         payload.color = float3(0.0f, 0.0f, 0.0f);
         payload.depth = 0;
 
+        RecordRadianceRay(0u);
         TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
         sampleRadiance = payload.color;
     }
@@ -132,6 +133,7 @@ void MyClosestHitShader_RadianceRay(
     inout RadiancePayload payload,
     in BuiltInTriangleIntersectionAttributes attributes)
 {
+    RecordSurfaceHit();
     uint indexOffset = PrimitiveIndex() * 3;
     uint i0 = g_indices[indexOffset + 0];
     uint i1 = g_indices[indexOffset + 1];
@@ -214,6 +216,7 @@ void MyClosestHitShader_RadianceRay(
 [shader("miss")]
 void MyMissShader_RadianceRay(inout RadiancePayload payload)
 {
+    RecordRadianceMiss();
     if (g_showNormalColor != 0 ||
         (g_sceneType == c_scenePbrGgx && g_pbrDebugView != c_pbrDebugBeauty))
     {

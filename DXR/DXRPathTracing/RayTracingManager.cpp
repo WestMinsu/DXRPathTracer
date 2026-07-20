@@ -31,6 +31,11 @@ namespace
     constexpr UINT c_descriptorCount =
         c_materialTextureDescriptorIndex + c_materialTextureDescriptorCount;
     constexpr UINT c_environmentDescriptorIndex = 2;
+    constexpr UINT c_statisticsShadowRayIndex =
+        RayTracingManager::c_statisticsRayDepthCount;
+    constexpr UINT c_statisticsHitIndex = c_statisticsShadowRayIndex + 1;
+    constexpr UINT c_statisticsMissIndex = c_statisticsHitIndex + 1;
+    constexpr UINT c_statisticsCounterCount = c_statisticsMissIndex + 1;
     constexpr UINT c_cubeFaceCount = 6;
     constexpr UINT c_ddsHeaderSize = 128;
     constexpr UINT c_ddsMagic = 0x20534444u;
@@ -66,8 +71,9 @@ namespace
         float cameraPosition[3];
         float cameraTarget[3];
         UINT overridePbrMaterial;
+        UINT enableStatistics;
     };
-    static_assert(sizeof(RenderSettingsConstants) == 20 * sizeof(std::uint32_t));
+    static_assert(sizeof(RenderSettingsConstants) == 21 * sizeof(std::uint32_t));
 
     UINT AlignUp(UINT value, UINT alignment)
     {
@@ -205,6 +211,9 @@ bool RayTracingManager::Initialize(HWND hWnd, ID3D12Device5* device, UINT width,
     if (!CreateOutputTexture())
         return false;
 
+    if (!CreateStatisticsResources())
+        return false;
+
     if (!CreateBuildCommandObjects())
         return false;
 
@@ -230,9 +239,32 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
 {
     if (!commandList || !m_stateObject || !m_rayGenShaderTable || !m_missShaderTable ||
         !m_hitGroupShaderTable || !m_descriptorHeap || !m_topLevelAS || !m_accumulationTexture ||
-        !m_environmentMap || !m_sceneMaterialBuffer || !m_primitiveMaterialIndexBuffer)
+        !m_environmentMap || !m_sceneMaterialBuffer || !m_primitiveMaterialIndexBuffer ||
+        !m_statisticsBuffer || !m_statisticsResetBuffer || !m_statisticsReadbackBuffer)
     {
         return;
+    }
+
+    if (m_enableStatistics)
+    {
+        D3D12_RESOURCE_BARRIER statisticsToCopy = {};
+        statisticsToCopy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        statisticsToCopy.Transition.pResource = m_statisticsBuffer.Get();
+        statisticsToCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        statisticsToCopy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+        statisticsToCopy.Transition.Subresource =
+            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &statisticsToCopy);
+        commandList->CopyBufferRegion(
+            m_statisticsBuffer.Get(),
+            0,
+            m_statisticsResetBuffer.Get(),
+            0,
+            sizeof(UINT) * c_statisticsCounterCount);
+        std::swap(
+            statisticsToCopy.Transition.StateBefore,
+            statisticsToCopy.Transition.StateAfter);
+        commandList->ResourceBarrier(1, &statisticsToCopy);
     }
 
     ID3D12DescriptorHeap* descriptorHeaps[] = { m_descriptorHeap.Get() };
@@ -266,7 +298,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         m_cameraTarget.end(),
         renderSettings.cameraTarget);
     renderSettings.overridePbrMaterial = m_overridePbrMaterial ? 1u : 0u;
-    commandList->SetComputeRoot32BitConstants(4, 20, &renderSettings, 0);
+    renderSettings.enableStatistics = m_enableStatistics ? 1u : 0u;
+    commandList->SetComputeRoot32BitConstants(4, 21, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
     commandList->SetComputeRootDescriptorTable(5, environmentHandle);
@@ -277,6 +310,9 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     materialTextureHandle.ptr +=
         static_cast<SIZE_T>(c_materialTextureDescriptorIndex) * m_descriptorSize;
     commandList->SetComputeRootDescriptorTable(8, materialTextureHandle);
+    commandList->SetComputeRootUnorderedAccessView(
+        9,
+        m_statisticsBuffer->GetGPUVirtualAddress());
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -293,6 +329,33 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     dispatchDesc.Depth = 1;
 
     commandList->DispatchRays(&dispatchDesc);
+
+    if (m_enableStatistics)
+    {
+        D3D12_RESOURCE_BARRIER statisticsUavBarrier = {};
+        statisticsUavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        statisticsUavBarrier.UAV.pResource = m_statisticsBuffer.Get();
+        commandList->ResourceBarrier(1, &statisticsUavBarrier);
+
+        D3D12_RESOURCE_BARRIER statisticsToCopy = {};
+        statisticsToCopy.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        statisticsToCopy.Transition.pResource = m_statisticsBuffer.Get();
+        statisticsToCopy.Transition.StateBefore = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        statisticsToCopy.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        statisticsToCopy.Transition.Subresource =
+            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        commandList->ResourceBarrier(1, &statisticsToCopy);
+        commandList->CopyBufferRegion(
+            m_statisticsReadbackBuffer.Get(),
+            0,
+            m_statisticsBuffer.Get(),
+            0,
+            sizeof(UINT) * c_statisticsCounterCount);
+        std::swap(
+            statisticsToCopy.Transition.StateBefore,
+            statisticsToCopy.Transition.StateAfter);
+        commandList->ResourceBarrier(1, &statisticsToCopy);
+    }
 
     if (shouldAccumulate)
     {
@@ -543,6 +606,95 @@ bool RayTracingManager::CreateOutputTexture()
     return true;
 }
 
+bool RayTracingManager::CreateStatisticsResources()
+{
+    const UINT64 statisticsSize =
+        sizeof(UINT) * static_cast<UINT64>(c_statisticsCounterCount);
+
+    const D3D12_HEAP_PROPERTIES defaultHeap =
+        CreateHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    const D3D12_RESOURCE_DESC statisticsDesc = CreateBufferDesc(
+        statisticsSize,
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+    HRESULT hr = m_device->CreateCommittedResource(
+        &defaultHeap,
+        D3D12_HEAP_FLAG_NONE,
+        &statisticsDesc,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        nullptr,
+        IID_PPV_ARGS(&m_statisticsBuffer));
+    if (ReportFailure(hr, L"Statistics UAV creation failed."))
+        return false;
+    m_statisticsBuffer->SetName(L"Path tracing frame statistics");
+
+    const D3D12_RESOURCE_DESC stagingDesc = CreateBufferDesc(statisticsSize);
+    const D3D12_HEAP_PROPERTIES uploadHeap =
+        CreateHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    hr = m_device->CreateCommittedResource(
+        &uploadHeap,
+        D3D12_HEAP_FLAG_NONE,
+        &stagingDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&m_statisticsResetBuffer));
+    if (ReportFailure(hr, L"Statistics reset buffer creation failed."))
+        return false;
+    m_statisticsResetBuffer->SetName(L"Path tracing statistics zero buffer");
+
+    void* resetData = nullptr;
+    D3D12_RANGE noReadRange = { 0, 0 };
+    hr = m_statisticsResetBuffer->Map(0, &noReadRange, &resetData);
+    if (ReportFailure(hr, L"Statistics reset buffer mapping failed."))
+        return false;
+    std::memset(resetData, 0, static_cast<std::size_t>(statisticsSize));
+    D3D12_RANGE resetWriteRange = { 0, static_cast<SIZE_T>(statisticsSize) };
+    m_statisticsResetBuffer->Unmap(0, &resetWriteRange);
+
+    const D3D12_HEAP_PROPERTIES readbackHeap =
+        CreateHeapProperties(D3D12_HEAP_TYPE_READBACK);
+    hr = m_device->CreateCommittedResource(
+        &readbackHeap,
+        D3D12_HEAP_FLAG_NONE,
+        &stagingDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&m_statisticsReadbackBuffer));
+    if (ReportFailure(hr, L"Statistics readback buffer creation failed."))
+        return false;
+    m_statisticsReadbackBuffer->SetName(
+        L"Path tracing frame statistics readback");
+    return true;
+}
+
+void RayTracingManager::ReadFrameStatistics()
+{
+    if (!m_enableStatistics || !m_statisticsReadbackBuffer)
+    {
+        m_frameStatistics = {};
+        return;
+    }
+
+    const SIZE_T statisticsSize =
+        sizeof(UINT) * static_cast<SIZE_T>(c_statisticsCounterCount);
+    D3D12_RANGE readRange = { 0, statisticsSize };
+    UINT* counters = nullptr;
+    const HRESULT hr = m_statisticsReadbackBuffer->Map(
+        0,
+        &readRange,
+        reinterpret_cast<void**>(&counters));
+    if (ReportFailure(hr, L"Statistics readback mapping failed."))
+        return;
+
+    for (UINT depth = 0; depth < c_statisticsRayDepthCount; ++depth)
+        m_frameStatistics.raysByDepth[depth] = counters[depth];
+    m_frameStatistics.shadowRays = counters[c_statisticsShadowRayIndex];
+    m_frameStatistics.hitCount = counters[c_statisticsHitIndex];
+    m_frameStatistics.missCount = counters[c_statisticsMissIndex];
+
+    D3D12_RANGE noWriteRange = { 0, 0 };
+    m_statisticsReadbackBuffer->Unmap(0, &noWriteRange);
+}
+
 
 bool RayTracingManager::CreateEnvironmentMap()
 {
@@ -725,7 +877,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     materialTextureRange.OffsetInDescriptorsFromTableStart =
         D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParameters[9] = {};
+    D3D12_ROOT_PARAMETER rootParameters[10] = {};
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParameters[0].DescriptorTable.NumDescriptorRanges = 1;
     rootParameters[0].DescriptorTable.pDescriptorRanges = &outputRange;
@@ -749,7 +901,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 20;
+    rootParameters[4].Constants.Num32BitValues = 21;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     rootParameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -771,6 +923,11 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[8].DescriptorTable.NumDescriptorRanges = 1;
     rootParameters[8].DescriptorTable.pDescriptorRanges = &materialTextureRange;
     rootParameters[8].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParameters[9].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+    rootParameters[9].Descriptor.ShaderRegister = 2;
+    rootParameters[9].Descriptor.RegisterSpace = 0;
+    rootParameters[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_STATIC_SAMPLER_DESC staticSamplers[2] = {};
     staticSamplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;

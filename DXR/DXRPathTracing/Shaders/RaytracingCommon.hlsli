@@ -52,6 +52,10 @@ static const uint c_pbrParameterModeFixed = 0u;
 static const uint c_pbrParameterModeGlobal = 1u;
 static const uint c_pbrParameterModeFixedNoOverride = 2u;
 static const uint c_maxMaterialTextures = 64u;
+static const uint c_statisticsRayDepthCount = 9u;
+static const uint c_statisticsShadowRayIndex = 9u;
+static const uint c_statisticsHitIndex = 10u;
+static const uint c_statisticsMissIndex = 11u;
 static const float c_rayTMin = 0.001f;
 static const float c_rayTMax = 1000.0f;
 static const float c_rayOriginBias = 0.001f;
@@ -63,6 +67,7 @@ static const float c_twoPi = 6.283185307f;
 
 RWTexture2D<float4> g_output : register(u0);
 RWTexture2D<float4> g_accumulation : register(u1);
+RWStructuredBuffer<uint> g_statistics : register(u2);
 RaytracingAccelerationStructure g_scene : register(t0);
 StructuredBuffer<Vertex> g_vertices : register(t1);
 StructuredBuffer<uint> g_indices : register(t2);
@@ -91,7 +96,47 @@ cbuffer RenderSettings : register(b0)
     float3 g_cameraPosition;
     float3 g_cameraTarget;
     uint g_overridePbrMaterial;
+    uint g_enableStatistics;
 };
+
+void RecordRadianceRay(uint depth)
+{
+    if (g_enableStatistics != 0)
+    {
+        uint ignored;
+        InterlockedAdd(
+            g_statistics[min(depth, c_statisticsRayDepthCount - 1u)],
+            1u,
+            ignored);
+    }
+}
+
+void RecordShadowRay()
+{
+    if (g_enableStatistics != 0)
+    {
+        uint ignored;
+        InterlockedAdd(g_statistics[c_statisticsShadowRayIndex], 1u, ignored);
+    }
+}
+
+void RecordSurfaceHit()
+{
+    if (g_enableStatistics != 0)
+    {
+        uint ignored;
+        InterlockedAdd(g_statistics[c_statisticsHitIndex], 1u, ignored);
+    }
+}
+
+void RecordRadianceMiss()
+{
+    if (g_enableStatistics != 0)
+    {
+        uint ignored;
+        InterlockedAdd(g_statistics[c_statisticsMissIndex], 1u, ignored);
+    }
+}
 
 uint CreateRandomSeed(uint depth, uint primitiveIndex)
 {
@@ -210,6 +255,7 @@ float3 TraceLambertianBounce(float3 normal, float3 hitPosition, float3 albedo, u
     bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
     bouncePayload.depth = depth + 1;
 
+    RecordRadianceRay(bouncePayload.depth);
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
     return albedo * bouncePayload.color;
 }

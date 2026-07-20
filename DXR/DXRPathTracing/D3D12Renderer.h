@@ -26,6 +26,7 @@ public:
     }
     void SetComposeModelRoom(bool enabled) { m_composeModelRoom = enabled; }
     void SetVSyncEnabled(bool enabled) { m_vsyncEnabled = enabled; }
+    void SetCollectRayStatistics(bool enabled) { m_collectRayStatistics = enabled; }
     void ConfigureBenchmark(
         bool enabled,
         const std::wstring& outputPath,
@@ -127,6 +128,7 @@ private:
     bool m_imguiInitialized = false;
     bool m_vsyncEnabled = true;
     bool m_tearingSupported = false;
+    bool m_collectRayStatistics = false;
     bool m_showNormalColor = false;
     bool m_enableAccumulation = true;
     bool m_captureActive = false;

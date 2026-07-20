@@ -11,6 +11,33 @@
 class RayTracingManager
 {
 public:
+    static constexpr UINT c_statisticsRayDepthCount = 9;
+
+    struct FrameStatistics
+    {
+        std::array<UINT64, c_statisticsRayDepthCount> raysByDepth = {};
+        UINT64 shadowRays = 0;
+        UINT64 hitCount = 0;
+        UINT64 missCount = 0;
+
+        UINT64 GetPrimaryRayCount() const { return raysByDepth[0]; }
+        UINT64 GetBounceRayCount() const
+        {
+            UINT64 total = 0;
+            for (UINT depth = 1; depth < c_statisticsRayDepthCount; ++depth)
+                total += raysByDepth[depth];
+            return total;
+        }
+        double GetAveragePathLength() const
+        {
+            const UINT64 primaryRays = GetPrimaryRayCount();
+            return primaryRays > 0
+                ? static_cast<double>(primaryRays + GetBounceRayCount()) /
+                    static_cast<double>(primaryRays)
+                : 0.0;
+        }
+    };
+
     ~RayTracingManager();
 
     static constexpr UINT c_sceneCornellBox = 0;
@@ -37,10 +64,13 @@ public:
     void SetPbrMaterial(float metallic, float roughness);
     void SetPbrMaterialOverride(bool enabled);
     void SetIblSettings(bool enableIbl, float intensity);
+    void SetEnableStatistics(bool enabled) { m_enableStatistics = enabled; }
+    void ReadFrameStatistics();
     void SetValidationSeed(UINT validationSeed) { m_validationSeed = validationSeed; }
     void SetExposure(float exposure);
     void ResetAccumulation() { m_accumulatedSampleCount = 0; }
     UINT GetAccumulatedSampleCount() const { return m_accumulatedSampleCount; }
+    const FrameStatistics& GetFrameStatistics() const { return m_frameStatistics; }
 
     ID3D12Resource* GetOutputResource() const { return m_outputTexture.Get(); }
     ID3D12Resource* GetAccumulationResource() const { return m_accumulationTexture.Get(); }
@@ -58,6 +88,7 @@ private:
     static constexpr UINT c_maxBounce = 8;
     static constexpr UINT c_maxRecursionDepth = c_maxBounce + 1;
     bool CreateOutputTexture();
+    bool CreateStatisticsResources();
     bool CreateEnvironmentMap();
     bool CreateGlobalRootSignature();
     bool CreateRaytracingPipelineState();
@@ -113,6 +144,7 @@ private:
     float m_pbrRoughness = 0.35f;
     bool m_overridePbrMaterial = false;
     bool m_enableIbl = true;
+    bool m_enableStatistics = false;
     float m_iblIntensity = 1.0f;
     UINT m_validationSeed = 0;
     float m_exposure = 0.0f;
@@ -127,6 +159,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_accumulationTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_statisticsBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_statisticsResetBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_statisticsReadbackBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_environmentMap;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_descriptorHeap;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_globalRootSignature;
@@ -148,6 +183,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_instanceDescBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_blasScratchBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_tlasScratchBuffer;
+    FrameStatistics m_frameStatistics;
 };
 
 

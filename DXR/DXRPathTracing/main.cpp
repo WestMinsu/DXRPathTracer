@@ -36,6 +36,8 @@ namespace
         bool vsyncSpecified = false;
         bool benchmark = false;
         UINT benchmarkFrames = 600;
+        bool collectRayStatistics = false;
+        bool rayStatisticsSpecified = false;
         std::wstring benchmarkOutput;
         std::wstring outputPrefix;
         std::wstring sceneFilePath;
@@ -229,6 +231,12 @@ namespace
                 gOptions.benchmarkFrames = static_cast<UINT>(
                     _wtoi(arguments[++index]));
             }
+            else if (argument == L"--ray-stats" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.collectRayStatistics = _wtoi(arguments[++index]) != 0;
+                gOptions.rayStatisticsSpecified = true;
+            }
         }
 
         if (gOptions.width == 0)
@@ -239,6 +247,8 @@ namespace
             gOptions.sceneType = RayTracingManager::c_scenePbrGgx;
         if (gOptions.benchmark && !gOptions.vsyncSpecified)
             gOptions.vsync = false;
+        if (gOptions.benchmark && !gOptions.rayStatisticsSpecified)
+            gOptions.collectRayStatistics = true;
 
         LocalFree(arguments);
     }
@@ -292,6 +302,7 @@ namespace
             gOptions.benchmark,
             gOptions.benchmarkOutput,
             gOptions.benchmarkFrames);
+        gRenderer.SetCollectRayStatistics(gOptions.collectRayStatistics);
 
         if (gOptions.captureSamples > 0)
         {

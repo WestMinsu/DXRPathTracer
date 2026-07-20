@@ -204,6 +204,7 @@ float3 TracePbrBrdfWithMixtureSampling(PbrMaterial material, float3 normal, floa
     bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
     bouncePayload.depth = depth + 1;
 
+    RecordRadianceRay(bouncePayload.depth);
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
 
     return weightedBrdf * bouncePayload.color;

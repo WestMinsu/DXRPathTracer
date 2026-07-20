@@ -136,6 +136,7 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     m_rayTracingManager->SetSceneFilePath(m_sceneFilePath);
     m_rayTracingManager->SetComposeModelRoom(m_composeModelRoom);
     m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
+    m_rayTracingManager->SetEnableStatistics(m_collectRayStatistics);
     if (!m_rayTracingManager->Initialize(m_hWnd, m_device.Get(), m_width, m_height))
         return false;
 
@@ -165,6 +166,7 @@ void D3D12Renderer::Render()
     m_rayTracingManager->SetIblSettings(m_enableIbl, m_iblIntensity);
     m_rayTracingManager->SetValidationSeed(m_validationSeed);
     m_rayTracingManager->SetExposure(m_exposure);
+    m_rayTracingManager->SetEnableStatistics(m_collectRayStatistics);
 
     HRESULT hr = m_commandAllocator->Reset();
     if (ReportFailure(hr, L"Command allocator reset failed."))
@@ -322,6 +324,7 @@ void D3D12Renderer::Render()
 
     WaitForGpu();
     ReadGpuTimingResults();
+    m_rayTracingManager->ReadFrameStatistics();
     SavePendingCaptures();
     m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
 
@@ -677,7 +680,9 @@ bool D3D12Renderer::OpenBenchmarkCsv()
         "profile,internal_scale,max_bounce,camera_linear_speed,"
         "camera_angular_speed,object_linear_speed,object_angular_speed,"
         "primary_rays,shadow_rays,bounce_rays,average_path_length,"
-        "hit_count,miss_count,accumulated_samples\n");
+        "hit_count,miss_count,accumulated_samples,ray_depth_0,ray_depth_1,"
+        "ray_depth_2,ray_depth_3,ray_depth_4,ray_depth_5,ray_depth_6,"
+        "ray_depth_7,ray_depth_8\n");
     return true;
 }
 
@@ -697,23 +702,39 @@ void D3D12Renderer::RecordFrameMetrics(double cpuFrameMs)
     if (!m_benchmarkEnabled || m_benchmarkFinished || !m_benchmarkCsv)
         return;
 
-    const UINT64 primaryRayCount =
-        static_cast<UINT64>(m_width) * static_cast<UINT64>(m_height);
+    const RayTracingManager::FrameStatistics& statistics =
+        m_rayTracingManager->GetFrameStatistics();
     const UINT accumulatedSamples = m_rayTracingManager
         ? m_rayTracingManager->GetAccumulatedSampleCount()
         : 0u;
     std::fprintf(
         m_benchmarkCsv,
         "%llu,%.6f,%.6f,%.6f,%.6f,fixed,1.000000,%d,"
-        "0.000000,0.000000,0.000000,0.000000,%llu,,,,,,%u\n",
+        "0.000000,0.000000,0.000000,0.000000,%llu,%llu,%llu,"
+        "%.6f,%llu,%llu,%u",
         static_cast<unsigned long long>(m_benchmarkFramesWritten),
         m_cpuFrameMs,
         m_gpuDispatchMs,
         m_gpuUpscaleMs,
         m_gpuTotalMs,
         m_maxBounce,
-        static_cast<unsigned long long>(primaryRayCount),
+        static_cast<unsigned long long>(statistics.GetPrimaryRayCount()),
+        static_cast<unsigned long long>(statistics.shadowRays),
+        static_cast<unsigned long long>(statistics.GetBounceRayCount()),
+        statistics.GetAveragePathLength(),
+        static_cast<unsigned long long>(statistics.hitCount),
+        static_cast<unsigned long long>(statistics.missCount),
         accumulatedSamples);
+    for (UINT depth = 0;
+         depth < RayTracingManager::c_statisticsRayDepthCount;
+         ++depth)
+    {
+        std::fprintf(
+            m_benchmarkCsv,
+            ",%llu",
+            static_cast<unsigned long long>(statistics.raysByDepth[depth]));
+    }
+    std::fprintf(m_benchmarkCsv, "\n");
 
     ++m_benchmarkFramesWritten;
     if ((m_benchmarkFramesWritten % 60u) == 0u)
@@ -905,6 +926,7 @@ void D3D12Renderer::BuildImGuiFrame()
     const float frameTimeMs = io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f;
     ImGui::Text("Frame: %.2f ms (%.1f FPS)", frameTimeMs, io.Framerate);
     ImGui::Checkbox("VSync", &m_vsyncEnabled);
+    ImGui::Checkbox("Collect ray statistics", &m_collectRayStatistics);
     ImGui::Text(
         "CPU current/median: %.2f / %.2f ms",
         m_cpuFrameMs,
@@ -922,6 +944,32 @@ void D3D12Renderer::BuildImGuiFrame()
         m_gpuMedianMs,
         m_gpuP95Ms,
         m_gpuP99Ms);
+    if (m_collectRayStatistics && m_rayTracingManager)
+    {
+        const RayTracingManager::FrameStatistics& statistics =
+            m_rayTracingManager->GetFrameStatistics();
+        ImGui::Text(
+            "Rays primary/bounce/shadow: %llu / %llu / %llu",
+            static_cast<unsigned long long>(statistics.GetPrimaryRayCount()),
+            static_cast<unsigned long long>(statistics.GetBounceRayCount()),
+            static_cast<unsigned long long>(statistics.shadowRays));
+        ImGui::Text(
+            "Path avg/hit/miss: %.2f / %llu / %llu",
+            statistics.GetAveragePathLength(),
+            static_cast<unsigned long long>(statistics.hitCount),
+            static_cast<unsigned long long>(statistics.missCount));
+        ImGui::Text(
+            "Depth rays: %llu %llu %llu %llu %llu %llu %llu %llu %llu",
+            static_cast<unsigned long long>(statistics.raysByDepth[0]),
+            static_cast<unsigned long long>(statistics.raysByDepth[1]),
+            static_cast<unsigned long long>(statistics.raysByDepth[2]),
+            static_cast<unsigned long long>(statistics.raysByDepth[3]),
+            static_cast<unsigned long long>(statistics.raysByDepth[4]),
+            static_cast<unsigned long long>(statistics.raysByDepth[5]),
+            static_cast<unsigned long long>(statistics.raysByDepth[6]),
+            static_cast<unsigned long long>(statistics.raysByDepth[7]),
+            static_cast<unsigned long long>(statistics.raysByDepth[8]));
+    }
     ImGui::Separator();
     ImGui::InputInt("Target Samples", &m_captureTargetSamples);
     if (m_captureTargetSamples < 1)
@@ -1074,6 +1122,8 @@ void D3D12Renderer::ConfigureBenchmark(
     UINT frameLimit)
 {
     m_benchmarkEnabled = enabled;
+    if (enabled)
+        m_collectRayStatistics = true;
     m_benchmarkOutputPath = outputPath;
     m_benchmarkFrameLimit = frameLimit;
 }
