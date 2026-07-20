@@ -31,12 +31,17 @@ struct SceneMaterial
     float normalTextureScale;
 };
 
-struct SceneTexture
+struct SceneTextureMip
 {
     std::uint32_t width = 0;
     std::uint32_t height = 0;
-    std::uint32_t isSrgb = 0;
     std::vector<std::uint8_t> rgba8;
+};
+
+struct SceneTexture
+{
+    std::uint32_t isSrgb = 0;
+    std::vector<SceneTextureMip> mips;
 };
 
 static_assert(sizeof(SceneVertex) == 48);

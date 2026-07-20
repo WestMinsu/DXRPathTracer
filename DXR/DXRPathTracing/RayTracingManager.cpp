@@ -27,7 +27,7 @@ namespace
     constexpr wchar_t c_compiledShaderRelativePath[] = L"Shaders\\Raytracing.dxil";
     constexpr wchar_t c_environmentMapRelativePath[] = L"Assets\\Textures\\Cubemaps\\HDRI\\autumn_hill_view_4kSpecularHDR.dds";
     constexpr UINT c_materialTextureDescriptorIndex = 3;
-    constexpr UINT c_materialTextureDescriptorCount = 64;
+    constexpr UINT c_materialTextureDescriptorCount = 256;
     constexpr UINT c_descriptorCount =
         c_materialTextureDescriptorIndex + c_materialTextureDescriptorCount;
     constexpr UINT c_environmentDescriptorIndex = 2;
@@ -1376,7 +1376,7 @@ bool RayTracingManager::CreateMaterialTextures(const SceneData& scene)
 {
     if (scene.textures.size() > c_materialTextureDescriptorCount)
     {
-        ReportMessage(L"The scene exceeds the 64 material texture limit.");
+        ReportMessage(L"The scene exceeds the 256 material texture limit.");
         return false;
     }
 
@@ -1421,14 +1421,22 @@ bool RayTracingManager::CreateMaterialTextures(const SceneData& scene)
          ++textureIndex)
     {
         const SceneTexture& source = scene.textures[textureIndex];
+        if (source.mips.empty() ||
+            source.mips.size() > std::numeric_limits<UINT16>::max())
+        {
+            ReportMessage(L"A material texture has an invalid mip chain.");
+            return false;
+        }
+        const UINT mipCount = static_cast<UINT>(source.mips.size());
+        const SceneTextureMip& baseMip = source.mips.front();
 
         D3D12_RESOURCE_DESC textureDesc = {};
         textureDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
         textureDesc.Alignment = 0;
-        textureDesc.Width = source.width;
-        textureDesc.Height = source.height;
+        textureDesc.Width = baseMip.width;
+        textureDesc.Height = baseMip.height;
         textureDesc.DepthOrArraySize = 1;
-        textureDesc.MipLevels = 1;
+        textureDesc.MipLevels = static_cast<UINT16>(mipCount);
         textureDesc.Format = DXGI_FORMAT_R8G8B8A8_TYPELESS;
         textureDesc.SampleDesc.Count = 1;
         textureDesc.SampleDesc.Quality = 0;
@@ -1452,18 +1460,18 @@ bool RayTracingManager::CreateMaterialTextures(const SceneData& scene)
             L"Material texture " + std::to_wstring(textureIndex);
         gpuTexture->SetName(textureName.c_str());
 
-        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
-        UINT rowCount = 0;
-        UINT64 rowSizeInBytes = 0;
+        std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(mipCount);
+        std::vector<UINT> rowCounts(mipCount);
+        std::vector<UINT64> rowSizesInBytes(mipCount);
         UINT64 uploadSize = 0;
         m_device->GetCopyableFootprints(
             &textureDesc,
             0,
-            1,
+            mipCount,
             0,
-            &footprint,
-            &rowCount,
-            &rowSizeInBytes,
+            footprints.data(),
+            rowCounts.data(),
+            rowSizesInBytes.data(),
             &uploadSize);
 
         Microsoft::WRL::ComPtr<ID3D12Resource> uploadBuffer;
@@ -1486,35 +1494,48 @@ bool RayTracingManager::CreateMaterialTextures(const SceneData& scene)
         if (ReportFailure(hr, L"Material texture upload buffer mapping failed."))
             return false;
 
-        const std::size_t sourceRowPitch =
-            static_cast<std::size_t>(source.width) * 4u;
-        std::uint8_t* destination =
-            static_cast<std::uint8_t*>(mappedData) + footprint.Offset;
-        for (UINT row = 0; row < source.height; ++row)
+        for (UINT mipIndex = 0; mipIndex < mipCount; ++mipIndex)
         {
-            std::memcpy(
-                destination + static_cast<std::size_t>(row) * footprint.Footprint.RowPitch,
-                source.rgba8.data() + static_cast<std::size_t>(row) * sourceRowPitch,
-                sourceRowPitch);
+            const SceneTextureMip& sourceMip = source.mips[mipIndex];
+            const D3D12_PLACED_SUBRESOURCE_FOOTPRINT& footprint =
+                footprints[mipIndex];
+            const std::size_t sourceRowPitch =
+                static_cast<std::size_t>(sourceMip.width) * 4u;
+            std::uint8_t* destination =
+                static_cast<std::uint8_t*>(mappedData) + footprint.Offset;
+            for (UINT row = 0; row < sourceMip.height; ++row)
+            {
+                std::memcpy(
+                    destination +
+                        static_cast<std::size_t>(row) *
+                        footprint.Footprint.RowPitch,
+                    sourceMip.rgba8.data() +
+                        static_cast<std::size_t>(row) * sourceRowPitch,
+                    sourceRowPitch);
+            }
         }
         uploadBuffer->Unmap(0, nullptr);
 
-        D3D12_TEXTURE_COPY_LOCATION destinationLocation = {};
-        destinationLocation.pResource = gpuTexture.Get();
-        destinationLocation.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-        destinationLocation.SubresourceIndex = 0;
+        for (UINT mipIndex = 0; mipIndex < mipCount; ++mipIndex)
+        {
+            D3D12_TEXTURE_COPY_LOCATION destinationLocation = {};
+            destinationLocation.pResource = gpuTexture.Get();
+            destinationLocation.Type =
+                D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            destinationLocation.SubresourceIndex = mipIndex;
 
-        D3D12_TEXTURE_COPY_LOCATION sourceLocation = {};
-        sourceLocation.pResource = uploadBuffer.Get();
-        sourceLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-        sourceLocation.PlacedFootprint = footprint;
-        m_buildCommandList->CopyTextureRegion(
-            &destinationLocation,
-            0,
-            0,
-            0,
-            &sourceLocation,
-            nullptr);
+            D3D12_TEXTURE_COPY_LOCATION sourceLocation = {};
+            sourceLocation.pResource = uploadBuffer.Get();
+            sourceLocation.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+            sourceLocation.PlacedFootprint = footprints[mipIndex];
+            m_buildCommandList->CopyTextureRegion(
+                &destinationLocation,
+                0,
+                0,
+                0,
+                &sourceLocation,
+                nullptr);
+        }
 
         D3D12_RESOURCE_BARRIER barrier = {};
         barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
@@ -1531,7 +1552,7 @@ bool RayTracingManager::CreateMaterialTextures(const SceneData& scene)
             : DXGI_FORMAT_R8G8B8A8_UNORM;
         srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Texture2D.MostDetailedMip = 0;
-        srvDesc.Texture2D.MipLevels = 1;
+        srvDesc.Texture2D.MipLevels = mipCount;
         srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
 
         D3D12_CPU_DESCRIPTOR_HANDLE srvHandle =

@@ -272,12 +272,26 @@ bool SceneData::IsValid() const
 
     for (const SceneTexture& texture : textures)
     {
-        const std::uint64_t requiredSize =
-            static_cast<std::uint64_t>(texture.width) * texture.height * 4u;
-        if (texture.width == 0 || texture.height == 0 ||
-            requiredSize != texture.rgba8.size())
-        {
+        if (texture.mips.empty())
             return false;
+
+        std::uint32_t expectedWidth = texture.mips.front().width;
+        std::uint32_t expectedHeight = texture.mips.front().height;
+        for (const SceneTextureMip& mip : texture.mips)
+        {
+            const std::uint64_t requiredSize =
+                static_cast<std::uint64_t>(mip.width) * mip.height * 4u;
+            if (mip.width == 0 ||
+                mip.height == 0 ||
+                mip.width != expectedWidth ||
+                mip.height != expectedHeight ||
+                requiredSize != mip.rgba8.size())
+            {
+                return false;
+            }
+
+            expectedWidth = (std::max)(expectedWidth / 2u, 1u);
+            expectedHeight = (std::max)(expectedHeight / 2u, 1u);
         }
     }
 

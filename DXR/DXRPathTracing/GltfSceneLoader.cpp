@@ -406,12 +406,17 @@ namespace
         }
         if (SUCCEEDED(hr))
         {
-            texture.rgba8.resize(static_cast<std::size_t>(byteCount));
+            texture.mips.clear();
+            texture.mips.push_back({});
+            SceneTextureMip& baseMip = texture.mips.back();
+            baseMip.width = width;
+            baseMip.height = height;
+            baseMip.rgba8.resize(static_cast<std::size_t>(byteCount));
             hr = converter->CopyPixels(
                 nullptr,
                 static_cast<UINT>(rowPitch),
                 static_cast<UINT>(byteCount),
-                texture.rgba8.data());
+                baseMip.rgba8.data());
         }
 
         converter.Reset();
@@ -424,9 +429,99 @@ namespace
         if (FAILED(hr))
             return Fail(errorMessage, L"WIC failed to decode a glTF texture image to RGBA8.");
 
-        texture.width = width;
-        texture.height = height;
         return true;
+    }
+
+    float SrgbToLinear(float value)
+    {
+        return value <= 0.04045f
+            ? value / 12.92f
+            : std::pow((value + 0.055f) / 1.055f, 2.4f);
+    }
+
+    float LinearToSrgb(float value)
+    {
+        const float clamped = Clamp01(value);
+        return clamped <= 0.0031308f
+            ? clamped * 12.92f
+            : 1.055f * std::pow(clamped, 1.0f / 2.4f) - 0.055f;
+    }
+
+    std::uint8_t FloatToByte(float value)
+    {
+        const float scaled = Clamp01(value) * 255.0f;
+        return static_cast<std::uint8_t>(std::floor(scaled + 0.5f));
+    }
+
+    void GenerateMipChain(SceneTexture& texture)
+    {
+        while (!texture.mips.empty())
+        {
+            const SceneTextureMip& source = texture.mips.back();
+            if (source.width == 1 && source.height == 1)
+                break;
+
+            SceneTextureMip destination;
+            destination.width = (std::max)(source.width / 2u, 1u);
+            destination.height = (std::max)(source.height / 2u, 1u);
+            destination.rgba8.resize(
+                static_cast<std::size_t>(destination.width) *
+                destination.height * 4u);
+
+            for (std::uint32_t y = 0; y < destination.height; ++y)
+            {
+                const std::uint32_t sourceYBegin =
+                    y * source.height / destination.height;
+                const std::uint32_t sourceYEnd =
+                    (y + 1u) * source.height / destination.height;
+                for (std::uint32_t x = 0; x < destination.width; ++x)
+                {
+                    const std::uint32_t sourceXBegin =
+                        x * source.width / destination.width;
+                    const std::uint32_t sourceXEnd =
+                        (x + 1u) * source.width / destination.width;
+                    float sums[4] = {};
+                    std::uint32_t sampleCount = 0;
+                    for (std::uint32_t sourceY = sourceYBegin;
+                         sourceY < sourceYEnd;
+                         ++sourceY)
+                    {
+                        for (std::uint32_t sourceX = sourceXBegin;
+                             sourceX < sourceXEnd;
+                             ++sourceX)
+                        {
+                            const std::size_t sourceOffset =
+                                (static_cast<std::size_t>(sourceY) *
+                                 source.width + sourceX) * 4u;
+                            for (std::size_t channel = 0; channel < 4; ++channel)
+                            {
+                                float value =
+                                    source.rgba8[sourceOffset + channel] /
+                                    255.0f;
+                                if (texture.isSrgb != 0 && channel < 3)
+                                    value = SrgbToLinear(value);
+                                sums[channel] += value;
+                            }
+                            ++sampleCount;
+                        }
+                    }
+
+                    const std::size_t destinationOffset =
+                        (static_cast<std::size_t>(y) *
+                         destination.width + x) * 4u;
+                    for (std::size_t channel = 0; channel < 4; ++channel)
+                    {
+                        float value = sums[channel] /
+                            static_cast<float>((std::max)(sampleCount, 1u));
+                        if (texture.isSrgb != 0 && channel < 3)
+                            value = LinearToSrgb(value);
+                        destination.rgba8[destinationOffset + channel] =
+                            FloatToByte(value);
+                    }
+                }
+            }
+            texture.mips.push_back(std::move(destination));
+        }
     }
 
     bool ValidateTextureView(
@@ -492,6 +587,7 @@ namespace
         texture.isSrgb = isSrgb ? 1u : 0u;
         if (!DecodeRgba8(encoded, texture, errorMessage))
             return false;
+        GenerateMipChain(texture);
 
         textureIndex = static_cast<std::uint32_t>(scene.textures.size());
         scene.textures.push_back(std::move(texture));
@@ -532,8 +628,7 @@ namespace
             return true;
         }
 
-        return material.occlusion_texture.texture ||
-            material.emissive_texture.texture ||
+        return material.emissive_texture.texture ||
             material.extensions_count > 0;
     }
 
@@ -542,7 +637,9 @@ namespace
         const std::wstring& gltfPath,
         SceneData& scene,
         std::wstring& errorMessage,
-        std::uint32_t& defaultMaterialIndex)
+        std::uint32_t& defaultMaterialIndex,
+        const GltfLoadOptions& options,
+        GltfLoadReport* report)
     {
         scene.materials.reserve(data.materials_count + 1);
         std::vector<LoadedTextureKey> loadedTextures;
@@ -553,11 +650,18 @@ namespace
             const cgltf_material& source = data.materials[materialIndex];
             if (source.alpha_mode != cgltf_alpha_mode_opaque)
             {
+                if (options.skipNonOpaquePrimitives)
+                {
+                    scene.materials.push_back(MakeDefaultMaterial());
+                    continue;
+                }
                 return Fail(
                     errorMessage,
                     L"Material " + std::to_wstring(materialIndex) +
                     L" uses alpha masking or blending, which is not supported yet.");
             }
+            if (source.occlusion_texture.texture && report)
+                ++report->ignoredOcclusionTextureCount;
             if (HasUnsupportedMaterialFeature(source))
             {
                 return Fail(
@@ -619,6 +723,8 @@ namespace
             material.emission[2] = std::max(source.emissive_factor[2], 0.0f) * emissiveStrength;
             material.pbrParameterMode = c_pbrParameterModeFixed;
             scene.materials.push_back(material);
+            if (report)
+                ++report->loadedMaterialCount;
         }
 
         if (scene.materials.size() >= std::numeric_limits<std::uint32_t>::max())
@@ -870,8 +976,27 @@ namespace
         const NodeTransform& transform,
         std::uint32_t defaultMaterialIndex,
         SceneData& scene,
-        std::wstring& errorMessage)
+        std::wstring& errorMessage,
+        const GltfLoadOptions& loadOptions,
+        GltfLoadReport* report)
     {
+        if (report)
+            ++report->sourcePrimitiveCount;
+
+        if (primitive.material &&
+            primitive.material->alpha_mode != cgltf_alpha_mode_opaque)
+        {
+            if (loadOptions.skipNonOpaquePrimitives)
+            {
+                if (report)
+                    ++report->skippedNonOpaquePrimitiveCount;
+                return true;
+            }
+            return Fail(
+                errorMessage,
+                L"A primitive uses alpha masking or blending, which is not supported yet.");
+        }
+
         if (primitive.type != cgltf_primitive_type_triangles)
             return Fail(errorMessage, L"Only triangle-list glTF primitives are supported.");
         if (primitive.has_draco_mesh_compression)
@@ -1016,6 +1141,8 @@ namespace
             scene.primitiveMaterialIndices.end(),
             indexCount / 3,
             materialIndex);
+        if (report)
+            ++report->loadedPrimitiveCount;
         return true;
     }
 
@@ -1024,7 +1151,9 @@ namespace
         const cgltf_node& node,
         std::uint32_t defaultMaterialIndex,
         SceneData& scene,
-        std::wstring& errorMessage)
+        std::wstring& errorMessage,
+        const GltfLoadOptions& loadOptions,
+        GltfLoadReport* report)
     {
         if (node.skin)
             return Fail(errorMessage, L"Skinned mesh nodes are not supported yet.");
@@ -1047,7 +1176,9 @@ namespace
                     transform,
                     defaultMaterialIndex,
                     scene,
-                    errorMessage))
+                    errorMessage,
+                    loadOptions,
+                    report))
                 {
                     return false;
                 }
@@ -1062,7 +1193,9 @@ namespace
                     *node.children[childIndex],
                     defaultMaterialIndex,
                     scene,
-                    errorMessage))
+                    errorMessage,
+                    loadOptions,
+                    report))
             {
                 return false;
             }
@@ -1074,10 +1207,14 @@ namespace
 bool LoadGltfSceneData(
     const std::wstring& filePath,
     SceneData& scene,
-    std::wstring& errorMessage)
+    std::wstring& errorMessage,
+    const GltfLoadOptions& loadOptions,
+    GltfLoadReport* report)
 {
     scene = {};
     errorMessage.clear();
+    if (report)
+        *report = {};
     if (filePath.empty())
         return Fail(errorMessage, L"The glTF file path is empty.");
 
@@ -1085,12 +1222,15 @@ bool LoadGltfSceneData(
     if (!WideToUtf8(filePath, utf8Path))
         return Fail(errorMessage, L"The glTF file path cannot be converted to UTF-8.");
 
-    cgltf_options options = {};
-    options.file.read = ReadFileUtf8;
-    options.file.release = ReleaseFileMemory;
+    cgltf_options parserOptions = {};
+    parserOptions.file.read = ReadFileUtf8;
+    parserOptions.file.release = ReleaseFileMemory;
 
     cgltf_data* parsedData = nullptr;
-    cgltf_result result = cgltf_parse_file(&options, utf8Path.c_str(), &parsedData);
+    cgltf_result result = cgltf_parse_file(
+        &parserOptions,
+        utf8Path.c_str(),
+        &parsedData);
     if (result != cgltf_result_success)
     {
         return Fail(
@@ -1099,7 +1239,10 @@ bool LoadGltfSceneData(
     }
 
     std::unique_ptr<cgltf_data, void(*)(cgltf_data*)> data(parsedData, cgltf_free);
-    result = cgltf_load_buffers(&options, data.get(), utf8Path.c_str());
+    result = cgltf_load_buffers(
+        &parserOptions,
+        data.get(),
+        utf8Path.c_str());
     if (result != cgltf_result_success)
     {
         return Fail(
@@ -1122,7 +1265,9 @@ bool LoadGltfSceneData(
         filePath,
         loadedScene,
         errorMessage,
-        defaultMaterialIndex))
+        defaultMaterialIndex,
+        loadOptions,
+        report))
     {
         return false;
     }
@@ -1143,7 +1288,9 @@ bool LoadGltfSceneData(
                     *activeScene->nodes[nodeIndex],
                     defaultMaterialIndex,
                     loadedScene,
-                    errorMessage))
+                    errorMessage,
+                    loadOptions,
+                    report))
             {
                 return false;
             }
@@ -1159,7 +1306,9 @@ bool LoadGltfSceneData(
                     data->nodes[nodeIndex],
                     defaultMaterialIndex,
                     loadedScene,
-                    errorMessage))
+                    errorMessage,
+                    loadOptions,
+                    report))
             {
                 return false;
             }
@@ -1169,6 +1318,9 @@ bool LoadGltfSceneData(
     if (!loadedScene.IsValid())
         return Fail(errorMessage, L"The flattened glTF scene contains no valid triangle geometry.");
 
+    if (report)
+        report->loadedTextureCount =
+            static_cast<std::uint32_t>(loadedScene.textures.size());
     scene = std::move(loadedScene);
     return true;
 }
