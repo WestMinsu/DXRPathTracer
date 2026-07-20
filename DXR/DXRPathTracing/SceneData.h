@@ -44,10 +44,20 @@ struct SceneTexture
     std::vector<SceneTextureMip> mips;
 };
 
+// This layout is mirrored by SceneInstanceMetadata in RaytracingCommon.hlsli.
+struct SceneInstanceMetadata
+{
+    std::uint32_t vertexOffset = 0;
+    std::uint32_t indexOffset = 0;
+    std::uint32_t primitiveOffset = 0;
+    std::uint32_t reserved = 0;
+};
+
 static_assert(sizeof(SceneVertex) == 48);
 static_assert(offsetof(SceneVertex, texCoord) == 24);
 static_assert(offsetof(SceneVertex, tangent) == 32);
 static_assert(sizeof(SceneMaterial) == 52);
+static_assert(sizeof(SceneInstanceMetadata) == 16);
 static_assert(offsetof(SceneMaterial, metallic) == 12);
 static_assert(offsetof(SceneMaterial, roughness) == 16);
 static_assert(offsetof(SceneMaterial, emission) == 20);
@@ -76,7 +86,21 @@ struct SceneBounds
     float maximum[3];
 };
 
+struct SceneAreaLight
+{
+    float position[3];
+    float right[3];
+    float up[3];
+    float radiance[3];
+    float width = 0.0f;
+    float height = 0.0f;
+};
+
 SceneData CreateCornellBoxSceneData();
 SceneData CreatePbrGgxSceneData();
+SceneData CreateRollingMetalSphereSceneData(float radius);
 bool ComputeSceneBounds(const SceneData& scene, SceneBounds& bounds);
 bool AppendPbrModelRoom(SceneData& scene, const SceneBounds& modelBounds);
+bool AppendAreaLights(
+    SceneData& scene,
+    const std::vector<SceneAreaLight>& lights);

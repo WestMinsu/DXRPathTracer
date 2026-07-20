@@ -38,13 +38,13 @@ PBR 장면에서 glTF 2.0 모델을 사용하려면 `--model` 또는 `--gltf`로
 - Metallic-Roughness texture: 선형 SRV, G 채널은 roughness, B 채널은 metallic
 - Normal texture: 선형 SRV, glTF `scale` 적용
 - 외부 이미지 URI, base64 data URI, GLB image bufferView
-- 최대 64개의 GPU material texture
+- 최대 256개의 GPU material texture
+- CPU box filter로 생성한 전체 mip chain
 
 ## 현재 제한
 
 - `TEXCOORD_1`, `KHR_texture_transform`, BasisU, WebP는 지원하지 않는다.
 - material texture sampler는 linear + repeat만 지원한다.
-- texture mipmap을 생성하지 않고 mip 0을 샘플링한다.
 - alpha mask/blend, emissive/occlusion texture 및 PBR material extension은 지원하지 않는다.
 - skin, morph target, Draco 압축, GPU instancing은 지원하지 않는다.
 
@@ -67,3 +67,45 @@ UI에서 PBR Metallic/Roughness 슬라이더를 움직이면 자동으로 모델
 .\x64\Debug\DXRPathTracing.exe --model Assets\Models\scene.gltf `
     --pbr-debug roughness --override-pbr-material --pbr-roughness 0.8
 ```
+
+## Sponza-lite 동적 장면
+
+`--sponza-lite`는 Khronos glTF Sample Assets의 core Sponza를 다음 경로에서
+로드한다.
+
+```text
+Assets\KhronosGlTFSampleAssets\Models\Sponza\glTF\Sponza.gltf
+```
+
+`Assets/`는 로컬 대용량 자산이므로 Git에서 제외한다. 장면은 다음 규칙으로
+재현 가능하게 구성한다.
+
+- `alphaMode != OPAQUE` primitive 제외
+- Base Color, Metallic-Roughness, Normal Map만 사용
+- `Config\sponza_lights.json`의 하향 사각형 면광원 16개와 IBL 사용
+- 정적 Sponza와 면광원은 하나의 정적 BLAS
+- 줄무늬가 있는 금속 구는 별도의 동적 BLAS
+- 두 instance의 vertex/index/primitive offset은 GPU instance metadata로 구분
+- 구의 강체 변환은 BLAS를 다시 만들지 않고 TLAS `PERFORM_UPDATE`로 반영
+- 20~25초 실험 구간에 구가 왕복 이동하며 이동 거리만큼 회전
+
+실시간 조작은 `WASD` 이동, `Q/E` 하강·상승, `Shift` 가속, 마우스 오른쪽
+드래그 회전을 사용한다.
+
+```powershell
+.\x64\Debug\DXRPathTracing.exe --sponza-lite
+```
+
+재현 가능한 30초 경로는 별도 JSON을 지정한다. JSON 경로 재생 중에는 자유
+카메라 입력보다 경로가 우선한다.
+
+```powershell
+.\x64\Debug\DXRPathTracing.exe --sponza-lite `
+    --camera-path Config\sponza_camera_path.json `
+    --benchmark --benchmark-output BenchmarkOutput\SponzaLite\baseline.csv `
+    --benchmark-frames 1801 --vsync 0
+```
+
+실행할 때 `BenchmarkOutput\SponzaLite\scene_manifest.json`에 원본/로드/제외
+primitive 수, material/texture 수, 면광원 수, 동적 구 활성화 여부를 기록한다.
+`BenchmarkOutput/`도 생성 결과이므로 Git에서 제외한다.

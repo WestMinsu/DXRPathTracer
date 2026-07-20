@@ -452,6 +452,90 @@ bool AppendPbrModelRoom(SceneData& scene, const SceneBounds& modelBounds)
     return scene.IsValid();
 }
 
+bool AppendAreaLights(
+    SceneData& scene,
+    const std::vector<SceneAreaLight>& lights)
+{
+    for (const SceneAreaLight& light : lights)
+    {
+        const Float3 right = MakeFloat3(
+            light.right[0], light.right[1], light.right[2]);
+        const Float3 up = MakeFloat3(
+            light.up[0], light.up[1], light.up[2]);
+        const float rightLength = std::sqrt(
+            right.x * right.x + right.y * right.y + right.z * right.z);
+        const float upLength = std::sqrt(
+            up.x * up.x + up.y * up.y + up.z * up.z);
+        if (!(light.width > 0.0f) || !(light.height > 0.0f) ||
+            rightLength <= 1.0e-6f || upLength <= 1.0e-6f)
+        {
+            return false;
+        }
+
+        const Float3 rightUnit = MakeFloat3(
+            right.x / rightLength,
+            right.y / rightLength,
+            right.z / rightLength);
+        const Float3 upUnit = MakeFloat3(
+            up.x / upLength,
+            up.y / upLength,
+            up.z / upLength);
+        Float3 normal = MakeFloat3(
+            rightUnit.y * upUnit.z - rightUnit.z * upUnit.y,
+            rightUnit.z * upUnit.x - rightUnit.x * upUnit.z,
+            rightUnit.x * upUnit.y - rightUnit.y * upUnit.x);
+        const float normalLength = std::sqrt(
+            normal.x * normal.x + normal.y * normal.y + normal.z * normal.z);
+        if (normalLength <= 1.0e-6f)
+            return false;
+        normal = MakeFloat3(
+            normal.x / normalLength,
+            normal.y / normalLength,
+            normal.z / normalLength);
+
+        const Float3 center = MakeFloat3(
+            light.position[0], light.position[1], light.position[2]);
+        const Float3 rightHalf = MakeFloat3(
+            rightUnit.x * light.width * 0.5f,
+            rightUnit.y * light.width * 0.5f,
+            rightUnit.z * light.width * 0.5f);
+        const Float3 upHalf = MakeFloat3(
+            upUnit.x * light.height * 0.5f,
+            upUnit.y * light.height * 0.5f,
+            upUnit.z * light.height * 0.5f);
+        const auto corner = [&center](const Float3& a, const Float3& b)
+        {
+            return MakeFloat3(
+                center.x + a.x + b.x,
+                center.y + a.y + b.y,
+                center.z + a.z + b.z);
+        };
+
+        const std::uint32_t materialIndex =
+            static_cast<std::uint32_t>(scene.materials.size());
+        scene.materials.push_back(MakeMaterial(
+            MakeFloat3(0.0f, 0.0f, 0.0f),
+            0.0f,
+            1.0f,
+            MakeFloat3(
+                light.radiance[0],
+                light.radiance[1],
+                light.radiance[2]),
+            c_pbrParameterModeFixedNoOverride));
+        AddQuad(
+            scene,
+            corner(MakeFloat3(-rightHalf.x, -rightHalf.y, -rightHalf.z),
+                   MakeFloat3(-upHalf.x, -upHalf.y, -upHalf.z)),
+            corner(rightHalf,
+                   MakeFloat3(-upHalf.x, -upHalf.y, -upHalf.z)),
+            corner(rightHalf, upHalf),
+            corner(MakeFloat3(-rightHalf.x, -rightHalf.y, -rightHalf.z), upHalf),
+            normal,
+            materialIndex);
+    }
+    return scene.IsValid();
+}
+
 SceneData CreateCornellBoxSceneData()
 {
     SceneData scene;
@@ -522,5 +606,52 @@ SceneData CreatePbrGgxSceneData()
         MakeFloat3( c_pbrSceneHalfWidth, c_pbrFloorY, c_pbrSceneNearZ),
         MakeFloat3(0.0f, 1.0f, 0.0f),
         floorMaterial);
+    return scene;
+}
+
+SceneData CreateRollingMetalSphereSceneData(float radius)
+{
+    SceneData scene;
+    const float safeRadius = (std::max)(radius, 0.001f);
+    scene.materials =
+    {
+        MakeMaterial(
+            MakeFloat3(1.0f, 0.766f, 0.336f),
+            1.0f,
+            0.25f,
+            MakeFloat3(0.0f, 0.0f, 0.0f),
+            c_pbrParameterModeFixedNoOverride),
+        MakeMaterial(
+            MakeFloat3(0.06f, 0.07f, 0.08f),
+            1.0f,
+            0.58f,
+            MakeFloat3(0.0f, 0.0f, 0.0f),
+            c_pbrParameterModeFixedNoOverride)
+    };
+
+    AddPbrSphere(
+        scene,
+        MakeFloat3(0.0f, 0.0f, 0.0f),
+        safeRadius,
+        0u);
+
+    for (std::size_t primitiveIndex = 0;
+         primitiveIndex < scene.primitiveMaterialIndices.size();
+         ++primitiveIndex)
+    {
+        const std::size_t indexOffset = primitiveIndex * 3u;
+        const SceneVertex& vertex0 = scene.vertices[scene.indices[indexOffset]];
+        const SceneVertex& vertex1 =
+            scene.vertices[scene.indices[indexOffset + 1u]];
+        const SceneVertex& vertex2 =
+            scene.vertices[scene.indices[indexOffset + 2u]];
+        const float centroidX =
+            (vertex0.position[0] +
+             vertex1.position[0] +
+             vertex2.position[0]) / 3.0f;
+        if (std::abs(centroidX) <= safeRadius * 0.18f)
+            scene.primitiveMaterialIndices[primitiveIndex] = 1u;
+    }
+
     return scene;
 }

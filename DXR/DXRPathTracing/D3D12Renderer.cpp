@@ -207,6 +207,10 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     m_rayTracingManager.reset(new RayTracingManager());
     m_rayTracingManager->SetSceneFilePath(m_sceneFilePath);
     m_rayTracingManager->SetComposeModelRoom(m_composeModelRoom);
+    m_rayTracingManager->SetSponzaLite(m_sponzaLite);
+    m_rayTracingManager->SetSponzaLightConfigPath(
+        m_sponzaLightConfigPath);
+    m_rayTracingManager->SetSceneManifestPath(m_sceneManifestPath);
     m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
     m_rayTracingManager->SetEnableStatistics(m_collectRayStatistics);
     if (!m_rayTracingManager->Initialize(m_hWnd, m_device.Get(), m_width, m_height))
@@ -214,6 +218,7 @@ bool D3D12Renderer::Initialize(HWND hWnd)
 
     if (!LoadCameraPath())
         return false;
+    InitializeFreeCamera();
 
     if (!InitializeImGui())
         return false;
@@ -230,7 +235,20 @@ void D3D12Renderer::Render()
         return;
 
     const auto cpuFrameBegin = std::chrono::steady_clock::now();
-    UpdateCameraPath();
+    double frameDeltaSeconds = 1.0 / 60.0;
+    if (m_hasLastRenderTime)
+    {
+        frameDeltaSeconds = std::chrono::duration<double>(
+            cpuFrameBegin - m_lastRenderTime).count();
+        frameDeltaSeconds =
+            (std::max)(1.0 / 1000.0, (std::min)(frameDeltaSeconds, 0.1));
+    }
+    m_lastRenderTime = cpuFrameBegin;
+    m_hasLastRenderTime = true;
+    if (m_cameraPathLoaded)
+        UpdateCameraPath();
+    else
+        UpdateFreeCamera(frameDeltaSeconds);
     BuildImGuiFrame();
     m_rayTracingManager->SetShowNormalColor(m_showNormalColor);
     m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
@@ -261,6 +279,10 @@ void D3D12Renderer::Render()
         D3D12_QUERY_TYPE_TIMESTAMP,
         c_gpuDispatchBegin);
     m_rayTracingManager->DispatchRays(m_commandList.Get());
+    m_objectLinearSpeed =
+        m_rayTracingManager->GetDynamicObjectLinearSpeed();
+    m_objectAngularSpeed =
+        m_rayTracingManager->GetDynamicObjectAngularSpeed();
     m_commandList->EndQuery(
         m_gpuTimestampQueryHeap.Get(),
         D3D12_QUERY_TYPE_TIMESTAMP,
@@ -729,6 +751,161 @@ bool D3D12Renderer::LoadCameraPath()
     return true;
 }
 
+void D3D12Renderer::OnKey(UINT virtualKey, bool pressed)
+{
+    if (virtualKey < m_keyPressed.size())
+        m_keyPressed[virtualKey] = pressed;
+}
+
+void D3D12Renderer::OnRightMouseButton(bool pressed, int x, int y)
+{
+    m_rightMouseDragging = pressed;
+    m_lastMousePosition = { x, y };
+    if (pressed)
+        SetCapture(m_hWnd);
+    else if (GetCapture() == m_hWnd)
+        ReleaseCapture();
+}
+
+void D3D12Renderer::OnMouseMove(int x, int y)
+{
+    if (m_rightMouseDragging && !m_cameraPathLoaded)
+    {
+        constexpr double mouseSensitivity = 0.003;
+        m_pendingMouseYaw +=
+            static_cast<double>(x - m_lastMousePosition.x) *
+            mouseSensitivity;
+        m_pendingMousePitch -=
+            static_cast<double>(y - m_lastMousePosition.y) *
+            mouseSensitivity;
+    }
+    m_lastMousePosition = { x, y };
+}
+
+void D3D12Renderer::OnFocusLost()
+{
+    m_keyPressed.fill(false);
+    m_rightMouseDragging = false;
+    m_pendingMouseYaw = 0.0;
+    m_pendingMousePitch = 0.0;
+    if (GetCapture() == m_hWnd)
+        ReleaseCapture();
+}
+
+void D3D12Renderer::InitializeFreeCamera()
+{
+    if (!m_rayTracingManager)
+        return;
+    const std::array<float, 3>& position =
+        m_rayTracingManager->GetCameraPosition();
+    const std::array<float, 3>& target =
+        m_rayTracingManager->GetCameraTarget();
+    const double dx = static_cast<double>(target[0] - position[0]);
+    const double dy = static_cast<double>(target[1] - position[1]);
+    const double dz = static_cast<double>(target[2] - position[2]);
+    const double length = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (length <= 1.0e-8)
+        return;
+    m_freeCameraLookDistance = length;
+    m_freeCameraYaw = std::atan2(dx, dz);
+    m_freeCameraPitch = std::asin(
+        (std::max)(-1.0, (std::min)(1.0, dy / length)));
+    m_freeCameraInitialized = true;
+}
+
+void D3D12Renderer::UpdateFreeCamera(double deltaSeconds)
+{
+    m_cameraLinearSpeed = 0.0;
+    m_cameraAngularSpeed = 0.0;
+    if (!m_rayTracingManager)
+        return;
+    if (!m_freeCameraInitialized)
+        InitializeFreeCamera();
+    if (!m_freeCameraInitialized)
+        return;
+
+    const double previousYaw = m_freeCameraYaw;
+    const double previousPitch = m_freeCameraPitch;
+    m_freeCameraYaw += m_pendingMouseYaw;
+    m_freeCameraPitch += m_pendingMousePitch;
+    constexpr double pitchLimit = 1.5533430342749532;
+    m_freeCameraPitch =
+        (std::max)(-pitchLimit, (std::min)(pitchLimit, m_freeCameraPitch));
+    m_pendingMouseYaw = 0.0;
+    m_pendingMousePitch = 0.0;
+
+    const double cosPitch = std::cos(m_freeCameraPitch);
+    const std::array<double, 3> forward =
+    {
+        std::sin(m_freeCameraYaw) * cosPitch,
+        std::sin(m_freeCameraPitch),
+        std::cos(m_freeCameraYaw) * cosPitch
+    };
+    const std::array<double, 3> right =
+    {
+        forward[2],
+        0.0,
+        -forward[0]
+    };
+
+    std::array<double, 3> movement = {};
+    const auto add = [&movement](
+        const std::array<double, 3>& direction,
+        double scale)
+    {
+        for (std::size_t component = 0; component < 3; ++component)
+            movement[component] += direction[component] * scale;
+    };
+    if (m_keyPressed['W']) add(forward, 1.0);
+    if (m_keyPressed['S']) add(forward, -1.0);
+    if (m_keyPressed['D']) add(right, 1.0);
+    if (m_keyPressed['A']) add(right, -1.0);
+    if (m_keyPressed['E']) movement[1] += 1.0;
+    if (m_keyPressed['Q']) movement[1] -= 1.0;
+
+    double movementLengthSquared = 0.0;
+    for (const double component : movement)
+        movementLengthSquared += component * component;
+    std::array<float, 3> position =
+        m_rayTracingManager->GetCameraPosition();
+    if (movementLengthSquared > 1.0e-12)
+    {
+        const double inverseLength = 1.0 / std::sqrt(movementLengthSquared);
+        const double speedMultiplier =
+            m_keyPressed[VK_SHIFT] ? 3.0 : 1.0;
+        const double speed =
+            static_cast<double>(m_rayTracingManager->GetSceneDiagonal()) *
+            0.20 * speedMultiplier;
+        for (std::size_t component = 0; component < 3; ++component)
+        {
+            position[component] += static_cast<float>(
+                movement[component] * inverseLength *
+                speed * deltaSeconds);
+        }
+        m_cameraLinearSpeed = speed;
+    }
+
+    std::array<float, 3> target = {};
+    for (std::size_t component = 0; component < 3; ++component)
+    {
+        target[component] = position[component] + static_cast<float>(
+            forward[component] * m_freeCameraLookDistance);
+    }
+    const double yawDelta = m_freeCameraYaw - previousYaw;
+    const double pitchDelta = m_freeCameraPitch - previousPitch;
+    constexpr double radiansToDegrees = 57.2957795130823208768;
+    m_cameraAngularSpeed = std::sqrt(
+        yawDelta * yawDelta + pitchDelta * pitchDelta) *
+        radiansToDegrees / (std::max)(deltaSeconds, 1.0e-6);
+
+    if (movementLengthSquared > 1.0e-12 ||
+        std::abs(yawDelta) > 1.0e-12 ||
+        std::abs(pitchDelta) > 1.0e-12)
+    {
+        m_rayTracingManager->SetCamera(position, target);
+    }
+}
+
 void D3D12Renderer::UpdateCameraPath()
 {
     if (!m_cameraPathLoaded || !m_rayTracingManager)
@@ -1110,6 +1287,10 @@ void D3D12Renderer::BuildImGuiFrame()
         ? m_rayTracingManager->GetAccumulatedSampleCount()
         : 0u;
     ImGui::Text("Samples: %u", accumulatedSamples);
+    ImGui::TextDisabled(
+        m_cameraPathLoaded
+        ? "Camera: deterministic JSON path"
+        : "Camera: WASD/QE, Shift, right-drag look");
     const ImGuiIO& io = ImGui::GetIO();
     const float frameTimeMs = io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f;
     ImGui::Text("Frame: %.2f ms (%.1f FPS)", frameTimeMs, io.Framerate);

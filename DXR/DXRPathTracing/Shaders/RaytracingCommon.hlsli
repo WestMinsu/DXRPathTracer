@@ -37,6 +37,14 @@ struct SceneMaterial
     float normalTextureScale;
 };
 
+struct SceneInstanceMetadata
+{
+    uint vertexOffset;
+    uint indexOffset;
+    uint primitiveOffset;
+    uint reserved;
+};
+
 static const uint c_sceneCornellBox = 0;
 static const uint c_scenePbrGgx = 1;
 static const uint c_scenePbrGpuValidation = 2;
@@ -75,6 +83,7 @@ TextureCube<float4> g_environmentMap : register(t3);
 StructuredBuffer<SceneMaterial> g_sceneMaterials : register(t4);
 StructuredBuffer<uint> g_primitiveMaterialIndices : register(t5);
 Texture2D<float4> g_materialTextures[c_maxMaterialTextures] : register(t6);
+StructuredBuffer<SceneInstanceMetadata> g_instanceMetadata : register(t262);
 SamplerState g_environmentSampler : register(s0);
 SamplerState g_materialSampler : register(s1);
 

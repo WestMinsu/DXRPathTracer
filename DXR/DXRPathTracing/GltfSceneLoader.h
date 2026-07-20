@@ -14,6 +14,7 @@ struct GltfLoadReport
     std::uint32_t sourcePrimitiveCount = 0;
     std::uint32_t loadedPrimitiveCount = 0;
     std::uint32_t skippedNonOpaquePrimitiveCount = 0;
+    std::uint32_t sourceMaterialCount = 0;
     std::uint32_t ignoredOcclusionTextureCount = 0;
     std::uint32_t loadedMaterialCount = 0;
     std::uint32_t loadedTextureCount = 0;

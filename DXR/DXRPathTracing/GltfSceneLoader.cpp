@@ -1258,6 +1258,14 @@ bool LoadGltfSceneData(
             L"cgltf_validate failed: " + std::wstring(ResultName(result)));
     }
 
+    if (report)
+    {
+        report->sourceMaterialCount = static_cast<std::uint32_t>((std::min)(
+            data->materials_count,
+            static_cast<cgltf_size>(
+                std::numeric_limits<std::uint32_t>::max())));
+    }
+
     SceneData loadedScene;
     std::uint32_t defaultMaterialIndex = 0;
     if (!ConvertMaterials(

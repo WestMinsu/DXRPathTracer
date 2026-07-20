@@ -1,4 +1,5 @@
 #include <Windows.h>
+#include <windowsx.h>
 #include <shellapi.h>
 
 #include <string>
@@ -32,6 +33,7 @@ namespace
         UINT validationSeed = 0;
         bool headless = false;
         bool composeModelRoom = false;
+        bool sponzaLite = false;
         bool vsync = true;
         bool vsyncSpecified = false;
         bool benchmark = false;
@@ -43,6 +45,8 @@ namespace
         std::wstring cameraPathFilePath;
         std::wstring outputPrefix;
         std::wstring sceneFilePath;
+        std::wstring sceneManifestPath;
+        std::wstring sponzaLightConfigPath;
     };
 
     AppOptions gOptions;
@@ -209,6 +213,20 @@ namespace
             {
                 gOptions.composeModelRoom = true;
             }
+            else if (argument == L"--sponza-lite")
+            {
+                gOptions.sponzaLite = true;
+            }
+            else if (argument == L"--scene-manifest" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.sceneManifestPath = arguments[++index];
+            }
+            else if (argument == L"--sponza-lights" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.sponzaLightConfigPath = arguments[++index];
+            }
             else if (argument == L"--headless")
             {
                 gOptions.headless = true;
@@ -253,6 +271,25 @@ namespace
             gOptions.height = 1;
         if (!gOptions.sceneFilePath.empty())
             gOptions.sceneType = RayTracingManager::c_scenePbrGgx;
+        if (gOptions.sponzaLite)
+        {
+            gOptions.sceneType = RayTracingManager::c_scenePbrGgx;
+            if (gOptions.sceneFilePath.empty())
+            {
+                gOptions.sceneFilePath =
+                    L"Assets\\KhronosGlTFSampleAssets\\Models\\Sponza\\glTF\\Sponza.gltf";
+            }
+            if (gOptions.sceneManifestPath.empty())
+            {
+                gOptions.sceneManifestPath =
+                    L"BenchmarkOutput\\SponzaLite\\scene_manifest.json";
+            }
+            if (gOptions.sponzaLightConfigPath.empty())
+            {
+                gOptions.sponzaLightConfigPath =
+                    L"Config\\sponza_lights.json";
+            }
+        }
         if (gOptions.benchmark && !gOptions.vsyncSpecified)
             gOptions.vsync = false;
         if (gOptions.benchmark && !gOptions.rayStatisticsSpecified)
@@ -311,6 +348,10 @@ namespace
 
         gRenderer.SetSceneFilePath(gOptions.sceneFilePath);
         gRenderer.SetComposeModelRoom(gOptions.composeModelRoom);
+        gRenderer.SetSponzaLite(gOptions.sponzaLite);
+        gRenderer.SetSceneManifestPath(gOptions.sceneManifestPath);
+        gRenderer.SetSponzaLightConfigPath(
+            gOptions.sponzaLightConfigPath);
         gRenderer.SetCameraPathFilePath(gOptions.cameraPathFilePath);
         gRenderer.SetVSyncEnabled(gOptions.vsync);
         gRenderer.ConfigureBenchmark(
@@ -353,6 +394,40 @@ namespace
 
     LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
     {
+        if (gRendererReady)
+        {
+            switch (message)
+            {
+            case WM_KEYDOWN:
+            case WM_SYSKEYDOWN:
+                gRenderer.OnKey(static_cast<UINT>(wParam), true);
+                break;
+            case WM_KEYUP:
+            case WM_SYSKEYUP:
+                gRenderer.OnKey(static_cast<UINT>(wParam), false);
+                break;
+            case WM_RBUTTONDOWN:
+                gRenderer.OnRightMouseButton(
+                    true,
+                    GET_X_LPARAM(lParam),
+                    GET_Y_LPARAM(lParam));
+                break;
+            case WM_RBUTTONUP:
+                gRenderer.OnRightMouseButton(
+                    false,
+                    GET_X_LPARAM(lParam),
+                    GET_Y_LPARAM(lParam));
+                break;
+            case WM_MOUSEMOVE:
+                gRenderer.OnMouseMove(
+                    GET_X_LPARAM(lParam),
+                    GET_Y_LPARAM(lParam));
+                break;
+            case WM_KILLFOCUS:
+                gRenderer.OnFocusLost();
+                break;
+            }
+        }
         if (gRendererReady && ImGui_ImplWin32_WndProcHandler(hWnd, message, wParam, lParam))
             return TRUE;
 

@@ -4,7 +4,9 @@
 
 #include "RayTracingManager.h"
 #include "GltfSceneLoader.h"
+#include "SceneManifest.h"
 #include "SceneData.h"
+#include "SponzaLightConfig.h"
 
 #include <algorithm>
 #include <cmath>
@@ -240,10 +242,14 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     if (!commandList || !m_stateObject || !m_rayGenShaderTable || !m_missShaderTable ||
         !m_hitGroupShaderTable || !m_descriptorHeap || !m_topLevelAS || !m_accumulationTexture ||
         !m_environmentMap || !m_sceneMaterialBuffer || !m_primitiveMaterialIndexBuffer ||
-        !m_statisticsBuffer || !m_statisticsResetBuffer || !m_statisticsReadbackBuffer)
+        !m_instanceMetadataBuffer || !m_statisticsBuffer ||
+        !m_statisticsResetBuffer || !m_statisticsReadbackBuffer)
     {
         return;
     }
+
+    if (!UpdateTopLevelAccelerationStructure(commandList))
+        return;
 
     if (m_enableStatistics)
     {
@@ -313,6 +319,9 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     commandList->SetComputeRootUnorderedAccessView(
         9,
         m_statisticsBuffer->GetGPUVirtualAddress());
+    commandList->SetComputeRootShaderResourceView(
+        10,
+        m_instanceMetadataBuffer->GetGPUVirtualAddress());
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -916,7 +925,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     materialTextureRange.OffsetInDescriptorsFromTableStart =
         D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParameters[10] = {};
+    D3D12_ROOT_PARAMETER rootParameters[11] = {};
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParameters[0].DescriptorTable.NumDescriptorRanges = 1;
     rootParameters[0].DescriptorTable.pDescriptorRanges = &outputRange;
@@ -967,6 +976,11 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[9].Descriptor.ShaderRegister = 2;
     rootParameters[9].Descriptor.RegisterSpace = 0;
     rootParameters[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParameters[10].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParameters[10].Descriptor.ShaderRegister = 262;
+    rootParameters[10].Descriptor.RegisterSpace = 0;
+    rootParameters[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_STATIC_SAMPLER_DESC staticSamplers[2] = {};
     staticSamplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -1177,10 +1191,20 @@ bool RayTracingManager::CreateAccelerationStructures()
     if (!BuildBottomLevelAccelerationStructure())
         return false;
 
-    D3D12_RESOURCE_BARRIER blasBarrier = {};
-    blasBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    blasBarrier.UAV.pResource = m_bottomLevelAS.Get();
-    m_buildCommandList->ResourceBarrier(1, &blasBarrier);
+    D3D12_RESOURCE_BARRIER blasBarriers[2] = {};
+    blasBarriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    blasBarriers[0].UAV.pResource = m_bottomLevelAS.Get();
+    UINT blasBarrierCount = 1;
+    if (m_hasDynamicSphere)
+    {
+        blasBarriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        blasBarriers[1].UAV.pResource =
+            m_dynamicSphereBottomLevelAS.Get();
+        blasBarrierCount = 2;
+    }
+    m_buildCommandList->ResourceBarrier(
+        blasBarrierCount,
+        blasBarriers);
 
     if (!BuildTopLevelAccelerationStructure())
         return false;
@@ -1192,7 +1216,9 @@ bool RayTracingManager::CreateAccelerationStructures()
 
     const bool buildSucceeded = ExecuteBuildCommandListAndWait();
     m_blasScratchBuffer.Reset();
-    m_tlasScratchBuffer.Reset();
+    m_dynamicSphereBlasScratchBuffer.Reset();
+    if (!m_hasDynamicSphere)
+        m_tlasScratchBuffer.Reset();
     return buildSucceeded;
 }
 
@@ -1240,25 +1266,67 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
 {
     SceneData scene;
     SceneBounds modelBounds = {};
+    GltfLoadReport loadReport;
     bool hasModelBounds = false;
+    bool hasLoadReport = false;
+    std::size_t areaLightCount = 0;
+    m_hasDynamicSphere = false;
+    m_staticGeometry = {};
+    m_dynamicSphereGeometry = {};
     const bool isPbrScene = m_sceneType == c_scenePbrGgx ||
         m_sceneType == c_scenePbrGpuValidation;
     if (isPbrScene && !m_sceneFilePath.empty())
     {
         std::wstring errorMessage;
-        if (!LoadGltfSceneData(m_sceneFilePath, scene, errorMessage))
+        GltfLoadOptions loadOptions;
+        loadOptions.skipNonOpaquePrimitives = m_sponzaLite;
+        if (!LoadGltfSceneData(
+            m_sceneFilePath,
+            scene,
+            errorMessage,
+            loadOptions,
+            &loadReport))
         {
             ReportMessage(
                 L"glTF scene load failed.\nPath: " + m_sceneFilePath +
                 L"\nReason: " + errorMessage);
             return false;
         }
+        hasLoadReport = true;
         if (!scene.IsValid() || !ComputeSceneBounds(scene, modelBounds))
         {
             ReportMessage(L"Loaded glTF scene data or bounds are invalid.");
             return false;
         }
         hasModelBounds = true;
+        if (m_sponzaLite)
+        {
+            std::vector<SceneAreaLight> lights;
+            if (!LoadSponzaLightConfig(
+                m_sponzaLightConfigPath,
+                lights,
+                errorMessage))
+            {
+                ReportMessage(
+                    L"Sponza light config load failed.\nPath: " +
+                    m_sponzaLightConfigPath +
+                    L"\nReason: " + errorMessage);
+                return false;
+            }
+            if (lights.size() != 16)
+            {
+                ReportMessage(
+                    L"Sponza-lite requires exactly 16 area lights.");
+                return false;
+            }
+            if (!AppendAreaLights(scene, lights))
+            {
+                ReportMessage(
+                    L"Failed to append the Sponza area-light geometry.");
+                return false;
+            }
+            areaLightCount = lights.size();
+        }
         if (m_composeModelRoom && !AppendPbrModelRoom(scene, modelBounds))
         {
             ReportMessage(L"Failed to compose the PBR model room.");
@@ -1271,6 +1339,78 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             ? CreatePbrGgxSceneData()
             : CreateCornellBoxSceneData();
     }
+
+    m_staticGeometry.vertexCount =
+        static_cast<UINT>(scene.vertices.size());
+    m_staticGeometry.indexCount =
+        static_cast<UINT>(scene.indices.size());
+
+    if (m_sponzaLite && hasModelBounds)
+    {
+        const float extentX =
+            modelBounds.maximum[0] - modelBounds.minimum[0];
+        const float extentY =
+            modelBounds.maximum[1] - modelBounds.minimum[1];
+        const float extentZ =
+            modelBounds.maximum[2] - modelBounds.minimum[2];
+        const float sceneDiagonal = std::sqrt(
+            extentX * extentX +
+            extentY * extentY +
+            extentZ * extentZ);
+        m_dynamicSphereRadius =
+            (std::max)(sceneDiagonal * 0.015f, 0.20f);
+        // The complete left-to-right travel range is 3% of the scene
+        // diagonal, so this value is the half-range around the center.
+        m_dynamicSphereMotionAmplitude = sceneDiagonal * 0.015f;
+        m_dynamicSphereCenterY =
+            modelBounds.minimum[1] + m_dynamicSphereRadius + 0.01f;
+        m_dynamicSphereCenterZ =
+            (modelBounds.minimum[2] + modelBounds.maximum[2]) * 0.5f;
+        m_dynamicSpherePositionX = -m_dynamicSphereMotionAmplitude;
+        m_dynamicSphereRollRadians = 0.0f;
+
+        SceneData sphere =
+            CreateRollingMetalSphereSceneData(m_dynamicSphereRadius);
+        if (!sphere.IsValid())
+        {
+            ReportMessage(L"Generated rolling metal sphere data is invalid.");
+            return false;
+        }
+
+        m_dynamicSphereGeometry.vertexOffset =
+            static_cast<UINT>(scene.vertices.size());
+        m_dynamicSphereGeometry.vertexCount =
+            static_cast<UINT>(sphere.vertices.size());
+        m_dynamicSphereGeometry.indexOffset =
+            static_cast<UINT>(scene.indices.size());
+        m_dynamicSphereGeometry.indexCount =
+            static_cast<UINT>(sphere.indices.size());
+        m_dynamicSphereGeometry.primitiveOffset =
+            static_cast<UINT>(scene.primitiveMaterialIndices.size());
+        const std::uint32_t materialOffset =
+            static_cast<std::uint32_t>(scene.materials.size());
+
+        scene.vertices.insert(
+            scene.vertices.end(),
+            sphere.vertices.begin(),
+            sphere.vertices.end());
+        scene.indices.insert(
+            scene.indices.end(),
+            sphere.indices.begin(),
+            sphere.indices.end());
+        scene.materials.insert(
+            scene.materials.end(),
+            sphere.materials.begin(),
+            sphere.materials.end());
+        for (const std::uint32_t materialIndex :
+             sphere.primitiveMaterialIndices)
+        {
+            scene.primitiveMaterialIndices.push_back(
+                materialOffset + materialIndex);
+        }
+        m_hasDynamicSphere = true;
+    }
+
     if (!scene.IsValid())
     {
         ReportMessage(L"Generated scene data is invalid.");
@@ -1295,6 +1435,18 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
 
     m_vertexCount = static_cast<UINT>(scene.vertices.size());
     m_indexCount = static_cast<UINT>(scene.indices.size());
+
+    std::vector<SceneInstanceMetadata> instanceMetadata(1);
+    if (m_hasDynamicSphere)
+    {
+        instanceMetadata.push_back(
+            {
+                m_dynamicSphereGeometry.vertexOffset,
+                m_dynamicSphereGeometry.indexOffset,
+                m_dynamicSphereGeometry.primitiveOffset,
+                0u
+            });
+    }
 
     if (!CreateUploadBuffer(
         scene.vertices.data(),
@@ -1330,6 +1482,39 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         m_primitiveMaterialIndexBuffer))
     {
         return false;
+    }
+
+    if (!CreateUploadBuffer(
+        instanceMetadata.data(),
+        sizeof(SceneInstanceMetadata) * instanceMetadata.size(),
+        L"Raytracing instance metadata buffer",
+        m_instanceMetadataBuffer))
+    {
+        return false;
+    }
+
+    if (m_sponzaLite && hasLoadReport)
+    {
+        const std::wstring manifestPath = m_sceneManifestPath.empty()
+            ? L"BenchmarkOutput\\SponzaLite\\scene_manifest.json"
+            : m_sceneManifestPath;
+        SponzaSceneManifestSettings manifestSettings;
+        manifestSettings.areaLightCount =
+            static_cast<std::uint32_t>(areaLightCount);
+        manifestSettings.dynamicMetalSphere = m_hasDynamicSphere;
+        std::wstring errorMessage;
+        if (!WriteSponzaSceneManifest(
+            manifestPath,
+            m_sceneFilePath,
+            loadReport,
+            manifestSettings,
+            errorMessage))
+        {
+            ReportMessage(
+                L"Sponza-lite manifest creation failed.\nPath: " +
+                manifestPath + L"\nReason: " + errorMessage);
+            return false;
+        }
     }
 
     return CreateMaterialTextures(scene);
@@ -1571,15 +1756,54 @@ bool RayTracingManager::CreateMaterialTextures(const SceneData& scene)
 
 bool RayTracingManager::BuildBottomLevelAccelerationStructure()
 {
+    if (!BuildBottomLevelAccelerationStructure(
+        m_staticGeometry,
+        L"Static scene bottom level acceleration structure",
+        m_bottomLevelAS,
+        m_blasScratchBuffer))
+    {
+        return false;
+    }
+
+    if (m_hasDynamicSphere &&
+        !BuildBottomLevelAccelerationStructure(
+            m_dynamicSphereGeometry,
+            L"Rolling sphere bottom level acceleration structure",
+            m_dynamicSphereBottomLevelAS,
+            m_dynamicSphereBlasScratchBuffer))
+    {
+        return false;
+    }
+    return true;
+}
+
+bool RayTracingManager::BuildBottomLevelAccelerationStructure(
+    const GeometryRange& geometry,
+    const wchar_t* debugName,
+    Microsoft::WRL::ComPtr<ID3D12Resource>& accelerationStructure,
+    Microsoft::WRL::ComPtr<ID3D12Resource>& scratchBuffer)
+{
+    if (geometry.vertexCount == 0 || geometry.indexCount == 0)
+    {
+        ReportMessage(L"BLAS geometry range is empty.");
+        return false;
+    }
+
     D3D12_RAYTRACING_GEOMETRY_DESC geometryDesc = {};
     geometryDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
     geometryDesc.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
-    geometryDesc.Triangles.VertexBuffer.StartAddress = m_vertexBuffer->GetGPUVirtualAddress();
+    geometryDesc.Triangles.VertexBuffer.StartAddress =
+        m_vertexBuffer->GetGPUVirtualAddress() +
+        static_cast<UINT64>(geometry.vertexOffset) *
+        sizeof(SceneVertex);
     geometryDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(SceneVertex);
-    geometryDesc.Triangles.VertexCount = m_vertexCount;
+    geometryDesc.Triangles.VertexCount = geometry.vertexCount;
     geometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
-    geometryDesc.Triangles.IndexBuffer = m_indexBuffer->GetGPUVirtualAddress();
-    geometryDesc.Triangles.IndexCount = m_indexCount;
+    geometryDesc.Triangles.IndexBuffer =
+        m_indexBuffer->GetGPUVirtualAddress() +
+        static_cast<UINT64>(geometry.indexOffset) *
+        sizeof(std::uint32_t);
+    geometryDesc.Triangles.IndexCount = geometry.indexCount;
     geometryDesc.Triangles.IndexFormat = DXGI_FORMAT_R32_UINT;
     geometryDesc.Triangles.Transform3x4 = 0;
 
@@ -1598,17 +1822,26 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure()
         return false;
     }
 
-    m_blasScratchBuffer.Reset();
-    if (!CreateScratchBuffer(prebuildInfo.ScratchDataSizeInBytes, L"BLAS scratch buffer", m_blasScratchBuffer))
+    scratchBuffer.Reset();
+    if (!CreateScratchBuffer(
+        prebuildInfo.ScratchDataSizeInBytes,
+        L"BLAS scratch buffer",
+        scratchBuffer))
         return false;
 
-    if (!CreateAccelerationStructureBuffer(prebuildInfo.ResultDataMaxSizeInBytes, L"Bottom level acceleration structure", m_bottomLevelAS))
+    accelerationStructure.Reset();
+    if (!CreateAccelerationStructureBuffer(
+        prebuildInfo.ResultDataMaxSizeInBytes,
+        debugName,
+        accelerationStructure))
         return false;
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {};
     buildDesc.Inputs = inputs;
-    buildDesc.ScratchAccelerationStructureData = m_blasScratchBuffer->GetGPUVirtualAddress();
-    buildDesc.DestAccelerationStructureData = m_bottomLevelAS->GetGPUVirtualAddress();
+    buildDesc.ScratchAccelerationStructureData =
+        scratchBuffer->GetGPUVirtualAddress();
+    buildDesc.DestAccelerationStructureData =
+        accelerationStructure->GetGPUVirtualAddress();
 
     m_buildCommandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
     return true;
@@ -1616,22 +1849,61 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure()
 
 bool RayTracingManager::BuildTopLevelAccelerationStructure()
 {
-    D3D12_RAYTRACING_INSTANCE_DESC instanceDesc = {};
-    instanceDesc.Transform[0][0] = 1.0f;
-    instanceDesc.Transform[1][1] = 1.0f;
-    instanceDesc.Transform[2][2] = 1.0f;
-    instanceDesc.InstanceMask = 0xFF;
-    instanceDesc.AccelerationStructure = m_bottomLevelAS->GetGPUVirtualAddress();
+    const UINT instanceCount = m_hasDynamicSphere ? 2u : 1u;
+    std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs(instanceCount);
+    instanceDescs[0].Transform[0][0] = 1.0f;
+    instanceDescs[0].Transform[1][1] = 1.0f;
+    instanceDescs[0].Transform[2][2] = 1.0f;
+    instanceDescs[0].InstanceID = 0;
+    instanceDescs[0].InstanceMask = 0xFF;
+    instanceDescs[0].AccelerationStructure =
+        m_bottomLevelAS->GetGPUVirtualAddress();
+    if (m_hasDynamicSphere)
+    {
+        const float cosine = std::cos(m_dynamicSphereRollRadians);
+        const float sine = std::sin(m_dynamicSphereRollRadians);
+        D3D12_RAYTRACING_INSTANCE_DESC& sphereDesc = instanceDescs[1];
+        sphereDesc.Transform[0][0] = cosine;
+        sphereDesc.Transform[0][1] = -sine;
+        sphereDesc.Transform[0][3] = m_dynamicSpherePositionX;
+        sphereDesc.Transform[1][0] = sine;
+        sphereDesc.Transform[1][1] = cosine;
+        sphereDesc.Transform[1][3] = m_dynamicSphereCenterY;
+        sphereDesc.Transform[2][2] = 1.0f;
+        sphereDesc.Transform[2][3] = m_dynamicSphereCenterZ;
+        sphereDesc.InstanceID = 1;
+        sphereDesc.InstanceMask = 0xFF;
+        sphereDesc.AccelerationStructure =
+            m_dynamicSphereBottomLevelAS->GetGPUVirtualAddress();
+    }
 
-    if (!CreateUploadBuffer(&instanceDesc, sizeof(instanceDesc), L"TLAS instance descriptor", m_instanceDescBuffer))
-        return false;
+    for (UINT frameIndex = 0;
+         frameIndex < c_tlasFrameCount;
+         ++frameIndex)
+    {
+        if (!CreateUploadBuffer(
+            instanceDescs.data(),
+            sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * instanceCount,
+            L"TLAS instance descriptor",
+            m_instanceDescBuffers[frameIndex]))
+        {
+            return false;
+        }
+    }
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
     inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
-    inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    inputs.Flags =
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    if (m_hasDynamicSphere)
+    {
+        inputs.Flags |=
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
+    }
     inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-    inputs.NumDescs = 1;
-    inputs.InstanceDescs = m_instanceDescBuffer->GetGPUVirtualAddress();
+    inputs.NumDescs = instanceCount;
+    inputs.InstanceDescs =
+        m_instanceDescBuffers[0]->GetGPUVirtualAddress();
 
     D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo = {};
     m_device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
@@ -1642,7 +1914,13 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
     }
 
     m_tlasScratchBuffer.Reset();
-    if (!CreateScratchBuffer(prebuildInfo.ScratchDataSizeInBytes, L"TLAS scratch buffer", m_tlasScratchBuffer))
+    const UINT64 scratchSize = (std::max)(
+        prebuildInfo.ScratchDataSizeInBytes,
+        prebuildInfo.UpdateScratchDataSizeInBytes);
+    if (!CreateScratchBuffer(
+        scratchSize,
+        L"TLAS scratch buffer",
+        m_tlasScratchBuffer))
         return false;
 
     if (!CreateAccelerationStructureBuffer(prebuildInfo.ResultDataMaxSizeInBytes, L"Top level acceleration structure", m_topLevelAS))
@@ -1654,6 +1932,157 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
     buildDesc.DestAccelerationStructureData = m_topLevelAS->GetGPUVirtualAddress();
 
     m_buildCommandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+    return true;
+}
+
+bool RayTracingManager::WriteInstanceDescriptors(
+    UINT frameIndex,
+    float spherePositionX,
+    float sphereRollRadians)
+{
+    if (frameIndex >= c_tlasFrameCount ||
+        !m_instanceDescBuffers[frameIndex])
+    {
+        return false;
+    }
+
+    D3D12_RAYTRACING_INSTANCE_DESC* instanceDescs = nullptr;
+    const D3D12_RANGE readRange = { 0, 0 };
+    HRESULT hr = m_instanceDescBuffers[frameIndex]->Map(
+        0,
+        &readRange,
+        reinterpret_cast<void**>(&instanceDescs));
+    if (ReportFailure(hr, L"TLAS instance descriptor mapping failed."))
+        return false;
+
+    std::memset(
+        instanceDescs,
+        0,
+        sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * 2u);
+    instanceDescs[0].Transform[0][0] = 1.0f;
+    instanceDescs[0].Transform[1][1] = 1.0f;
+    instanceDescs[0].Transform[2][2] = 1.0f;
+    instanceDescs[0].InstanceID = 0;
+    instanceDescs[0].InstanceMask = 0xFF;
+    instanceDescs[0].AccelerationStructure =
+        m_bottomLevelAS->GetGPUVirtualAddress();
+
+    const float cosine = std::cos(sphereRollRadians);
+    const float sine = std::sin(sphereRollRadians);
+    D3D12_RAYTRACING_INSTANCE_DESC& sphereDesc = instanceDescs[1];
+    sphereDesc.Transform[0][0] = cosine;
+    sphereDesc.Transform[0][1] = -sine;
+    sphereDesc.Transform[0][3] = spherePositionX;
+    sphereDesc.Transform[1][0] = sine;
+    sphereDesc.Transform[1][1] = cosine;
+    sphereDesc.Transform[1][3] = m_dynamicSphereCenterY;
+    sphereDesc.Transform[2][2] = 1.0f;
+    sphereDesc.Transform[2][3] = m_dynamicSphereCenterZ;
+    sphereDesc.InstanceID = 1;
+    sphereDesc.InstanceMask = 0xFF;
+    sphereDesc.AccelerationStructure =
+        m_dynamicSphereBottomLevelAS->GetGPUVirtualAddress();
+
+    m_instanceDescBuffers[frameIndex]->Unmap(0, nullptr);
+    return true;
+}
+
+void RayTracingManager::UpdateDynamicSphereMotion()
+{
+    constexpr double framesPerSecond = 60.0;
+    constexpr double motionStartSeconds = 20.0;
+    constexpr double motionDurationSeconds = 5.0;
+    constexpr double twoPi = 6.28318530717958647692;
+    constexpr double radiansToDegrees = 57.2957795130823208768;
+
+    const double timeSeconds =
+        static_cast<double>(m_dynamicSceneFrameIndex) / framesPerSecond;
+    double position = -m_dynamicSphereMotionAmplitude;
+    double linearVelocity = 0.0;
+    if (timeSeconds >= motionStartSeconds &&
+        timeSeconds <= motionStartSeconds + motionDurationSeconds)
+    {
+        const double normalizedTime =
+            (timeSeconds - motionStartSeconds) /
+            motionDurationSeconds;
+        const double phase = twoPi * normalizedTime;
+        position =
+            -static_cast<double>(m_dynamicSphereMotionAmplitude) *
+            std::cos(phase);
+        linearVelocity =
+            static_cast<double>(m_dynamicSphereMotionAmplitude) *
+            (twoPi / motionDurationSeconds) *
+            std::sin(phase);
+    }
+
+    m_dynamicSpherePositionX = static_cast<float>(position);
+    const double traveledDistance =
+        position + static_cast<double>(m_dynamicSphereMotionAmplitude);
+    m_dynamicSphereRollRadians = static_cast<float>(
+        -traveledDistance /
+        (std::max)(static_cast<double>(m_dynamicSphereRadius), 0.000001));
+    m_dynamicObjectLinearSpeed = std::abs(linearVelocity);
+    m_dynamicObjectAngularSpeed =
+        m_dynamicObjectLinearSpeed /
+        (std::max)(static_cast<double>(m_dynamicSphereRadius), 0.000001) *
+        radiansToDegrees;
+    ++m_dynamicSceneFrameIndex;
+}
+
+bool RayTracingManager::UpdateTopLevelAccelerationStructure(
+    ID3D12GraphicsCommandList4* commandList)
+{
+    if (!m_hasDynamicSphere)
+        return true;
+    if (!commandList || !m_topLevelAS || !m_tlasScratchBuffer)
+        return false;
+
+    const float previousPosition = m_dynamicSpherePositionX;
+    const float previousRoll = m_dynamicSphereRollRadians;
+    UpdateDynamicSphereMotion();
+    if (std::abs(previousPosition - m_dynamicSpherePositionX) <= 1.0e-7f &&
+        std::abs(previousRoll - m_dynamicSphereRollRadians) <= 1.0e-7f)
+    {
+        return true;
+    }
+
+    const UINT descriptorFrame =
+        static_cast<UINT>(m_frameIndex % c_tlasFrameCount);
+    if (!WriteInstanceDescriptors(
+        descriptorFrame,
+        m_dynamicSpherePositionX,
+        m_dynamicSphereRollRadians))
+    {
+        return false;
+    }
+
+    D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {};
+    buildDesc.Inputs.Type =
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+    buildDesc.Inputs.Flags =
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE |
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE |
+        D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+    buildDesc.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+    buildDesc.Inputs.NumDescs = 2;
+    buildDesc.Inputs.InstanceDescs =
+        m_instanceDescBuffers[descriptorFrame]->GetGPUVirtualAddress();
+    buildDesc.SourceAccelerationStructureData =
+        m_topLevelAS->GetGPUVirtualAddress();
+    buildDesc.DestAccelerationStructureData =
+        m_topLevelAS->GetGPUVirtualAddress();
+    buildDesc.ScratchAccelerationStructureData =
+        m_tlasScratchBuffer->GetGPUVirtualAddress();
+
+    commandList->BuildRaytracingAccelerationStructure(
+        &buildDesc,
+        0,
+        nullptr);
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    barrier.UAV.pResource = m_topLevelAS.Get();
+    commandList->ResourceBarrier(1, &barrier);
+    ResetAccumulation();
     return true;
 }
 

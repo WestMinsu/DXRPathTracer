@@ -28,6 +28,9 @@
       <UniqueIdentifier>{2C308308-6F03-4C39-9B3A-6F87AB6E3B40}</UniqueIdentifier>
       <Extensions>hlsl;hlsli</Extensions>
     </Filter>
+    <Filter Include="Config Files">
+      <UniqueIdentifier>{FEB2603D-57DE-40B0-96A4-17860CBF2DB0}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CameraPath.h">
@@ -42,7 +45,13 @@
     <ClInclude Include="RayTracingManager.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="SceneManifest.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="SceneData.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SponzaLightConfig.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ThirdParty\cgltf\cgltf.h">
@@ -89,7 +98,13 @@
     <ClCompile Include="RayTracingManager.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="SceneManifest.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="SceneData.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SponzaLightConfig.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ThirdParty\imgui\imgui.cpp">
@@ -117,6 +132,12 @@
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
+    <None Include="Config\sponza_camera_path.json">
+      <Filter>Config Files</Filter>
+    </None>
+    <None Include="Config\sponza_lights.json">
+      <Filter>Config Files</Filter>
+    </None>
     <None Include="ThirdParty\cgltf\LICENSE">
       <Filter>ThirdParty\cgltf</Filter>
     </None>

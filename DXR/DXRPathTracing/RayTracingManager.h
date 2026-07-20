@@ -60,6 +60,15 @@ public:
     void SetSceneType(UINT sceneType);
     void SetSceneFilePath(const std::wstring& sceneFilePath) { m_sceneFilePath = sceneFilePath; }
     void SetComposeModelRoom(bool enabled) { m_composeModelRoom = enabled; }
+    void SetSponzaLite(bool enabled) { m_sponzaLite = enabled; }
+    void SetSponzaLightConfigPath(const std::wstring& path)
+    {
+        m_sponzaLightConfigPath = path;
+    }
+    void SetSceneManifestPath(const std::wstring& path)
+    {
+        m_sceneManifestPath = path;
+    }
     void SetPbrDebugView(UINT pbrDebugView);
     void SetPbrMaterial(float metallic, float roughness);
     void SetPbrMaterialOverride(bool enabled);
@@ -76,6 +85,14 @@ public:
         return m_cameraTarget;
     }
     float GetSceneDiagonal() const;
+    double GetDynamicObjectLinearSpeed() const
+    {
+        return m_dynamicObjectLinearSpeed;
+    }
+    double GetDynamicObjectAngularSpeed() const
+    {
+        return m_dynamicObjectAngularSpeed;
+    }
     void SetEnableStatistics(bool enabled) { m_enableStatistics = enabled; }
     void ReadFrameStatistics();
     void SetValidationSeed(UINT validationSeed) { m_validationSeed = validationSeed; }
@@ -99,6 +116,15 @@ private:
     static constexpr UINT c_shaderAttributeSize = 2 * sizeof(float);
     static constexpr UINT c_maxBounce = 8;
     static constexpr UINT c_maxRecursionDepth = c_maxBounce + 1;
+    static constexpr UINT c_tlasFrameCount = 2;
+    struct GeometryRange
+    {
+        UINT vertexOffset = 0;
+        UINT vertexCount = 0;
+        UINT indexOffset = 0;
+        UINT indexCount = 0;
+        UINT primitiveOffset = 0;
+    };
     bool CreateOutputTexture();
     bool CreateStatisticsResources();
     bool CreateEnvironmentMap();
@@ -115,7 +141,19 @@ private:
     bool CreateMaterialTextures(const struct SceneData& scene);
     void UpdateCameraFromSceneBounds();
     bool BuildBottomLevelAccelerationStructure();
+    bool BuildBottomLevelAccelerationStructure(
+        const GeometryRange& geometry,
+        const wchar_t* debugName,
+        Microsoft::WRL::ComPtr<ID3D12Resource>& accelerationStructure,
+        Microsoft::WRL::ComPtr<ID3D12Resource>& scratchBuffer);
     bool BuildTopLevelAccelerationStructure();
+    bool UpdateTopLevelAccelerationStructure(
+        ID3D12GraphicsCommandList4* commandList);
+    bool WriteInstanceDescriptors(
+        UINT frameIndex,
+        float spherePositionX,
+        float sphereRollRadians);
+    void UpdateDynamicSphereMotion();
     bool ExecuteBuildCommandListAndWait();
     bool CreateUploadBuffer(const void* data,
         UINT64 sizeInBytes,
@@ -161,8 +199,23 @@ private:
     UINT m_validationSeed = 0;
     float m_exposure = 0.0f;
     std::wstring m_sceneFilePath;
+    std::wstring m_sceneManifestPath;
+    std::wstring m_sponzaLightConfigPath;
     bool m_composeModelRoom = false;
+    bool m_sponzaLite = false;
     bool m_autoFrameCamera = false;
+    bool m_hasDynamicSphere = false;
+    float m_dynamicSphereRadius = 0.0f;
+    float m_dynamicSphereCenterY = 0.0f;
+    float m_dynamicSphereCenterZ = 0.0f;
+    float m_dynamicSphereMotionAmplitude = 0.0f;
+    float m_dynamicSpherePositionX = 0.0f;
+    float m_dynamicSphereRollRadians = 0.0f;
+    double m_dynamicObjectLinearSpeed = 0.0;
+    double m_dynamicObjectAngularSpeed = 0.0;
+    UINT64 m_dynamicSceneFrameIndex = 0;
+    GeometryRange m_staticGeometry;
+    GeometryRange m_dynamicSphereGeometry;
     std::array<float, 3> m_sceneBoundsMin = { 0.0f, 0.0f, 0.0f };
     std::array<float, 3> m_sceneBoundsMax = { 0.0f, 0.0f, 0.0f };
     std::array<float, 3> m_cameraPosition = { 0.0f, 0.15f, -1.2f };
@@ -189,11 +242,15 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_indexBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_sceneMaterialBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_primitiveMaterialIndexBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_instanceMetadataBuffer;
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> m_materialTextures;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_bottomLevelAS;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_dynamicSphereBottomLevelAS;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_topLevelAS;
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_instanceDescBuffer;
+    std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,
+        c_tlasFrameCount> m_instanceDescBuffers;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_blasScratchBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_dynamicSphereBlasScratchBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_tlasScratchBuffer;
     FrameStatistics m_frameStatistics;
 };

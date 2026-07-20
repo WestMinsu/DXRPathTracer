@@ -134,14 +134,22 @@ void MyClosestHitShader_RadianceRay(
     in BuiltInTriangleIntersectionAttributes attributes)
 {
     RecordSurfaceHit();
-    uint indexOffset = PrimitiveIndex() * 3;
-    uint i0 = g_indices[indexOffset + 0];
-    uint i1 = g_indices[indexOffset + 1];
-    uint i2 = g_indices[indexOffset + 2];
+    SceneInstanceMetadata instanceMetadata =
+        g_instanceMetadata[InstanceID()];
+    uint globalPrimitiveIndex =
+        instanceMetadata.primitiveOffset + PrimitiveIndex();
+    uint indexOffset =
+        instanceMetadata.indexOffset + PrimitiveIndex() * 3u;
+    uint i0 = instanceMetadata.vertexOffset + g_indices[indexOffset + 0u];
+    uint i1 = instanceMetadata.vertexOffset + g_indices[indexOffset + 1u];
+    uint i2 = instanceMetadata.vertexOffset + g_indices[indexOffset + 2u];
 
     float3 normal = InterpolateNormal(i0, i1, i2, attributes);
     float2 texCoord = InterpolateTexCoord(i0, i1, i2, attributes);
     float4 tangent = InterpolateTangent(i0, i1, i2, attributes);
+    float3x3 objectToWorld = (float3x3)ObjectToWorld3x4();
+    normal = normalize(mul(objectToWorld, normal));
+    tangent.xyz = normalize(mul(objectToWorld, tangent.xyz));
     bool frontFace = dot(normal, WorldRayDirection()) < 0.0f;
     if (!frontFace)
     {
@@ -150,7 +158,7 @@ void MyClosestHitShader_RadianceRay(
     if (g_sceneType == c_scenePbrGgx)
     {
         normal = ApplySceneNormalMap(
-            PrimitiveIndex(),
+            globalPrimitiveIndex,
             texCoord,
             tangent,
             normal);
@@ -175,17 +183,18 @@ void MyClosestHitShader_RadianceRay(
         }
         else if (g_pbrDebugView == c_pbrDebugMaterialId)
         {
-            payload.color = MaterialIdDebugColor(PrimitiveIndex());
+            payload.color = MaterialIdDebugColor(globalPrimitiveIndex);
         }
         else
         {
-            payload.color = PbrMaterialDebugColor(PrimitiveIndex(), texCoord);
+            payload.color =
+                PbrMaterialDebugColor(globalPrimitiveIndex, texCoord);
         }
         return;
     }
 
     float3 hitPosition = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    float3 emission = SurfaceEmission(PrimitiveIndex());
+    float3 emission = SurfaceEmission(globalPrimitiveIndex);
     if (frontFace && any(emission > 0.0f))
     {
         payload.color = emission;
@@ -200,17 +209,23 @@ void MyClosestHitShader_RadianceRay(
 
     if (g_sceneType == c_scenePbrGgx)
     {
-        PbrMaterial material = GetPbrMaterial(PrimitiveIndex(), texCoord);
-        payload.color = TracePbrBrdfWithMixtureSampling(material, normal, hitPosition, payload.depth, PrimitiveIndex());
+        PbrMaterial material =
+            GetPbrMaterial(globalPrimitiveIndex, texCoord);
+        payload.color = TracePbrBrdfWithMixtureSampling(
+            material,
+            normal,
+            hitPosition,
+            payload.depth,
+            globalPrimitiveIndex);
         return;
     }
 
     payload.color = TraceLambertianBounce(
         normal,
         hitPosition,
-        CornellSurfaceAlbedo(PrimitiveIndex()),
+        CornellSurfaceAlbedo(globalPrimitiveIndex),
         payload.depth,
-        PrimitiveIndex());
+        globalPrimitiveIndex);
 }
 
 [shader("miss")]

@@ -135,7 +135,9 @@
     <ClInclude Include="D3D12Renderer.h" />
     <ClInclude Include="GltfSceneLoader.h" />
     <ClInclude Include="RayTracingManager.h" />
+    <ClInclude Include="SceneManifest.h" />
     <ClInclude Include="SceneData.h" />
+    <ClInclude Include="SponzaLightConfig.h" />
     <ClInclude Include="ThirdParty\cgltf\cgltf.h" />
     <ClInclude Include="ThirdParty\imgui\imconfig.h" />
     <ClInclude Include="ThirdParty\imgui\imgui.h" />
@@ -152,7 +154,9 @@
     <ClCompile Include="GltfSceneLoader.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="RayTracingManager.cpp" />
+    <ClCompile Include="SceneManifest.cpp" />
     <ClCompile Include="SceneData.cpp" />
+    <ClCompile Include="SponzaLightConfig.cpp" />
     <ClCompile Include="ThirdParty\imgui\imgui.cpp" />
     <ClCompile Include="ThirdParty\imgui\imgui_draw.cpp" />
     <ClCompile Include="ThirdParty\imgui\imgui_tables.cpp" />
@@ -171,6 +175,8 @@
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
+    <None Include="Config\sponza_camera_path.json" />
+    <None Include="Config\sponza_lights.json" />
     <None Include="ThirdParty\cgltf\LICENSE" />
     <None Include="Shaders\RaytracingCommon.hlsli" />
     <None Include="Shaders\RaytracingScene.hlsli" />

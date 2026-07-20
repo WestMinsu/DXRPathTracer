@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -26,6 +27,15 @@ public:
             m_sceneType = static_cast<int>(RayTracingManager::c_scenePbrGgx);
     }
     void SetComposeModelRoom(bool enabled) { m_composeModelRoom = enabled; }
+    void SetSponzaLite(bool enabled) { m_sponzaLite = enabled; }
+    void SetSponzaLightConfigPath(const std::wstring& path)
+    {
+        m_sponzaLightConfigPath = path;
+    }
+    void SetSceneManifestPath(const std::wstring& path)
+    {
+        m_sceneManifestPath = path;
+    }
     void SetVSyncEnabled(bool enabled) { m_vsyncEnabled = enabled; }
     void SetCollectRayStatistics(bool enabled) { m_collectRayStatistics = enabled; }
     void SetCameraPathFilePath(const std::wstring& filePath)
@@ -36,6 +46,10 @@ public:
         bool enabled,
         const std::wstring& outputPath,
         UINT frameLimit);
+    void OnKey(UINT virtualKey, bool pressed);
+    void OnRightMouseButton(bool pressed, int x, int y);
+    void OnMouseMove(int x, int y);
+    void OnFocusLost();
     void Render();
     void Resize(UINT width, UINT height);
     void WaitForGpu();
@@ -76,6 +90,8 @@ private:
     bool CreateGpuTimingResources();
     bool LoadCameraPath();
     void UpdateCameraPath();
+    void InitializeFreeCamera();
+    void UpdateFreeCamera(double deltaSeconds);
     void ReadGpuTimingResults();
     bool OpenBenchmarkCsv();
     void RecordFrameMetrics(double cpuFrameMs);
@@ -138,6 +154,9 @@ private:
     bool m_collectRayStatistics = false;
     bool m_cameraPathLoaded = false;
     bool m_hasPreviousCameraPose = false;
+    bool m_freeCameraInitialized = false;
+    bool m_rightMouseDragging = false;
+    bool m_hasLastRenderTime = false;
     bool m_showNormalColor = false;
     bool m_enableAccumulation = true;
     bool m_captureActive = false;
@@ -157,9 +176,12 @@ private:
     bool m_exitAfterCapture = false;
     std::wstring m_captureOutputPrefix;
     std::wstring m_sceneFilePath;
+    std::wstring m_sceneManifestPath;
+    std::wstring m_sponzaLightConfigPath;
     std::wstring m_cameraPathFilePath;
     std::wstring m_cameraPathError;
     bool m_composeModelRoom = false;
+    bool m_sponzaLite = false;
     bool m_benchmarkEnabled = false;
     bool m_benchmarkFinished = false;
     UINT m_benchmarkFrameLimit = 600;
@@ -181,6 +203,14 @@ private:
     double m_cameraAngularSpeed = 0.0;
     double m_objectLinearSpeed = 0.0;
     double m_objectAngularSpeed = 0.0;
+    double m_freeCameraYaw = 0.0;
+    double m_freeCameraPitch = 0.0;
+    double m_freeCameraLookDistance = 1.0;
+    double m_pendingMouseYaw = 0.0;
+    double m_pendingMousePitch = 0.0;
+    POINT m_lastMousePosition = {};
+    std::array<bool, 256> m_keyPressed = {};
+    std::chrono::steady_clock::time_point m_lastRenderTime;
     UINT64 m_cameraPathFrameIndex = 0;
     CameraPath m_cameraPath;
     CameraPose m_previousCameraPose;
