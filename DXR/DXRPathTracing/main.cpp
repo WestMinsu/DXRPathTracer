@@ -32,6 +32,11 @@ namespace
         UINT validationSeed = 0;
         bool headless = false;
         bool composeModelRoom = false;
+        bool vsync = true;
+        bool vsyncSpecified = false;
+        bool benchmark = false;
+        UINT benchmarkFrames = 600;
+        std::wstring benchmarkOutput;
         std::wstring outputPrefix;
         std::wstring sceneFilePath;
     };
@@ -204,6 +209,26 @@ namespace
             {
                 gOptions.headless = true;
             }
+            else if (argument == L"--vsync" && index + 1 < argumentCount)
+            {
+                gOptions.vsync = _wtoi(arguments[++index]) != 0;
+                gOptions.vsyncSpecified = true;
+            }
+            else if (argument == L"--benchmark")
+            {
+                gOptions.benchmark = true;
+            }
+            else if (argument == L"--benchmark-output" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.benchmarkOutput = arguments[++index];
+            }
+            else if (argument == L"--benchmark-frames" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.benchmarkFrames = static_cast<UINT>(
+                    _wtoi(arguments[++index]));
+            }
         }
 
         if (gOptions.width == 0)
@@ -212,6 +237,8 @@ namespace
             gOptions.height = 1;
         if (!gOptions.sceneFilePath.empty())
             gOptions.sceneType = RayTracingManager::c_scenePbrGgx;
+        if (gOptions.benchmark && !gOptions.vsyncSpecified)
+            gOptions.vsync = false;
 
         LocalFree(arguments);
     }
@@ -260,6 +287,11 @@ namespace
 
         gRenderer.SetSceneFilePath(gOptions.sceneFilePath);
         gRenderer.SetComposeModelRoom(gOptions.composeModelRoom);
+        gRenderer.SetVSyncEnabled(gOptions.vsync);
+        gRenderer.ConfigureBenchmark(
+            gOptions.benchmark,
+            gOptions.benchmarkOutput,
+            gOptions.benchmarkFrames);
 
         if (gOptions.captureSamples > 0)
         {

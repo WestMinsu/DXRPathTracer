@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
@@ -24,6 +25,11 @@ public:
             m_sceneType = static_cast<int>(RayTracingManager::c_scenePbrGgx);
     }
     void SetComposeModelRoom(bool enabled) { m_composeModelRoom = enabled; }
+    void SetVSyncEnabled(bool enabled) { m_vsyncEnabled = enabled; }
+    void ConfigureBenchmark(
+        bool enabled,
+        const std::wstring& outputPath,
+        UINT frameLimit);
     void Render();
     void Resize(UINT width, UINT height);
     void WaitForGpu();
@@ -43,6 +49,17 @@ public:
 private:
     static constexpr UINT c_frameCount = 2;
     static constexpr DXGI_FORMAT c_backBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+    static constexpr UINT c_gpuTimestampCount = 6;
+
+    enum GpuTimestampIndex : UINT
+    {
+        c_gpuTotalBegin = 0,
+        c_gpuDispatchBegin = 1,
+        c_gpuDispatchEnd = 2,
+        c_gpuUpscaleBegin = 3,
+        c_gpuUpscaleEnd = 4,
+        c_gpuTotalEnd = 5
+    };
 
     bool CreateDevice();
     bool CreateDxrDevice(IDXGIAdapter* adapter);
@@ -50,6 +67,11 @@ private:
     bool CreateSwapChain();
     bool CreateRenderTargetViews();
     bool CreateFence();
+    bool CreateGpuTimingResources();
+    void ReadGpuTimingResults();
+    bool OpenBenchmarkCsv();
+    void RecordFrameMetrics(double cpuFrameMs);
+    void CloseBenchmarkCsv();
     bool InitializeImGui();
     void ShutdownImGui();
     void BuildImGuiFrame();
@@ -103,6 +125,8 @@ private:
     UINT64 m_fenceValue = 0;
     HANDLE m_fenceEvent = nullptr;
     bool m_imguiInitialized = false;
+    bool m_vsyncEnabled = true;
+    bool m_tearingSupported = false;
     bool m_showNormalColor = false;
     bool m_enableAccumulation = true;
     bool m_captureActive = false;
@@ -123,6 +147,25 @@ private:
     std::wstring m_captureOutputPrefix;
     std::wstring m_sceneFilePath;
     bool m_composeModelRoom = false;
+    bool m_benchmarkEnabled = false;
+    bool m_benchmarkFinished = false;
+    UINT m_benchmarkFrameLimit = 600;
+    UINT64 m_benchmarkFramesWritten = 0;
+    std::wstring m_benchmarkOutputPath;
+    FILE* m_benchmarkCsv = nullptr;
+    UINT64 m_gpuTimestampFrequency = 0;
+    double m_gpuDispatchMs = 0.0;
+    double m_gpuUpscaleMs = 0.0;
+    double m_gpuTotalMs = 0.0;
+    double m_gpuMedianMs = 0.0;
+    double m_gpuP95Ms = 0.0;
+    double m_gpuP99Ms = 0.0;
+    double m_cpuFrameMs = 0.0;
+    double m_cpuMedianMs = 0.0;
+    double m_cpuP95Ms = 0.0;
+    double m_cpuP99Ms = 0.0;
+    std::vector<double> m_gpuTimingHistory;
+    std::vector<double> m_cpuTimingHistory;
 
     Microsoft::WRL::ComPtr<IDXGIFactory4> m_factory;
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
@@ -134,6 +177,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_imguiDescriptorHeap;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, c_frameCount> m_renderTargets;
     Microsoft::WRL::ComPtr<ID3D12Fence> m_fence;
+    Microsoft::WRL::ComPtr<ID3D12QueryHeap> m_gpuTimestampQueryHeap;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_gpuTimestampReadback;
     std::unique_ptr<RayTracingManager> m_rayTracingManager;
     std::vector<PendingCapture> m_pendingCaptures;
 };

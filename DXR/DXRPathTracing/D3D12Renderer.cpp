@@ -7,6 +7,8 @@
 #include "ThirdParty/imgui/backends/imgui_impl_win32.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <cstring>
@@ -23,6 +25,57 @@
 
 namespace
 {
+    constexpr std::size_t c_timingHistoryLength = 600;
+
+    double CalculatePercentile(const std::vector<double>& samples, double percentile)
+    {
+        if (samples.empty())
+            return 0.0;
+
+        std::vector<double> sortedSamples = samples;
+        std::sort(sortedSamples.begin(), sortedSamples.end());
+        const double position = percentile * static_cast<double>(sortedSamples.size() - 1);
+        const std::size_t lowerIndex = static_cast<std::size_t>(std::floor(position));
+        const std::size_t upperIndex = (std::min)(lowerIndex + 1, sortedSamples.size() - 1);
+        const double fraction = position - static_cast<double>(lowerIndex);
+        return sortedSamples[lowerIndex] +
+            (sortedSamples[upperIndex] - sortedSamples[lowerIndex]) * fraction;
+    }
+
+    void AppendTimingSample(std::vector<double>& samples, double value)
+    {
+        if (samples.size() == c_timingHistoryLength)
+            samples.erase(samples.begin());
+        samples.push_back(value);
+    }
+
+    bool EnsureParentDirectory(const std::wstring& filePath)
+    {
+        wchar_t absolutePath[MAX_PATH] = {};
+        const DWORD absolutePathLength = GetFullPathNameW(
+            filePath.c_str(),
+            _countof(absolutePath),
+            absolutePath,
+            nullptr);
+        const std::wstring pathSource =
+            absolutePathLength > 0 && absolutePathLength < _countof(absolutePath)
+            ? std::wstring(absolutePath, absolutePathLength)
+            : filePath;
+
+        const std::size_t separator = pathSource.find_last_of(L"\\/");
+        if (separator == std::wstring::npos)
+            return true;
+
+        const std::wstring directory = pathSource.substr(0, separator);
+        if (directory.empty())
+            return true;
+
+        const int result = SHCreateDirectoryExW(nullptr, directory.c_str(), nullptr);
+        return result == ERROR_SUCCESS ||
+            result == ERROR_ALREADY_EXISTS ||
+            result == ERROR_FILE_EXISTS;
+    }
+
     UINT GetClientWidth(HWND hWnd)
     {
         RECT rect = {};
@@ -44,6 +97,7 @@ D3D12Renderer::~D3D12Renderer()
 {
     WaitForGpu();
     SavePendingCaptures();
+    CloseBenchmarkCsv();
     ShutdownImGui();
     m_rayTracingManager.reset();
 
@@ -75,6 +129,9 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     if (!CreateFence())
         return false;
 
+    if (!CreateGpuTimingResources())
+        return false;
+
     m_rayTracingManager.reset(new RayTracingManager());
     m_rayTracingManager->SetSceneFilePath(m_sceneFilePath);
     m_rayTracingManager->SetComposeModelRoom(m_composeModelRoom);
@@ -85,6 +142,9 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     if (!InitializeImGui())
         return false;
 
+    if (!OpenBenchmarkCsv())
+        return false;
+
     return true;
 }
 
@@ -93,6 +153,7 @@ void D3D12Renderer::Render()
     if (!m_swapChain || !m_rayTracingManager || m_width == 0 || m_height == 0)
         return;
 
+    const auto cpuFrameBegin = std::chrono::steady_clock::now();
     BuildImGuiFrame();
     m_rayTracingManager->SetShowNormalColor(m_showNormalColor);
     m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
@@ -113,7 +174,30 @@ void D3D12Renderer::Render()
     if (ReportFailure(hr, L"Command list reset failed."))
         return;
 
+    m_commandList->EndQuery(
+        m_gpuTimestampQueryHeap.Get(),
+        D3D12_QUERY_TYPE_TIMESTAMP,
+        c_gpuTotalBegin);
+    m_commandList->EndQuery(
+        m_gpuTimestampQueryHeap.Get(),
+        D3D12_QUERY_TYPE_TIMESTAMP,
+        c_gpuDispatchBegin);
     m_rayTracingManager->DispatchRays(m_commandList.Get());
+    m_commandList->EndQuery(
+        m_gpuTimestampQueryHeap.Get(),
+        D3D12_QUERY_TYPE_TIMESTAMP,
+        c_gpuDispatchEnd);
+
+    // Reserved for the MAPB bilinear compute pass. Keeping timestamps in the
+    // baseline makes benchmark CSV columns stable before upscaling is added.
+    m_commandList->EndQuery(
+        m_gpuTimestampQueryHeap.Get(),
+        D3D12_QUERY_TYPE_TIMESTAMP,
+        c_gpuUpscaleBegin);
+    m_commandList->EndQuery(
+        m_gpuTimestampQueryHeap.Get(),
+        D3D12_QUERY_TYPE_TIMESTAMP,
+        c_gpuUpscaleEnd);
 
     ID3D12Resource* raytracingOutput = m_rayTracingManager->GetOutputResource();
 
@@ -208,6 +292,18 @@ void D3D12Renderer::Render()
     presentBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_commandList->ResourceBarrier(1, &presentBarrier);
 
+    m_commandList->EndQuery(
+        m_gpuTimestampQueryHeap.Get(),
+        D3D12_QUERY_TYPE_TIMESTAMP,
+        c_gpuTotalEnd);
+    m_commandList->ResolveQueryData(
+        m_gpuTimestampQueryHeap.Get(),
+        D3D12_QUERY_TYPE_TIMESTAMP,
+        0,
+        c_gpuTimestampCount,
+        m_gpuTimestampReadback.Get(),
+        0);
+
     hr = m_commandList->Close();
     if (ReportFailure(hr, L"Command list close failed."))
         return;
@@ -215,13 +311,24 @@ void D3D12Renderer::Render()
     ID3D12CommandList* commandLists[] = { m_commandList.Get() };
     m_commandQueue->ExecuteCommandLists(1, commandLists);
 
-    hr = m_swapChain->Present(1, 0);
+    const UINT syncInterval = m_vsyncEnabled ? 1u : 0u;
+    const UINT presentFlags =
+        !m_vsyncEnabled && m_tearingSupported
+        ? DXGI_PRESENT_ALLOW_TEARING
+        : 0u;
+    hr = m_swapChain->Present(syncInterval, presentFlags);
     if (ReportFailure(hr, L"Swap chain present failed."))
         return;
 
     WaitForGpu();
+    ReadGpuTimingResults();
     SavePendingCaptures();
     m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
+
+    const auto cpuFrameEnd = std::chrono::steady_clock::now();
+    const double cpuFrameMs = std::chrono::duration<double, std::milli>(
+        cpuFrameEnd - cpuFrameBegin).count();
+    RecordFrameMetrics(cpuFrameMs);
 }
 
 void D3D12Renderer::Resize(UINT width, UINT height)
@@ -243,7 +350,15 @@ void D3D12Renderer::Resize(UINT width, UINT height)
     SavePendingCaptures();
     ReleaseRenderTargets();
 
-    HRESULT hr = m_swapChain->ResizeBuffers(c_frameCount, width, height, c_backBufferFormat, 0);
+    const UINT swapChainFlags = m_tearingSupported
+        ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+        : 0u;
+    HRESULT hr = m_swapChain->ResizeBuffers(
+        c_frameCount,
+        width,
+        height,
+        c_backBufferFormat,
+        swapChainFlags);
     if (ReportFailure(hr, L"Swap chain resize failed."))
         return;
 
@@ -371,6 +486,17 @@ bool D3D12Renderer::CreateCommandObjects()
 
 bool D3D12Renderer::CreateSwapChain()
 {
+    Microsoft::WRL::ComPtr<IDXGIFactory5> factory5;
+    BOOL allowTearing = FALSE;
+    if (SUCCEEDED(m_factory.As(&factory5)))
+    {
+        const HRESULT tearingHr = factory5->CheckFeatureSupport(
+            DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+            &allowTearing,
+            sizeof(allowTearing));
+        m_tearingSupported = SUCCEEDED(tearingHr) && allowTearing == TRUE;
+    }
+
     DXGI_SWAP_CHAIN_DESC1 swapChainDesc = {};
     swapChainDesc.Width = m_width;
     swapChainDesc.Height = m_height;
@@ -379,6 +505,9 @@ bool D3D12Renderer::CreateSwapChain()
     swapChainDesc.BufferCount = c_frameCount;
     swapChainDesc.SampleDesc.Count = 1;
     swapChainDesc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+    swapChainDesc.Flags = m_tearingSupported
+        ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING
+        : 0u;
 
     Microsoft::WRL::ComPtr<IDXGISwapChain1> swapChain;
     HRESULT hr = m_factory->CreateSwapChainForHwnd(
@@ -441,6 +570,172 @@ bool D3D12Renderer::CreateFence()
         return false;
 
     return true;
+}
+
+bool D3D12Renderer::CreateGpuTimingResources()
+{
+    D3D12_QUERY_HEAP_DESC queryHeapDesc = {};
+    queryHeapDesc.Count = c_gpuTimestampCount;
+    queryHeapDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    HRESULT hr = m_device->CreateQueryHeap(
+        &queryHeapDesc,
+        IID_PPV_ARGS(&m_gpuTimestampQueryHeap));
+    if (ReportFailure(hr, L"GPU timestamp query heap creation failed."))
+        return false;
+
+    hr = m_commandQueue->GetTimestampFrequency(&m_gpuTimestampFrequency);
+    if (ReportFailure(hr, L"GPU timestamp frequency query failed.") ||
+        m_gpuTimestampFrequency == 0)
+    {
+        return false;
+    }
+
+    D3D12_HEAP_PROPERTIES heapProperties = {};
+    heapProperties.Type = D3D12_HEAP_TYPE_READBACK;
+    heapProperties.CreationNodeMask = 1;
+    heapProperties.VisibleNodeMask = 1;
+
+    D3D12_RESOURCE_DESC bufferDesc = {};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Width = sizeof(UINT64) * c_gpuTimestampCount;
+    bufferDesc.Height = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels = 1;
+    bufferDesc.SampleDesc.Count = 1;
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+
+    hr = m_device->CreateCommittedResource(
+        &heapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&m_gpuTimestampReadback));
+    if (ReportFailure(hr, L"GPU timestamp readback buffer creation failed."))
+        return false;
+
+    m_gpuTimestampQueryHeap->SetName(L"Frame GPU timestamp queries");
+    m_gpuTimestampReadback->SetName(L"Frame GPU timestamp readback");
+    return true;
+}
+
+void D3D12Renderer::ReadGpuTimingResults()
+{
+    if (!m_gpuTimestampReadback || m_gpuTimestampFrequency == 0)
+        return;
+
+    const SIZE_T dataSize = sizeof(UINT64) * c_gpuTimestampCount;
+    D3D12_RANGE readRange = { 0, dataSize };
+    UINT64* timestamps = nullptr;
+    const HRESULT hr = m_gpuTimestampReadback->Map(
+        0,
+        &readRange,
+        reinterpret_cast<void**>(&timestamps));
+    if (ReportFailure(hr, L"GPU timestamp readback mapping failed."))
+        return;
+
+    const double tickToMilliseconds =
+        1000.0 / static_cast<double>(m_gpuTimestampFrequency);
+    const auto elapsedMilliseconds =
+        [timestamps, tickToMilliseconds](UINT begin, UINT end)
+        {
+            return timestamps[end] >= timestamps[begin]
+                ? static_cast<double>(timestamps[end] - timestamps[begin]) *
+                    tickToMilliseconds
+                : 0.0;
+        };
+
+    m_gpuDispatchMs = elapsedMilliseconds(c_gpuDispatchBegin, c_gpuDispatchEnd);
+    m_gpuUpscaleMs = elapsedMilliseconds(c_gpuUpscaleBegin, c_gpuUpscaleEnd);
+    m_gpuTotalMs = elapsedMilliseconds(c_gpuTotalBegin, c_gpuTotalEnd);
+
+    D3D12_RANGE writeRange = { 0, 0 };
+    m_gpuTimestampReadback->Unmap(0, &writeRange);
+}
+
+bool D3D12Renderer::OpenBenchmarkCsv()
+{
+    if (!m_benchmarkEnabled)
+        return true;
+
+    if (m_benchmarkOutputPath.empty())
+        m_benchmarkOutputPath = L"BenchmarkOutput\\baseline.csv";
+
+    if (!EnsureParentDirectory(m_benchmarkOutputPath))
+        return !ReportFailure(E_FAIL, L"Benchmark output directory creation failed.");
+
+    errno_t openError = _wfopen_s(
+        &m_benchmarkCsv,
+        m_benchmarkOutputPath.c_str(),
+        L"wb");
+    if (openError != 0 || !m_benchmarkCsv)
+        return !ReportFailure(E_FAIL, L"Benchmark CSV creation failed.");
+
+    std::fprintf(
+        m_benchmarkCsv,
+        "frame,cpu_ms,gpu_dispatch_ms,gpu_upscale_ms,gpu_total_ms,"
+        "profile,internal_scale,max_bounce,camera_linear_speed,"
+        "camera_angular_speed,object_linear_speed,object_angular_speed,"
+        "primary_rays,shadow_rays,bounce_rays,average_path_length,"
+        "hit_count,miss_count,accumulated_samples\n");
+    return true;
+}
+
+void D3D12Renderer::RecordFrameMetrics(double cpuFrameMs)
+{
+    m_cpuFrameMs = cpuFrameMs;
+    AppendTimingSample(m_cpuTimingHistory, m_cpuFrameMs);
+    AppendTimingSample(m_gpuTimingHistory, m_gpuTotalMs);
+
+    m_cpuMedianMs = CalculatePercentile(m_cpuTimingHistory, 0.50);
+    m_cpuP95Ms = CalculatePercentile(m_cpuTimingHistory, 0.95);
+    m_cpuP99Ms = CalculatePercentile(m_cpuTimingHistory, 0.99);
+    m_gpuMedianMs = CalculatePercentile(m_gpuTimingHistory, 0.50);
+    m_gpuP95Ms = CalculatePercentile(m_gpuTimingHistory, 0.95);
+    m_gpuP99Ms = CalculatePercentile(m_gpuTimingHistory, 0.99);
+
+    if (!m_benchmarkEnabled || m_benchmarkFinished || !m_benchmarkCsv)
+        return;
+
+    const UINT64 primaryRayCount =
+        static_cast<UINT64>(m_width) * static_cast<UINT64>(m_height);
+    const UINT accumulatedSamples = m_rayTracingManager
+        ? m_rayTracingManager->GetAccumulatedSampleCount()
+        : 0u;
+    std::fprintf(
+        m_benchmarkCsv,
+        "%llu,%.6f,%.6f,%.6f,%.6f,fixed,1.000000,%d,"
+        "0.000000,0.000000,0.000000,0.000000,%llu,,,,,,%u\n",
+        static_cast<unsigned long long>(m_benchmarkFramesWritten),
+        m_cpuFrameMs,
+        m_gpuDispatchMs,
+        m_gpuUpscaleMs,
+        m_gpuTotalMs,
+        m_maxBounce,
+        static_cast<unsigned long long>(primaryRayCount),
+        accumulatedSamples);
+
+    ++m_benchmarkFramesWritten;
+    if ((m_benchmarkFramesWritten % 60u) == 0u)
+        std::fflush(m_benchmarkCsv);
+
+    if (m_benchmarkFrameLimit > 0 &&
+        m_benchmarkFramesWritten >= m_benchmarkFrameLimit)
+    {
+        m_benchmarkFinished = true;
+        CloseBenchmarkCsv();
+        PostMessageW(m_hWnd, WM_CLOSE, 0, 0);
+    }
+}
+
+void D3D12Renderer::CloseBenchmarkCsv()
+{
+    if (!m_benchmarkCsv)
+        return;
+
+    std::fflush(m_benchmarkCsv);
+    std::fclose(m_benchmarkCsv);
+    m_benchmarkCsv = nullptr;
 }
 
 bool D3D12Renderer::InitializeImGui()
@@ -609,6 +904,24 @@ void D3D12Renderer::BuildImGuiFrame()
     const ImGuiIO& io = ImGui::GetIO();
     const float frameTimeMs = io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f;
     ImGui::Text("Frame: %.2f ms (%.1f FPS)", frameTimeMs, io.Framerate);
+    ImGui::Checkbox("VSync", &m_vsyncEnabled);
+    ImGui::Text(
+        "CPU current/median: %.2f / %.2f ms",
+        m_cpuFrameMs,
+        m_cpuMedianMs);
+    ImGui::Text(
+        "CPU p95/p99: %.2f / %.2f ms",
+        m_cpuP95Ms,
+        m_cpuP99Ms);
+    ImGui::Text(
+        "GPU dispatch/upscale: %.2f / %.2f ms",
+        m_gpuDispatchMs,
+        m_gpuUpscaleMs);
+    ImGui::Text(
+        "GPU total median/p95/p99: %.2f / %.2f / %.2f ms",
+        m_gpuMedianMs,
+        m_gpuP95Ms,
+        m_gpuP99Ms);
     ImGui::Separator();
     ImGui::InputInt("Target Samples", &m_captureTargetSamples);
     if (m_captureTargetSamples < 1)
@@ -753,6 +1066,16 @@ bool D3D12Renderer::QueueTextureCapture(
     pendingCapture.format = format;
     m_pendingCaptures.push_back(pendingCapture);
     return true;
+}
+
+void D3D12Renderer::ConfigureBenchmark(
+    bool enabled,
+    const std::wstring& outputPath,
+    UINT frameLimit)
+{
+    m_benchmarkEnabled = enabled;
+    m_benchmarkOutputPath = outputPath;
+    m_benchmarkFrameLimit = frameLimit;
 }
 
 void D3D12Renderer::ConfigureAutomatedCapture(

@@ -5,6 +5,7 @@ imgui.ini
 
 # Local capture/reference outputs
 Captures/
+BenchmarkOutput/
 
 # Generated Cornell Box validation assets and renderer outputs.
 # Keep only the generator and validation README under version control.
