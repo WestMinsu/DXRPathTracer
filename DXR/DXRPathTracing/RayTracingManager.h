@@ -116,7 +116,7 @@ public:
 private:
     static constexpr DXGI_FORMAT c_outputFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     static constexpr DXGI_FORMAT c_accumulationFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
-    static constexpr UINT c_shaderPayloadSize = 4 * sizeof(float);
+    static constexpr UINT c_shaderPayloadSize = 5 * sizeof(float);
     static constexpr UINT c_shaderAttributeSize = 2 * sizeof(float);
     static constexpr UINT c_maxBounce = 8;
     static constexpr UINT c_maxRecursionDepth = c_maxBounce + 1;
@@ -212,6 +212,7 @@ private:
     bool m_dynamicSphereAnimationEnabled = true;
     bool m_dynamicSphereDeterministicTimeline = false;
     float m_dynamicSphereRadius = 0.0f;
+    float m_dynamicSphereTrackCenterX = 0.0f;
     float m_dynamicSphereCenterY = 0.0f;
     float m_dynamicSphereCenterZ = 0.0f;
     float m_dynamicSphereMotionAmplitude = 0.0f;
@@ -219,6 +220,7 @@ private:
     float m_dynamicSphereRollRadians = 0.0f;
     double m_dynamicObjectLinearSpeed = 0.0;
     double m_dynamicObjectAngularSpeed = 0.0;
+    bool m_dynamicObjectMovedThisFrame = false;
     UINT64 m_dynamicSceneFrameIndex = 0;
     GeometryRange m_staticGeometry;
     GeometryRange m_dynamicSphereGeometry;

@@ -65,6 +65,7 @@ void MyRaygenShader_RadianceRay()
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
     float3 sampleRadiance = float3(0.0f, 0.0f, 0.0f);
+    uint dynamicTouched = 0u;
 
     if (g_sceneType == c_scenePbrGpuValidation)
     {
@@ -102,10 +103,12 @@ void MyRaygenShader_RadianceRay()
         RadiancePayload payload;
         payload.color = float3(0.0f, 0.0f, 0.0f);
         payload.depth = 0;
+        payload.dynamicTouched = 0u;
 
         RecordRadianceRay(0u);
         TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
         sampleRadiance = payload.color;
+        dynamicTouched = payload.dynamicTouched;
     }
 
     if (g_enableAccumulation == 0)
@@ -118,13 +121,29 @@ void MyRaygenShader_RadianceRay()
     }
 
     float3 accumulatedColor = sampleRadiance;
+    float localSampleCount = 1.0f;
+    bool dynamicInvalidation =
+        g_dynamicObjectMoved != 0u &&
+        dynamicTouched != 0u;
     if (g_sampleIndex > 0)
     {
-        accumulatedColor += g_accumulation[launchIndex].rgb;
+        float4 previousAccumulation = g_accumulation[launchIndex];
+        bool previousDynamicInvalidation =
+            previousAccumulation.a < 0.0f;
+        if (!dynamicInvalidation && !previousDynamicInvalidation)
+        {
+            accumulatedColor += previousAccumulation.rgb;
+            localSampleCount =
+                max(abs(previousAccumulation.a), 1.0f) + 1.0f;
+        }
     }
 
-    g_accumulation[launchIndex] = float4(accumulatedColor, 1.0f);
-    float3 averageRadiance = accumulatedColor / float(g_sampleIndex + 1);
+    float signedSampleCount = dynamicInvalidation
+        ? -localSampleCount
+        : localSampleCount;
+    g_accumulation[launchIndex] =
+        float4(accumulatedColor, signedSampleCount);
+    float3 averageRadiance = accumulatedColor / localSampleCount;
     g_output[launchIndex] = float4(ToneMapForDisplay(averageRadiance), 1.0f);
 }
 
@@ -136,6 +155,8 @@ void MyClosestHitShader_RadianceRay(
     RecordSurfaceHit();
     SceneInstanceMetadata instanceMetadata =
         g_instanceMetadata[InstanceID()];
+    if (InstanceID() == 1u)
+        payload.dynamicTouched = 1u;
     uint globalPrimitiveIndex =
         instanceMetadata.primitiveOffset + PrimitiveIndex();
     uint indexOffset =
@@ -216,7 +237,8 @@ void MyClosestHitShader_RadianceRay(
             normal,
             hitPosition,
             payload.depth,
-            globalPrimitiveIndex);
+            globalPrimitiveIndex,
+            payload.dynamicTouched);
         return;
     }
 
@@ -225,7 +247,8 @@ void MyClosestHitShader_RadianceRay(
         hitPosition,
         CornellSurfaceAlbedo(globalPrimitiveIndex),
         payload.depth,
-        globalPrimitiveIndex);
+        globalPrimitiveIndex,
+        payload.dynamicTouched);
 }
 
 [shader("miss")]

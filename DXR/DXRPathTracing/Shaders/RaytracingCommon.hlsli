@@ -13,6 +13,7 @@ struct RadiancePayload
 {
     float3 color;
     uint depth;
+    uint dynamicTouched;
 };
 
 struct PbrMaterial
@@ -106,6 +107,7 @@ cbuffer RenderSettings : register(b0)
     float3 g_cameraTarget;
     uint g_overridePbrMaterial;
     uint g_enableStatistics;
+    uint g_dynamicObjectMoved;
 };
 
 void RecordRadianceRay(uint depth)
@@ -248,7 +250,13 @@ float3 SampleEnvironmentMap(float3 direction)
         g_environmentMap.SampleLevel(g_environmentSampler, normalize(direction), 0.0f).rgb,
         float3(0.0f, 0.0f, 0.0f)) * g_iblIntensity;
 }
-float3 TraceLambertianBounce(float3 normal, float3 hitPosition, float3 albedo, uint depth, uint primitiveIndex)
+float3 TraceLambertianBounce(
+    float3 normal,
+    float3 hitPosition,
+    float3 albedo,
+    uint depth,
+    uint primitiveIndex,
+    inout uint dynamicTouched)
 {
     uint seed = CreateRandomSeed(depth, primitiveIndex);
 
@@ -263,9 +271,11 @@ float3 TraceLambertianBounce(float3 normal, float3 hitPosition, float3 albedo, u
     RadiancePayload bouncePayload;
     bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
     bouncePayload.depth = depth + 1;
+    bouncePayload.dynamicTouched = 0u;
 
     RecordRadianceRay(bouncePayload.depth);
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
+    dynamicTouched |= bouncePayload.dynamicTouched;
     return albedo * bouncePayload.color;
 }
 #endif

@@ -343,6 +343,84 @@ bool ComputeSceneBounds(const SceneData& scene, SceneBounds& bounds)
     return true;
 }
 
+bool FindWalkableSurfaceHeight(
+    const SceneData& scene,
+    float x,
+    float z,
+    float maximumHeight,
+    float& height)
+{
+    bool found = false;
+    float bestHeight = std::numeric_limits<float>::lowest();
+    constexpr float epsilon = 1.0e-6f;
+    for (std::size_t index = 0; index + 2 < scene.indices.size(); index += 3)
+    {
+        const SceneVertex& v0 = scene.vertices[scene.indices[index + 0]];
+        const SceneVertex& v1 = scene.vertices[scene.indices[index + 1]];
+        const SceneVertex& v2 = scene.vertices[scene.indices[index + 2]];
+        const float x0 = v0.position[0];
+        const float z0 = v0.position[2];
+        const float x1 = v1.position[0];
+        const float z1 = v1.position[2];
+        const float x2 = v2.position[0];
+        const float z2 = v2.position[2];
+        const float denominator =
+            (z1 - z2) * (x0 - x2) +
+            (x2 - x1) * (z0 - z2);
+        if (std::abs(denominator) <= epsilon)
+            continue;
+
+        const float w0 =
+            ((z1 - z2) * (x - x2) +
+             (x2 - x1) * (z - z2)) / denominator;
+        const float w1 =
+            ((z2 - z0) * (x - x2) +
+             (x0 - x2) * (z - z2)) / denominator;
+        const float w2 = 1.0f - w0 - w1;
+        if (w0 < -epsilon || w1 < -epsilon || w2 < -epsilon)
+            continue;
+
+        const float candidateHeight =
+            w0 * v0.position[1] +
+            w1 * v1.position[1] +
+            w2 * v2.position[1];
+        if (candidateHeight > maximumHeight + epsilon ||
+            candidateHeight <= bestHeight)
+        {
+            continue;
+        }
+
+        const Float3 edge0 = MakeFloat3(
+            v1.position[0] - v0.position[0],
+            v1.position[1] - v0.position[1],
+            v1.position[2] - v0.position[2]);
+        const Float3 edge1 = MakeFloat3(
+            v2.position[0] - v0.position[0],
+            v2.position[1] - v0.position[1],
+            v2.position[2] - v0.position[2]);
+        const Float3 normal = MakeFloat3(
+            edge0.y * edge1.z - edge0.z * edge1.y,
+            edge0.z * edge1.x - edge0.x * edge1.z,
+            edge0.x * edge1.y - edge0.y * edge1.x);
+        const float normalLength = std::sqrt(
+            normal.x * normal.x +
+            normal.y * normal.y +
+            normal.z * normal.z);
+        if (normalLength <= epsilon ||
+            std::abs(normal.y) / normalLength < 0.5f)
+        {
+            continue;
+        }
+
+        bestHeight = candidateHeight;
+        found = true;
+    }
+
+    if (found)
+        height = bestHeight;
+    return found;
+}
+
 bool AppendPbrModelRoom(SceneData& scene, const SceneBounds& modelBounds)
 {
     Float3 center = {};

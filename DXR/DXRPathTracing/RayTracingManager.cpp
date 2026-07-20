@@ -74,8 +74,9 @@ namespace
         float cameraTarget[3];
         UINT overridePbrMaterial;
         UINT enableStatistics;
+        UINT dynamicObjectMoved;
     };
-    static_assert(sizeof(RenderSettingsConstants) == 21 * sizeof(std::uint32_t));
+    static_assert(sizeof(RenderSettingsConstants) == 22 * sizeof(std::uint32_t));
 
     UINT AlignUp(UINT value, UINT alignment)
     {
@@ -305,7 +306,9 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         renderSettings.cameraTarget);
     renderSettings.overridePbrMaterial = m_overridePbrMaterial ? 1u : 0u;
     renderSettings.enableStatistics = m_enableStatistics ? 1u : 0u;
-    commandList->SetComputeRoot32BitConstants(4, 21, &renderSettings, 0);
+    renderSettings.dynamicObjectMoved =
+        m_dynamicObjectMovedThisFrame ? 1u : 0u;
+    commandList->SetComputeRoot32BitConstants(4, 22, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
     commandList->SetComputeRootDescriptorTable(5, environmentHandle);
@@ -496,7 +499,6 @@ void RayTracingManager::SetDynamicSphereAnimationEnabled(bool enabled)
     if (m_dynamicSphereAnimationEnabled == enabled)
         return;
     m_dynamicSphereAnimationEnabled = enabled;
-    ResetAccumulation();
 }
 
 void RayTracingManager::SetDynamicSphereDeterministicTimeline(bool enabled)
@@ -504,7 +506,6 @@ void RayTracingManager::SetDynamicSphereDeterministicTimeline(bool enabled)
     if (m_dynamicSphereDeterministicTimeline == enabled)
         return;
     m_dynamicSphereDeterministicTimeline = enabled;
-    ResetAccumulation();
 }
 
 void RayTracingManager::ResetDynamicSphereTimeline()
@@ -512,7 +513,6 @@ void RayTracingManager::ResetDynamicSphereTimeline()
     m_dynamicSceneFrameIndex = 0;
     m_dynamicObjectLinearSpeed = 0.0;
     m_dynamicObjectAngularSpeed = 0.0;
-    ResetAccumulation();
 }
 
 float RayTracingManager::GetSceneDiagonal() const
@@ -973,7 +973,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 21;
+    rootParameters[4].Constants.Num32BitValues = 22;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     rootParameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -1387,11 +1387,39 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         // The complete left-to-right travel range is 3% of the scene
         // diagonal, so this value is the half-range around the center.
         m_dynamicSphereMotionAmplitude = sceneDiagonal * 0.015f;
-        m_dynamicSphereCenterY =
-            modelBounds.minimum[1] + m_dynamicSphereRadius + 0.01f;
+        m_dynamicSphereTrackCenterX =
+            (modelBounds.minimum[0] + modelBounds.maximum[0]) * 0.5f;
         m_dynamicSphereCenterZ =
             (modelBounds.minimum[2] + modelBounds.maximum[2]) * 0.5f;
-        m_dynamicSpherePositionX = -m_dynamicSphereMotionAmplitude;
+        const float maximumGroundHeight =
+            modelBounds.minimum[1] + extentY * 0.20f;
+        float groundHeight = modelBounds.minimum[1];
+        bool foundGround = false;
+        for (int sampleIndex = -2; sampleIndex <= 2; ++sampleIndex)
+        {
+            const float sampleX =
+                m_dynamicSphereTrackCenterX +
+                m_dynamicSphereMotionAmplitude *
+                static_cast<float>(sampleIndex) * 0.5f;
+            float sampleHeight = 0.0f;
+            if (FindWalkableSurfaceHeight(
+                scene,
+                sampleX,
+                m_dynamicSphereCenterZ,
+                maximumGroundHeight,
+                sampleHeight))
+            {
+                groundHeight = foundGround
+                    ? (std::max)(groundHeight, sampleHeight)
+                    : sampleHeight;
+                foundGround = true;
+            }
+        }
+        m_dynamicSphereCenterY =
+            groundHeight + m_dynamicSphereRadius;
+        m_dynamicSpherePositionX =
+            m_dynamicSphereTrackCenterX -
+            m_dynamicSphereMotionAmplitude;
         m_dynamicSphereRollRadians = 0.0f;
 
         SceneData sphere =
@@ -2022,7 +2050,9 @@ void RayTracingManager::UpdateDynamicSphereMotion()
 
     const double timeSeconds =
         static_cast<double>(m_dynamicSceneFrameIndex) / framesPerSecond;
-    double position = -m_dynamicSphereMotionAmplitude;
+    double position =
+        static_cast<double>(m_dynamicSphereTrackCenterX) -
+        m_dynamicSphereMotionAmplitude;
     double linearVelocity = 0.0;
     if (m_dynamicSphereAnimationEnabled &&
         m_dynamicSphereDeterministicTimeline &&
@@ -2034,7 +2064,8 @@ void RayTracingManager::UpdateDynamicSphereMotion()
             motionDurationSeconds;
         const double phase = twoPi * normalizedTime;
         position =
-            -static_cast<double>(m_dynamicSphereMotionAmplitude) *
+            static_cast<double>(m_dynamicSphereTrackCenterX) -
+            static_cast<double>(m_dynamicSphereMotionAmplitude) *
             std::cos(phase);
         linearVelocity =
             static_cast<double>(m_dynamicSphereMotionAmplitude) *
@@ -2047,7 +2078,8 @@ void RayTracingManager::UpdateDynamicSphereMotion()
         const double loopTime = std::fmod(timeSeconds, motionDurationSeconds);
         const double phase = twoPi * loopTime / motionDurationSeconds;
         position =
-            -static_cast<double>(m_dynamicSphereMotionAmplitude) *
+            static_cast<double>(m_dynamicSphereTrackCenterX) -
+            static_cast<double>(m_dynamicSphereMotionAmplitude) *
             std::cos(phase);
         linearVelocity =
             static_cast<double>(m_dynamicSphereMotionAmplitude) *
@@ -2057,7 +2089,9 @@ void RayTracingManager::UpdateDynamicSphereMotion()
 
     m_dynamicSpherePositionX = static_cast<float>(position);
     const double traveledDistance =
-        position + static_cast<double>(m_dynamicSphereMotionAmplitude);
+        position -
+        (static_cast<double>(m_dynamicSphereTrackCenterX) -
+         static_cast<double>(m_dynamicSphereMotionAmplitude));
     m_dynamicSphereRollRadians = static_cast<float>(
         -traveledDistance /
         (std::max)(static_cast<double>(m_dynamicSphereRadius), 0.000001));
@@ -2072,6 +2106,7 @@ void RayTracingManager::UpdateDynamicSphereMotion()
 bool RayTracingManager::UpdateTopLevelAccelerationStructure(
     ID3D12GraphicsCommandList4* commandList)
 {
+    m_dynamicObjectMovedThisFrame = false;
     if (!m_hasDynamicSphere)
         return true;
     if (!commandList || !m_topLevelAS || !m_tlasScratchBuffer)
@@ -2122,7 +2157,7 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     barrier.UAV.pResource = m_topLevelAS.Get();
     commandList->ResourceBarrier(1, &barrier);
-    ResetAccumulation();
+    m_dynamicObjectMovedThisFrame = true;
     return true;
 }
 

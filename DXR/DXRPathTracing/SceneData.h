@@ -100,6 +100,12 @@ SceneData CreateCornellBoxSceneData();
 SceneData CreatePbrGgxSceneData();
 SceneData CreateRollingMetalSphereSceneData(float radius);
 bool ComputeSceneBounds(const SceneData& scene, SceneBounds& bounds);
+bool FindWalkableSurfaceHeight(
+    const SceneData& scene,
+    float x,
+    float z,
+    float maximumHeight,
+    float& height);
 bool AppendPbrModelRoom(SceneData& scene, const SceneBounds& modelBounds);
 bool AppendAreaLights(
     SceneData& scene,

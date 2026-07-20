@@ -177,7 +177,13 @@ bool SamplePbrBrdfWithMixtureSampling(
     return true;
 }
 
-float3 TracePbrBrdfWithMixtureSampling(PbrMaterial material, float3 normal, float3 hitPosition, uint depth, uint primitiveIndex)
+float3 TracePbrBrdfWithMixtureSampling(
+    PbrMaterial material,
+    float3 normal,
+    float3 hitPosition,
+    uint depth,
+    uint primitiveIndex,
+    inout uint dynamicTouched)
 {
     uint seed = CreateRandomSeed(depth, primitiveIndex);
     float3 viewDirection = normalize(-WorldRayDirection());
@@ -203,9 +209,11 @@ float3 TracePbrBrdfWithMixtureSampling(PbrMaterial material, float3 normal, floa
     RadiancePayload bouncePayload;
     bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
     bouncePayload.depth = depth + 1;
+    bouncePayload.dynamicTouched = 0u;
 
     RecordRadianceRay(bouncePayload.depth);
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
+    dynamicTouched |= bouncePayload.dynamicTouched;
 
     return weightedBrdf * bouncePayload.color;
 }

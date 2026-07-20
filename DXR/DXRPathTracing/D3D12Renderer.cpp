@@ -1831,7 +1831,6 @@ bool D3D12Renderer::SavePfmFile(
         return false;
     }
 
-    const float inverseSampleCount = 1.0f / static_cast<float>(sampleCount > 0 ? sampleCount : 1u);
     const BYTE* sourcePixels = static_cast<const BYTE*>(pixels);
     bool saved = true;
     for (UINT outputY = 0; outputY < height && saved; ++outputY)
@@ -1842,6 +1841,12 @@ bool D3D12Renderer::SavePfmFile(
 
         for (UINT x = 0; x < width; ++x)
         {
+            const float storedSampleCount =
+                std::abs(sourceRow[x * 4 + 3]);
+            const float pixelSampleCount = storedSampleCount > 0.0f
+                ? storedSampleCount
+                : static_cast<float>(sampleCount > 0 ? sampleCount : 1u);
+            const float inverseSampleCount = 1.0f / pixelSampleCount;
             const float rgb[3] =
             {
                 sourceRow[x * 4 + 0] * inverseSampleCount,
