@@ -93,6 +93,10 @@ public:
     {
         return m_dynamicObjectAngularSpeed;
     }
+    bool HasDynamicSphere() const { return m_hasDynamicSphere; }
+    void SetDynamicSphereAnimationEnabled(bool enabled);
+    void SetDynamicSphereDeterministicTimeline(bool enabled);
+    void ResetDynamicSphereTimeline();
     void SetEnableStatistics(bool enabled) { m_enableStatistics = enabled; }
     void ReadFrameStatistics();
     void SetValidationSeed(UINT validationSeed) { m_validationSeed = validationSeed; }
@@ -205,6 +209,8 @@ private:
     bool m_sponzaLite = false;
     bool m_autoFrameCamera = false;
     bool m_hasDynamicSphere = false;
+    bool m_dynamicSphereAnimationEnabled = true;
+    bool m_dynamicSphereDeterministicTimeline = false;
     float m_dynamicSphereRadius = 0.0f;
     float m_dynamicSphereCenterY = 0.0f;
     float m_dynamicSphereCenterZ = 0.0f;

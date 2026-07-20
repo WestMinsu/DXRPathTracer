@@ -70,8 +70,8 @@ UI에서 PBR Metallic/Roughness 슬라이더를 움직이면 자동으로 모델
 
 ## Sponza-lite 동적 장면
 
-`--sponza-lite`는 Khronos glTF Sample Assets의 core Sponza를 다음 경로에서
-로드한다.
+프로그램을 실행하면 Khronos glTF Sample Assets의 core Sponza를
+기본 장면으로 로드한다.
 
 ```text
 Assets\KhronosGlTFSampleAssets\Models\Sponza\glTF\Sponza.gltf
@@ -90,11 +90,16 @@ Assets\KhronosGlTFSampleAssets\Models\Sponza\glTF\Sponza.gltf
 - 20~25초 실험 구간에 구가 왕복 이동하며 이동 거리만큼 회전
 
 실시간 조작은 `WASD` 이동, `Q/E` 하강·상승, `Shift` 가속, 마우스 오른쪽
-드래그 회전을 사용한다.
+드래그 회전을 사용한다. UI의 `Animate rolling sphere`로 구의 왕복 이동과
+회전을 켜거나 끌 수 있다. `Play deterministic 30s path`를 누르면 카메라와
+구의 30초 실험 타임라인이 처음부터 재생되며, 종료 후 자유 카메라로 복귀한다.
 
 ```powershell
-.\x64\Debug\DXRPathTracing.exe --sponza-lite
+.\x64\Debug\DXRPathTracing.exe
 ```
+
+기존 Cornell Box나 단순 PBR 장면을 직접 실행할 때는 각각
+`--scene cornell`, `--scene pbr`을 지정한다.
 
 재현 가능한 30초 경로는 별도 JSON을 지정한다. JSON 경로 재생 중에는 자유
 카메라 입력보다 경로가 우선한다.

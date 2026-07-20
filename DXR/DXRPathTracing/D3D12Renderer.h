@@ -42,6 +42,14 @@ public:
     {
         m_cameraPathFilePath = filePath;
     }
+    void SetCameraPathAutoPlay(bool enabled)
+    {
+        m_cameraPathAutoPlay = enabled;
+    }
+    void SetInitialSceneType(UINT sceneType)
+    {
+        m_sceneType = static_cast<int>(sceneType);
+    }
     void ConfigureBenchmark(
         bool enabled,
         const std::wstring& outputPath,
@@ -89,6 +97,8 @@ private:
     bool CreateFence();
     bool CreateGpuTimingResources();
     bool LoadCameraPath();
+    void StartCameraPathPlayback();
+    void StopCameraPathPlayback();
     void UpdateCameraPath();
     void InitializeFreeCamera();
     void UpdateFreeCamera(double deltaSeconds);
@@ -153,6 +163,9 @@ private:
     bool m_tearingSupported = false;
     bool m_collectRayStatistics = false;
     bool m_cameraPathLoaded = false;
+    bool m_cameraPathPlaybackActive = false;
+    bool m_cameraPathAutoPlay = false;
+    bool m_animateDynamicSphere = true;
     bool m_hasPreviousCameraPose = false;
     bool m_freeCameraInitialized = false;
     bool m_rightMouseDragging = false;

@@ -491,6 +491,30 @@ bool RayTracingManager::SetCamera(
     return true;
 }
 
+void RayTracingManager::SetDynamicSphereAnimationEnabled(bool enabled)
+{
+    if (m_dynamicSphereAnimationEnabled == enabled)
+        return;
+    m_dynamicSphereAnimationEnabled = enabled;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetDynamicSphereDeterministicTimeline(bool enabled)
+{
+    if (m_dynamicSphereDeterministicTimeline == enabled)
+        return;
+    m_dynamicSphereDeterministicTimeline = enabled;
+    ResetAccumulation();
+}
+
+void RayTracingManager::ResetDynamicSphereTimeline()
+{
+    m_dynamicSceneFrameIndex = 0;
+    m_dynamicObjectLinearSpeed = 0.0;
+    m_dynamicObjectAngularSpeed = 0.0;
+    ResetAccumulation();
+}
+
 float RayTracingManager::GetSceneDiagonal() const
 {
     float diagonalSquared = 0.0f;
@@ -1271,6 +1295,7 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     bool hasLoadReport = false;
     std::size_t areaLightCount = 0;
     m_hasDynamicSphere = false;
+    m_dynamicSceneFrameIndex = 0;
     m_staticGeometry = {};
     m_dynamicSphereGeometry = {};
     const bool isPbrScene = m_sceneType == c_scenePbrGgx ||
@@ -1999,13 +2024,28 @@ void RayTracingManager::UpdateDynamicSphereMotion()
         static_cast<double>(m_dynamicSceneFrameIndex) / framesPerSecond;
     double position = -m_dynamicSphereMotionAmplitude;
     double linearVelocity = 0.0;
-    if (timeSeconds >= motionStartSeconds &&
+    if (m_dynamicSphereAnimationEnabled &&
+        m_dynamicSphereDeterministicTimeline &&
+        timeSeconds >= motionStartSeconds &&
         timeSeconds <= motionStartSeconds + motionDurationSeconds)
     {
         const double normalizedTime =
             (timeSeconds - motionStartSeconds) /
             motionDurationSeconds;
         const double phase = twoPi * normalizedTime;
+        position =
+            -static_cast<double>(m_dynamicSphereMotionAmplitude) *
+            std::cos(phase);
+        linearVelocity =
+            static_cast<double>(m_dynamicSphereMotionAmplitude) *
+            (twoPi / motionDurationSeconds) *
+            std::sin(phase);
+    }
+    else if (m_dynamicSphereAnimationEnabled &&
+             !m_dynamicSphereDeterministicTimeline)
+    {
+        const double loopTime = std::fmod(timeSeconds, motionDurationSeconds);
+        const double phase = twoPi * loopTime / motionDurationSeconds;
         position =
             -static_cast<double>(m_dynamicSphereMotionAmplitude) *
             std::cos(phase);

@@ -245,11 +245,13 @@ void D3D12Renderer::Render()
     }
     m_lastRenderTime = cpuFrameBegin;
     m_hasLastRenderTime = true;
-    if (m_cameraPathLoaded)
+    if (m_cameraPathPlaybackActive)
         UpdateCameraPath();
     else
         UpdateFreeCamera(frameDeltaSeconds);
     BuildImGuiFrame();
+    m_rayTracingManager->SetDynamicSphereAnimationEnabled(
+        m_animateDynamicSphere);
     m_rayTracingManager->SetShowNormalColor(m_showNormalColor);
     m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
     m_rayTracingManager->SetEnableAccumulation(m_enableAccumulation);
@@ -739,9 +741,17 @@ bool D3D12Renderer::LoadCameraPath()
     }
 
     m_cameraPathLoaded = true;
+    m_cameraPathPlaybackActive = m_cameraPathAutoPlay;
     m_cameraPathFrameIndex = 0;
     m_hasPreviousCameraPose = false;
-    if (m_benchmarkEnabled && m_benchmarkFrameLimit == 0)
+    if (m_cameraPathPlaybackActive && m_rayTracingManager)
+    {
+        m_rayTracingManager->SetDynamicSphereDeterministicTimeline(true);
+        m_rayTracingManager->ResetDynamicSphereTimeline();
+    }
+    if (m_cameraPathPlaybackActive &&
+        m_benchmarkEnabled &&
+        m_benchmarkFrameLimit == 0)
     {
         m_benchmarkFrameLimit = static_cast<UINT>(
             std::ceil(
@@ -749,6 +759,36 @@ bool D3D12Renderer::LoadCameraPath()
                 m_cameraPath.GetFramesPerSecond())) + 1u;
     }
     return true;
+}
+
+void D3D12Renderer::StartCameraPathPlayback()
+{
+    if (!m_cameraPathLoaded || !m_rayTracingManager)
+        return;
+    m_cameraPathPlaybackActive = true;
+    m_cameraPathFrameIndex = 0;
+    m_hasPreviousCameraPose = false;
+    m_cameraLinearSpeed = 0.0;
+    m_cameraAngularSpeed = 0.0;
+    m_rayTracingManager->SetDynamicSphereDeterministicTimeline(true);
+    m_rayTracingManager->ResetDynamicSphereTimeline();
+}
+
+void D3D12Renderer::StopCameraPathPlayback()
+{
+    if (!m_cameraPathPlaybackActive)
+        return;
+    m_cameraPathPlaybackActive = false;
+    m_hasPreviousCameraPose = false;
+    m_cameraLinearSpeed = 0.0;
+    m_cameraAngularSpeed = 0.0;
+    if (m_rayTracingManager)
+    {
+        m_rayTracingManager->SetDynamicSphereDeterministicTimeline(false);
+        m_rayTracingManager->ResetDynamicSphereTimeline();
+    }
+    m_freeCameraInitialized = false;
+    InitializeFreeCamera();
 }
 
 void D3D12Renderer::OnKey(UINT virtualKey, bool pressed)
@@ -769,7 +809,7 @@ void D3D12Renderer::OnRightMouseButton(bool pressed, int x, int y)
 
 void D3D12Renderer::OnMouseMove(int x, int y)
 {
-    if (m_rightMouseDragging && !m_cameraPathLoaded)
+    if (m_rightMouseDragging && !m_cameraPathPlaybackActive)
     {
         constexpr double mouseSensitivity = 0.003;
         m_pendingMouseYaw +=
@@ -908,7 +948,7 @@ void D3D12Renderer::UpdateFreeCamera(double deltaSeconds)
 
 void D3D12Renderer::UpdateCameraPath()
 {
-    if (!m_cameraPathLoaded || !m_rayTracingManager)
+    if (!m_cameraPathPlaybackActive || !m_rayTracingManager)
         return;
 
     const double framesPerSecond = m_cameraPath.GetFramesPerSecond();
@@ -948,6 +988,11 @@ void D3D12Renderer::UpdateCameraPath()
     m_previousCameraPose = pose;
     m_hasPreviousCameraPose = true;
     ++m_cameraPathFrameIndex;
+    if (!m_cameraPath.IsLooping() &&
+        pathTime >= m_cameraPath.GetDurationSeconds())
+    {
+        StopCameraPathPlayback();
+    }
 }
 
 void D3D12Renderer::ReadGpuTimingResults()
@@ -1287,9 +1332,32 @@ void D3D12Renderer::BuildImGuiFrame()
         ? m_rayTracingManager->GetAccumulatedSampleCount()
         : 0u;
     ImGui::Text("Samples: %u", accumulatedSamples);
+    if (m_rayTracingManager && m_rayTracingManager->HasDynamicSphere())
+    {
+        if (ImGui::Checkbox(
+            "Animate rolling sphere",
+            &m_animateDynamicSphere))
+        {
+            m_rayTracingManager->SetDynamicSphereAnimationEnabled(
+                m_animateDynamicSphere);
+            m_rayTracingManager->ResetDynamicSphereTimeline();
+        }
+    }
+    if (m_cameraPathLoaded)
+    {
+        if (m_cameraPathPlaybackActive)
+        {
+            if (ImGui::Button("Stop deterministic camera path"))
+                StopCameraPathPlayback();
+        }
+        else if (ImGui::Button("Play deterministic 30s path"))
+        {
+            StartCameraPathPlayback();
+        }
+    }
     ImGui::TextDisabled(
-        m_cameraPathLoaded
-        ? "Camera: deterministic JSON path"
+        m_cameraPathPlaybackActive
+        ? "Camera: deterministic JSON path playing"
         : "Camera: WASD/QE, Shift, right-drag look");
     const ImGuiIO& io = ImGui::GetIO();
     const float frameTimeMs = io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f;
@@ -1313,7 +1381,7 @@ void D3D12Renderer::BuildImGuiFrame()
         m_gpuMedianMs,
         m_gpuP95Ms,
         m_gpuP99Ms);
-    if (m_cameraPathLoaded)
+    if (m_cameraPathPlaybackActive)
     {
         const double pathTime = static_cast<double>(m_cameraPathFrameIndex) /
             m_cameraPath.GetFramesPerSecond();

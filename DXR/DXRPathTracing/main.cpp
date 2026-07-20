@@ -23,7 +23,7 @@ namespace
         UINT height = 540;
         UINT captureSamples = 0;
         UINT maxBounce = 8;
-        UINT sceneType = RayTracingManager::c_sceneCornellBox;
+        UINT sceneType = RayTracingManager::c_scenePbrGgx;
         UINT pbrDebugView = RayTracingManager::c_pbrDebugBeauty;
         float pbrMetallic = 1.0f;
         float pbrRoughness = 0.35f;
@@ -33,7 +33,8 @@ namespace
         UINT validationSeed = 0;
         bool headless = false;
         bool composeModelRoom = false;
-        bool sponzaLite = false;
+        bool sponzaLite = true;
+        bool cameraPathSpecified = false;
         bool vsync = true;
         bool vsyncSpecified = false;
         bool benchmark = false;
@@ -54,6 +55,7 @@ namespace
     ATOM RegisterMainWindowClass(HINSTANCE hInstance);
     bool CreateMainWindow(HINSTANCE hInstance, int nCmdShow);
     void ParseCommandLine();
+    std::wstring ResolveBundledInputPath(const std::wstring& relativePath);
     LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
 }
 
@@ -93,6 +95,54 @@ int APIENTRY wWinMain(
 
 namespace
 {
+    std::wstring ResolveBundledInputPath(const std::wstring& relativePath)
+    {
+        if (GetFileAttributesW(relativePath.c_str()) !=
+            INVALID_FILE_ATTRIBUTES)
+        {
+            return relativePath;
+        }
+
+        std::wstring modulePath(32768, L'\0');
+        const DWORD moduleLength = GetModuleFileNameW(
+            nullptr,
+            &modulePath[0],
+            static_cast<DWORD>(modulePath.size()));
+        if (moduleLength == 0 || moduleLength >= modulePath.size())
+            return relativePath;
+        modulePath.resize(moduleLength);
+        const std::wstring::size_type slash =
+            modulePath.find_last_of(L"\\/");
+        if (slash == std::wstring::npos)
+            return relativePath;
+
+        const std::wstring candidate =
+            modulePath.substr(0, slash + 1) +
+            L"..\\.." +
+            std::wstring(1, static_cast<wchar_t>(0x5C)) +
+            relativePath;
+        /*
+            L"..\\..\" + relativePath;
+        */
+        const DWORD requiredLength =
+            GetFullPathNameW(candidate.c_str(), 0, nullptr, nullptr);
+        if (requiredLength == 0)
+            return relativePath;
+        std::wstring absolutePath(requiredLength, L'\0');
+        const DWORD writtenLength = GetFullPathNameW(
+            candidate.c_str(),
+            requiredLength,
+            &absolutePath[0],
+            nullptr);
+        if (writtenLength == 0 || writtenLength >= requiredLength)
+            return relativePath;
+        absolutePath.resize(writtenLength);
+        return GetFileAttributesW(absolutePath.c_str()) !=
+            INVALID_FILE_ATTRIBUTES
+            ? absolutePath
+            : relativePath;
+    }
+
     void ParseCommandLine()
     {
         int argumentCount = 0;
@@ -121,6 +171,7 @@ namespace
             }
             else if (argument == L"--scene" && index + 1 < argumentCount)
             {
+                gOptions.sponzaLite = false;
                 const std::wstring scene = arguments[++index];
                 if (scene == L"pbr")
                 {
@@ -138,6 +189,7 @@ namespace
             }
             else if (argument == L"--gpu-brdf-validation")
             {
+                gOptions.sponzaLite = false;
                 gOptions.sceneType =
                     RayTracingManager::c_scenePbrGpuValidation;
             }
@@ -208,6 +260,7 @@ namespace
                      index + 1 < argumentCount)
             {
                 gOptions.sceneFilePath = arguments[++index];
+                gOptions.sponzaLite = false;
             }
             else if (argument == L"--model-room")
             {
@@ -216,6 +269,10 @@ namespace
             else if (argument == L"--sponza-lite")
             {
                 gOptions.sponzaLite = true;
+            }
+            else if (argument == L"--no-sponza-lite")
+            {
+                gOptions.sponzaLite = false;
             }
             else if (argument == L"--scene-manifest" &&
                      index + 1 < argumentCount)
@@ -262,6 +319,7 @@ namespace
                      index + 1 < argumentCount)
             {
                 gOptions.cameraPathFilePath = arguments[++index];
+                gOptions.cameraPathSpecified = true;
             }
         }
 
@@ -277,7 +335,8 @@ namespace
             if (gOptions.sceneFilePath.empty())
             {
                 gOptions.sceneFilePath =
-                    L"Assets\\KhronosGlTFSampleAssets\\Models\\Sponza\\glTF\\Sponza.gltf";
+                    ResolveBundledInputPath(
+                        L"Assets\\KhronosGlTFSampleAssets\\Models\\Sponza\\glTF\\Sponza.gltf");
             }
             if (gOptions.sceneManifestPath.empty())
             {
@@ -287,7 +346,14 @@ namespace
             if (gOptions.sponzaLightConfigPath.empty())
             {
                 gOptions.sponzaLightConfigPath =
-                    L"Config\\sponza_lights.json";
+                    ResolveBundledInputPath(
+                        L"Config\\sponza_lights.json");
+            }
+            if (gOptions.cameraPathFilePath.empty())
+            {
+                gOptions.cameraPathFilePath =
+                    ResolveBundledInputPath(
+                        L"Config\\sponza_camera_path.json");
             }
         }
         if (gOptions.benchmark && !gOptions.vsyncSpecified)
@@ -295,7 +361,7 @@ namespace
         if (gOptions.benchmark && !gOptions.rayStatisticsSpecified)
             gOptions.collectRayStatistics = true;
         if (gOptions.benchmark &&
-            !gOptions.cameraPathFilePath.empty() &&
+            gOptions.cameraPathSpecified &&
             !gOptions.benchmarkFramesSpecified)
         {
             gOptions.benchmarkFrames = 0;
@@ -347,12 +413,15 @@ namespace
             return false;
 
         gRenderer.SetSceneFilePath(gOptions.sceneFilePath);
+        gRenderer.SetInitialSceneType(gOptions.sceneType);
         gRenderer.SetComposeModelRoom(gOptions.composeModelRoom);
         gRenderer.SetSponzaLite(gOptions.sponzaLite);
         gRenderer.SetSceneManifestPath(gOptions.sceneManifestPath);
         gRenderer.SetSponzaLightConfigPath(
             gOptions.sponzaLightConfigPath);
         gRenderer.SetCameraPathFilePath(gOptions.cameraPathFilePath);
+        gRenderer.SetCameraPathAutoPlay(
+            gOptions.cameraPathSpecified);
         gRenderer.SetVSyncEnabled(gOptions.vsync);
         gRenderer.ConfigureBenchmark(
             gOptions.benchmark,

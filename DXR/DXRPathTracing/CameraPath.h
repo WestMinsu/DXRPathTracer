@@ -25,6 +25,7 @@ public:
     bool IsEmpty() const { return m_keyframes.empty(); }
     double GetDurationSeconds() const;
     double GetFramesPerSecond() const { return m_framesPerSecond; }
+    bool IsLooping() const { return m_loop; }
 
 private:
     std::vector<Keyframe> m_keyframes;
