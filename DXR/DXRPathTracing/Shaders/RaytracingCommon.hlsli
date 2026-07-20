@@ -14,6 +14,7 @@ struct RadiancePayload
     float3 color;
     uint depth;
     uint dynamicTouched;
+    float3 pathThroughput;
 };
 
 struct PbrMaterial
@@ -65,6 +66,7 @@ static const uint c_statisticsRayDepthCount = 9u;
 static const uint c_statisticsShadowRayIndex = 9u;
 static const uint c_statisticsHitIndex = 10u;
 static const uint c_statisticsMissIndex = 11u;
+static const uint c_russianRouletteStartBounce = 3u;
 static const float c_rayTMin = 0.001f;
 static const float c_rayTMax = 1000.0f;
 static const float c_rayOriginBias = 0.001f;
@@ -108,6 +110,7 @@ cbuffer RenderSettings : register(b0)
     uint g_overridePbrMaterial;
     uint g_enableStatistics;
     uint g_dynamicObjectMoved;
+    uint g_enableRussianRoulette;
 };
 
 void RecordRadianceRay(uint depth)
@@ -174,6 +177,35 @@ uint NextRandom(inout uint seed)
 float RandomFloat01(inout uint seed)
 {
     return float(NextRandom(seed) & 0x00FFFFFFu) / 16777216.0f;
+}
+
+bool SurvivesRussianRoulette(
+    float3 nextThroughput,
+    uint nextDepth,
+    inout uint seed,
+    out float survivalProbability)
+{
+    survivalProbability = 1.0f;
+    if (g_enableRussianRoulette == 0u ||
+        nextDepth < c_russianRouletteStartBounce)
+    {
+        return true;
+    }
+
+    float3 nonNegativeThroughput = max(
+        nextThroughput,
+        float3(0.0f, 0.0f, 0.0f));
+    float continuationWeight = max(
+        nonNegativeThroughput.r,
+        max(nonNegativeThroughput.g, nonNegativeThroughput.b));
+    if (continuationWeight <= 0.0f)
+    {
+        survivalProbability = 0.0f;
+        return false;
+    }
+
+    survivalProbability = clamp(continuationWeight, 0.05f, 0.95f);
+    return RandomFloat01(seed) < survivalProbability;
 }
 
 float3 RandomUnitVector(inout uint seed)
@@ -256,11 +288,24 @@ float3 TraceLambertianBounce(
     float3 albedo,
     uint depth,
     uint primitiveIndex,
-    inout uint dynamicTouched)
+    inout uint dynamicTouched,
+    float3 pathThroughput)
 {
     uint seed = CreateRandomSeed(depth, primitiveIndex);
 
     float3 scatterDirection = RandomCosineHemisphereDirection(normal, seed);
+    uint nextDepth = depth + 1u;
+    float3 nextThroughput = pathThroughput * albedo;
+    float survivalProbability = 1.0f;
+    if (!SurvivesRussianRoulette(
+        nextThroughput,
+        nextDepth,
+        seed,
+        survivalProbability))
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+    float inverseSurvivalProbability = 1.0f / survivalProbability;
 
     RayDesc bounceRay;
     bounceRay.Origin = hitPosition + normal * c_rayOriginBias;
@@ -270,12 +315,14 @@ float3 TraceLambertianBounce(
 
     RadiancePayload bouncePayload;
     bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
-    bouncePayload.depth = depth + 1;
+    bouncePayload.depth = nextDepth;
     bouncePayload.dynamicTouched = 0u;
+    bouncePayload.pathThroughput =
+        nextThroughput * inverseSurvivalProbability;
 
     RecordRadianceRay(bouncePayload.depth);
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
     dynamicTouched |= bouncePayload.dynamicTouched;
-    return albedo * bouncePayload.color;
+    return albedo * inverseSurvivalProbability * bouncePayload.color;
 }
 #endif

@@ -75,8 +75,9 @@ namespace
         UINT overridePbrMaterial;
         UINT enableStatistics;
         UINT dynamicObjectMoved;
+        UINT enableRussianRoulette;
     };
-    static_assert(sizeof(RenderSettingsConstants) == 22 * sizeof(std::uint32_t));
+    static_assert(sizeof(RenderSettingsConstants) == 23 * sizeof(std::uint32_t));
 
     UINT AlignUp(UINT value, UINT alignment)
     {
@@ -308,7 +309,9 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     renderSettings.enableStatistics = m_enableStatistics ? 1u : 0u;
     renderSettings.dynamicObjectMoved =
         m_dynamicObjectMovedThisFrame ? 1u : 0u;
-    commandList->SetComputeRoot32BitConstants(4, 22, &renderSettings, 0);
+    renderSettings.enableRussianRoulette =
+        m_enableRussianRoulette ? 1u : 0u;
+    commandList->SetComputeRoot32BitConstants(4, 23, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
     commandList->SetComputeRootDescriptorTable(5, environmentHandle);
@@ -413,6 +416,15 @@ void RayTracingManager::SetMaxBounce(UINT maxBounce)
         return;
 
     m_maxBounce = clampedMaxBounce;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetRussianRouletteEnabled(bool enabled)
+{
+    if (m_enableRussianRoulette == enabled)
+        return;
+
+    m_enableRussianRoulette = enabled;
     ResetAccumulation();
 }
 
@@ -973,7 +985,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 22;
+    rootParameters[4].Constants.Num32BitValues = 23;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     rootParameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;

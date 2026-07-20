@@ -183,7 +183,8 @@ float3 TracePbrBrdfWithMixtureSampling(
     float3 hitPosition,
     uint depth,
     uint primitiveIndex,
-    inout uint dynamicTouched)
+    inout uint dynamicTouched,
+    float3 pathThroughput)
 {
     uint seed = CreateRandomSeed(depth, primitiveIndex);
     float3 viewDirection = normalize(-WorldRayDirection());
@@ -199,6 +200,18 @@ float3 TracePbrBrdfWithMixtureSampling(
     {
         return float3(0.0f, 0.0f, 0.0f);
     }
+    uint nextDepth = depth + 1u;
+    float3 nextThroughput = pathThroughput * weightedBrdf;
+    float survivalProbability = 1.0f;
+    if (!SurvivesRussianRoulette(
+        nextThroughput,
+        nextDepth,
+        seed,
+        survivalProbability))
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+    float inverseSurvivalProbability = 1.0f / survivalProbability;
 
     RayDesc bounceRay;
     bounceRay.Origin = hitPosition + normal * c_rayOriginBias;
@@ -208,13 +221,17 @@ float3 TracePbrBrdfWithMixtureSampling(
 
     RadiancePayload bouncePayload;
     bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
-    bouncePayload.depth = depth + 1;
+    bouncePayload.depth = nextDepth;
     bouncePayload.dynamicTouched = 0u;
+    bouncePayload.pathThroughput =
+        nextThroughput * inverseSurvivalProbability;
 
     RecordRadianceRay(bouncePayload.depth);
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
     dynamicTouched |= bouncePayload.dynamicTouched;
 
-    return weightedBrdf * bouncePayload.color;
+    return weightedBrdf *
+        inverseSurvivalProbability *
+        bouncePayload.color;
 }
 #endif

@@ -38,6 +38,19 @@ public:
     }
     void SetVSyncEnabled(bool enabled) { m_vsyncEnabled = enabled; }
     void SetCollectRayStatistics(bool enabled) { m_collectRayStatistics = enabled; }
+    void SetInitialMaxBounce(UINT maxBounce)
+    {
+        m_maxBounce = static_cast<int>(
+            maxBounce < 1u ? 1u : (maxBounce > 8u ? 8u : maxBounce));
+    }
+    void SetInitialRussianRouletteEnabled(bool enabled)
+    {
+        m_enableRussianRoulette = enabled;
+    }
+    void SetInitialDynamicSphereAnimationEnabled(bool enabled)
+    {
+        m_animateDynamicSphere = enabled;
+    }
     void SetCameraPathFilePath(const std::wstring& filePath)
     {
         m_cameraPathFilePath = filePath;
@@ -165,13 +178,14 @@ private:
     bool m_cameraPathLoaded = false;
     bool m_cameraPathPlaybackActive = false;
     bool m_cameraPathAutoPlay = false;
-    bool m_animateDynamicSphere = true;
+    bool m_animateDynamicSphere = false;
     bool m_hasPreviousCameraPose = false;
     bool m_freeCameraInitialized = false;
     bool m_rightMouseDragging = false;
     bool m_hasLastRenderTime = false;
     bool m_showNormalColor = false;
     bool m_enableAccumulation = true;
+    bool m_enableRussianRoulette = false;
     bool m_captureActive = false;
     bool m_saveCurrentRequested = false;
     int m_captureTargetSamples = 256;
@@ -182,7 +196,7 @@ private:
     float m_pbrRoughness = 0.35f;
     bool m_overridePbrMaterial = false;
     bool m_enableIbl = true;
-    float m_iblIntensity = 0.5f;
+    float m_iblIntensity = 1.0f;
     UINT m_validationSeed = 0;
     float m_exposure = 0.0f;
     std::string m_captureStatus;

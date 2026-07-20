@@ -56,6 +56,7 @@ public:
     void DispatchRays(ID3D12GraphicsCommandList4* commandList);
     void SetShowNormalColor(bool showNormalColor);
     void SetMaxBounce(UINT maxBounce);
+    void SetRussianRouletteEnabled(bool enabled);
     void SetEnableAccumulation(bool enableAccumulation);
     void SetSceneType(UINT sceneType);
     void SetSceneFilePath(const std::wstring& sceneFilePath) { m_sceneFilePath = sceneFilePath; }
@@ -116,7 +117,7 @@ public:
 private:
     static constexpr DXGI_FORMAT c_outputFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     static constexpr DXGI_FORMAT c_accumulationFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
-    static constexpr UINT c_shaderPayloadSize = 5 * sizeof(float);
+    static constexpr UINT c_shaderPayloadSize = 8 * sizeof(float);
     static constexpr UINT c_shaderAttributeSize = 2 * sizeof(float);
     static constexpr UINT c_maxBounce = 8;
     static constexpr UINT c_maxRecursionDepth = c_maxBounce + 1;
@@ -191,6 +192,7 @@ private:
     HANDLE m_buildFenceEvent = nullptr;
     bool m_showNormalColor = true;
     bool m_enableAccumulation = true;
+    bool m_enableRussianRoulette = false;
     UINT m_maxBounce = 3;
     UINT m_sceneType = c_sceneCornellBox;
     UINT m_pbrDebugView = c_pbrDebugBeauty;

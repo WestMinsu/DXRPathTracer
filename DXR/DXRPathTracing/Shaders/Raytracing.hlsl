@@ -104,6 +104,7 @@ void MyRaygenShader_RadianceRay()
         payload.color = float3(0.0f, 0.0f, 0.0f);
         payload.depth = 0;
         payload.dynamicTouched = 0u;
+        payload.pathThroughput = float3(1.0f, 1.0f, 1.0f);
 
         RecordRadianceRay(0u);
         TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
@@ -238,7 +239,8 @@ void MyClosestHitShader_RadianceRay(
             hitPosition,
             payload.depth,
             globalPrimitiveIndex,
-            payload.dynamicTouched);
+            payload.dynamicTouched,
+            payload.pathThroughput);
         return;
     }
 
@@ -248,7 +250,8 @@ void MyClosestHitShader_RadianceRay(
         CornellSurfaceAlbedo(globalPrimitiveIndex),
         payload.depth,
         globalPrimitiveIndex,
-        payload.dynamicTouched);
+        payload.dynamicTouched,
+        payload.pathThroughput);
 }
 
 [shader("miss")]

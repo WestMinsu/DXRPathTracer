@@ -19,8 +19,8 @@ namespace
 
     struct AppOptions
     {
-        UINT width = 960;
-        UINT height = 540;
+        UINT width = 1920;
+        UINT height = 1080;
         UINT captureSamples = 0;
         UINT maxBounce = 8;
         UINT sceneType = RayTracingManager::c_scenePbrGgx;
@@ -28,6 +28,7 @@ namespace
         float pbrMetallic = 1.0f;
         float pbrRoughness = 0.35f;
         bool overridePbrMaterial = false;
+        bool enableRussianRoulette = false;
         bool enableIbl = true;
         float iblIntensity = 0.5f;
         UINT validationSeed = 0;
@@ -42,6 +43,7 @@ namespace
         bool benchmarkFramesSpecified = false;
         bool collectRayStatistics = false;
         bool rayStatisticsSpecified = false;
+        bool animateDynamicSphere = false;
         std::wstring benchmarkOutput;
         std::wstring cameraPathFilePath;
         std::wstring outputPrefix;
@@ -168,6 +170,18 @@ namespace
             else if (argument == L"--max-bounce" && index + 1 < argumentCount)
             {
                 gOptions.maxBounce = static_cast<UINT>(_wtoi(arguments[++index]));
+            }
+            else if (argument == L"--russian-roulette" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.enableRussianRoulette =
+                    _wtoi(arguments[++index]) != 0;
+            }
+            else if (argument == L"--animate-sphere" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.animateDynamicSphere =
+                    _wtoi(arguments[++index]) != 0;
             }
             else if (argument == L"--scene" && index + 1 < argumentCount)
             {
@@ -414,6 +428,11 @@ namespace
 
         gRenderer.SetSceneFilePath(gOptions.sceneFilePath);
         gRenderer.SetInitialSceneType(gOptions.sceneType);
+        gRenderer.SetInitialMaxBounce(gOptions.maxBounce);
+        gRenderer.SetInitialRussianRouletteEnabled(
+            gOptions.enableRussianRoulette);
+        gRenderer.SetInitialDynamicSphereAnimationEnabled(
+            gOptions.animateDynamicSphere);
         gRenderer.SetComposeModelRoom(gOptions.composeModelRoom);
         gRenderer.SetSponzaLite(gOptions.sponzaLite);
         gRenderer.SetSceneManifestPath(gOptions.sceneManifestPath);
