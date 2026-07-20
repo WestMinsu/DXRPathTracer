@@ -32,6 +32,7 @@ public:
     void SetEnableAccumulation(bool enableAccumulation);
     void SetSceneType(UINT sceneType);
     void SetSceneFilePath(const std::wstring& sceneFilePath) { m_sceneFilePath = sceneFilePath; }
+    void SetComposeModelRoom(bool enabled) { m_composeModelRoom = enabled; }
     void SetPbrDebugView(UINT pbrDebugView);
     void SetPbrMaterial(float metallic, float roughness);
     void SetPbrMaterialOverride(bool enabled);
@@ -116,6 +117,7 @@ private:
     UINT m_validationSeed = 0;
     float m_exposure = 0.0f;
     std::wstring m_sceneFilePath;
+    bool m_composeModelRoom = false;
     bool m_autoFrameCamera = false;
     std::array<float, 3> m_sceneBoundsMin = { 0.0f, 0.0f, 0.0f };
     std::array<float, 3> m_sceneBoundsMax = { 0.0f, 0.0f, 0.0f };

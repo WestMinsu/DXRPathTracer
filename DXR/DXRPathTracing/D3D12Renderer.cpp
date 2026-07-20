@@ -77,6 +77,7 @@ bool D3D12Renderer::Initialize(HWND hWnd)
 
     m_rayTracingManager.reset(new RayTracingManager());
     m_rayTracingManager->SetSceneFilePath(m_sceneFilePath);
+    m_rayTracingManager->SetComposeModelRoom(m_composeModelRoom);
     m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
     if (!m_rayTracingManager->Initialize(m_hWnd, m_device.Get(), m_width, m_height))
         return false;

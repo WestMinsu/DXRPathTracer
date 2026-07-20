@@ -1,5 +1,6 @@
 #include "SceneData.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -72,7 +73,7 @@ namespace
         float metallic,
         float roughness,
         Float3 emission = { 0.0f, 0.0f, 0.0f },
-        bool useGlobalPbrParameters = false)
+        std::uint32_t pbrParameterMode = c_pbrParameterModeFixed)
     {
         return
         {
@@ -80,7 +81,7 @@ namespace
             metallic,
             roughness,
             { emission.x, emission.y, emission.z },
-            useGlobalPbrParameters ? 1u : 0u,
+            pbrParameterMode,
             c_invalidSceneTextureIndex,
             c_invalidSceneTextureIndex,
             c_invalidSceneTextureIndex,
@@ -299,6 +300,144 @@ bool SceneData::IsValid() const
         indices.size() <= std::numeric_limits<std::uint32_t>::max();
 }
 
+bool ComputeSceneBounds(const SceneData& scene, SceneBounds& bounds)
+{
+    if (scene.vertices.empty())
+        return false;
+
+    for (std::size_t component = 0; component < 3; ++component)
+    {
+        bounds.minimum[component] = std::numeric_limits<float>::max();
+        bounds.maximum[component] = std::numeric_limits<float>::lowest();
+    }
+
+    for (const SceneVertex& vertex : scene.vertices)
+    {
+        for (std::size_t component = 0; component < 3; ++component)
+        {
+            const float position = vertex.position[component];
+            if (!std::isfinite(position))
+                return false;
+            bounds.minimum[component] = std::min(
+                bounds.minimum[component],
+                position);
+            bounds.maximum[component] = std::max(
+                bounds.maximum[component],
+                position);
+        }
+    }
+    return true;
+}
+
+bool AppendPbrModelRoom(SceneData& scene, const SceneBounds& modelBounds)
+{
+    Float3 center = {};
+    Float3 halfExtent = {};
+    float* centerComponents[] = { &center.x, &center.y, &center.z };
+    float* halfExtentComponents[] =
+    {
+        &halfExtent.x,
+        &halfExtent.y,
+        &halfExtent.z
+    };
+    for (std::size_t component = 0; component < 3; ++component)
+    {
+        const float minimum = modelBounds.minimum[component];
+        const float maximum = modelBounds.maximum[component];
+        if (!std::isfinite(minimum) || !std::isfinite(maximum) ||
+            maximum < minimum)
+        {
+            return false;
+        }
+        *centerComponents[component] = (minimum + maximum) * 0.5f;
+        *halfExtentComponents[component] = (maximum - minimum) * 0.5f;
+    }
+
+    const float scale = std::max(
+        std::max(halfExtent.x, halfExtent.y),
+        std::max(halfExtent.z, 0.01f));
+    const float roomHalfWidth = std::max(halfExtent.x * 1.7f, scale * 0.9f);
+    const float roomNearZ = center.z - std::max(halfExtent.z * 2.0f, scale * 1.8f);
+    const float roomFarZ = center.z + std::max(halfExtent.z * 1.6f, scale * 1.2f);
+    const float floorY = modelBounds.minimum[1] - std::max(scale * 0.01f, 0.001f);
+    const float ceilingY = modelBounds.maximum[1] + scale * 0.55f;
+    const float leftX = center.x - roomHalfWidth;
+    const float rightX = center.x + roomHalfWidth;
+
+    const std::uint32_t floorMaterial =
+        static_cast<std::uint32_t>(scene.materials.size());
+    scene.materials.push_back(MakeMaterial(
+        MakeFloat3(0.32f, 0.34f, 0.37f),
+        0.0f,
+        0.75f,
+        MakeFloat3(0.0f, 0.0f, 0.0f),
+        c_pbrParameterModeFixedNoOverride));
+    const std::uint32_t wallMaterial =
+        static_cast<std::uint32_t>(scene.materials.size());
+    scene.materials.push_back(MakeMaterial(
+        MakeFloat3(0.62f, 0.64f, 0.68f),
+        0.0f,
+        0.85f,
+        MakeFloat3(0.0f, 0.0f, 0.0f),
+        c_pbrParameterModeFixedNoOverride));
+    const std::uint32_t lightMaterial =
+        static_cast<std::uint32_t>(scene.materials.size());
+    scene.materials.push_back(MakeMaterial(
+        MakeFloat3(0.0f, 0.0f, 0.0f),
+        0.0f,
+        1.0f,
+        MakeFloat3(12.0f, 10.0f, 8.0f),
+        c_pbrParameterModeFixedNoOverride));
+
+    AddQuad(
+        scene,
+        MakeFloat3(leftX, floorY, roomNearZ),
+        MakeFloat3(leftX, floorY, roomFarZ),
+        MakeFloat3(rightX, floorY, roomFarZ),
+        MakeFloat3(rightX, floorY, roomNearZ),
+        MakeFloat3(0.0f, 1.0f, 0.0f),
+        floorMaterial);
+    AddQuad(
+        scene,
+        MakeFloat3(leftX, floorY, roomFarZ),
+        MakeFloat3(leftX, ceilingY, roomFarZ),
+        MakeFloat3(rightX, ceilingY, roomFarZ),
+        MakeFloat3(rightX, floorY, roomFarZ),
+        MakeFloat3(0.0f, 0.0f, -1.0f),
+        wallMaterial);
+    AddQuad(
+        scene,
+        MakeFloat3(leftX, floorY, roomNearZ),
+        MakeFloat3(leftX, ceilingY, roomNearZ),
+        MakeFloat3(leftX, ceilingY, roomFarZ),
+        MakeFloat3(leftX, floorY, roomFarZ),
+        MakeFloat3(1.0f, 0.0f, 0.0f),
+        wallMaterial);
+    AddQuad(
+        scene,
+        MakeFloat3(rightX, floorY, roomNearZ),
+        MakeFloat3(rightX, floorY, roomFarZ),
+        MakeFloat3(rightX, ceilingY, roomFarZ),
+        MakeFloat3(rightX, ceilingY, roomNearZ),
+        MakeFloat3(-1.0f, 0.0f, 0.0f),
+        wallMaterial);
+
+    const float lightHalfWidth = std::max(halfExtent.x * 0.65f, scale * 0.22f);
+    const float lightHalfDepth = std::max(halfExtent.z * 0.45f, scale * 0.16f);
+    const float lightY = ceilingY - std::max(scale * 0.002f, 0.0002f);
+    const float lightCenterZ = center.z - halfExtent.z * 0.25f;
+    AddQuad(
+        scene,
+        MakeFloat3(center.x - lightHalfWidth, lightY, lightCenterZ - lightHalfDepth),
+        MakeFloat3(center.x + lightHalfWidth, lightY, lightCenterZ - lightHalfDepth),
+        MakeFloat3(center.x + lightHalfWidth, lightY, lightCenterZ + lightHalfDepth),
+        MakeFloat3(center.x - lightHalfWidth, lightY, lightCenterZ + lightHalfDepth),
+        MakeFloat3(0.0f, -1.0f, 0.0f),
+        lightMaterial);
+
+    return scene.IsValid();
+}
+
 SceneData CreateCornellBoxSceneData()
 {
     SceneData scene;
@@ -347,7 +486,7 @@ SceneData CreatePbrGgxSceneData()
     constexpr std::uint32_t floorMaterial = 1;
     scene.materials =
     {
-        MakeMaterial(MakeFloat3(1.0f, 0.766f, 0.336f), 1.0f, 0.35f, MakeFloat3(0.0f, 0.0f, 0.0f), true),
+        MakeMaterial(MakeFloat3(1.0f, 0.766f, 0.336f), 1.0f, 0.35f, MakeFloat3(0.0f, 0.0f, 0.0f), c_pbrParameterModeGlobal),
         MakeMaterial(MakeFloat3(0.55f, 0.55f, 0.55f), 0.0f, 0.65f)
     };
 

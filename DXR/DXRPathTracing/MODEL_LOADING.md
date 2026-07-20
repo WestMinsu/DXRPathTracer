@@ -7,6 +7,26 @@ PBR 장면에서 glTF 2.0 모델을 사용하려면 `--model` 또는 `--gltf`로
 .\x64\Debug\DXRPathTracing.exe --model Assets\Models\scene.gltf
 ```
 
+## 모델 전시 장면 합성
+
+`--model-room`을 추가하면 로드한 모델의 AABB를 기준으로 다음 형상을 생성한다.
+
+- 거친 비금속 바닥
+- 뒷벽과 양옆 벽
+- 아래쪽을 향하는 사각형 면광원: 선형 RGB radiance `(12, 10, 8)`
+
+모델 정점과 물리적 크기는 변경하지 않는다. 방 크기만 모델 AABB에 비례해
+결정하며, 자동 카메라는 방 전체가 아닌 원본 모델 AABB를 계속 프레이밍한다.
+
+```powershell
+.\x64\Debug\DXRPathTracing.exe `
+    --model Assets\Models\AntiqueCamera\AntiqueCamera.glb --model-room
+```
+
+면광원은 현재 emissive triangle에 BSDF sampling 경로가 우연히 도달했을 때
+기여한다. 따라서 `--disable-ibl`로 면광원만 남기면 NEE 적용 전에는 높은
+샘플 수에서도 노이즈가 많으며, 이 결과를 이후 NEE 적용 전 기준으로 사용한다.
+
 ## 현재 지원 범위
 
 - triangle-list mesh, `POSITION`, `NORMAL`

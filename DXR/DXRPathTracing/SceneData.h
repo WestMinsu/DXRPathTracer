@@ -5,6 +5,9 @@
 #include <vector>
 
 constexpr std::uint32_t c_invalidSceneTextureIndex = 0xFFFFFFFFu;
+constexpr std::uint32_t c_pbrParameterModeFixed = 0u;
+constexpr std::uint32_t c_pbrParameterModeGlobal = 1u;
+constexpr std::uint32_t c_pbrParameterModeFixedNoOverride = 2u;
 
 struct SceneVertex
 {
@@ -21,7 +24,7 @@ struct SceneMaterial
     float metallic;
     float roughness;
     float emission[3];
-    std::uint32_t useGlobalPbrParameters;
+    std::uint32_t pbrParameterMode;
     std::uint32_t baseColorTextureIndex;
     std::uint32_t metallicRoughnessTextureIndex;
     std::uint32_t normalTextureIndex;
@@ -43,7 +46,7 @@ static_assert(sizeof(SceneMaterial) == 52);
 static_assert(offsetof(SceneMaterial, metallic) == 12);
 static_assert(offsetof(SceneMaterial, roughness) == 16);
 static_assert(offsetof(SceneMaterial, emission) == 20);
-static_assert(offsetof(SceneMaterial, useGlobalPbrParameters) == 32);
+static_assert(offsetof(SceneMaterial, pbrParameterMode) == 32);
 static_assert(offsetof(SceneMaterial, baseColorTextureIndex) == 36);
 static_assert(offsetof(SceneMaterial, metallicRoughnessTextureIndex) == 40);
 static_assert(offsetof(SceneMaterial, normalTextureIndex) == 44);
@@ -62,5 +65,13 @@ struct SceneData
     bool IsValid() const;
 };
 
+struct SceneBounds
+{
+    float minimum[3];
+    float maximum[3];
+};
+
 SceneData CreateCornellBoxSceneData();
 SceneData CreatePbrGgxSceneData();
+bool ComputeSceneBounds(const SceneData& scene, SceneBounds& bounds);
+bool AppendPbrModelRoom(SceneData& scene, const SceneBounds& modelBounds);

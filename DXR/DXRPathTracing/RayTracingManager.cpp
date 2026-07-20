@@ -1043,6 +1043,8 @@ bool RayTracingManager::CreateBuildCommandObjects()
 bool RayTracingManager::CreateStaticGeometryBuffers()
 {
     SceneData scene;
+    SceneBounds modelBounds = {};
+    bool hasModelBounds = false;
     const bool isPbrScene = m_sceneType == c_scenePbrGgx ||
         m_sceneType == c_scenePbrGpuValidation;
     if (isPbrScene && !m_sceneFilePath.empty())
@@ -1053,6 +1055,17 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             ReportMessage(
                 L"glTF scene load failed.\nPath: " + m_sceneFilePath +
                 L"\nReason: " + errorMessage);
+            return false;
+        }
+        if (!scene.IsValid() || !ComputeSceneBounds(scene, modelBounds))
+        {
+            ReportMessage(L"Loaded glTF scene data or bounds are invalid.");
+            return false;
+        }
+        hasModelBounds = true;
+        if (m_composeModelRoom && !AppendPbrModelRoom(scene, modelBounds))
+        {
+            ReportMessage(L"Failed to compose the PBR model room.");
             return false;
         }
     }
@@ -1068,32 +1081,13 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         return false;
     }
 
-    m_autoFrameCamera = isPbrScene && !m_sceneFilePath.empty();
+    m_autoFrameCamera = hasModelBounds;
     if (m_autoFrameCamera)
     {
-        m_sceneBoundsMin =
+        for (std::size_t component = 0; component < 3; ++component)
         {
-            std::numeric_limits<float>::max(),
-            std::numeric_limits<float>::max(),
-            std::numeric_limits<float>::max()
-        };
-        m_sceneBoundsMax =
-        {
-            std::numeric_limits<float>::lowest(),
-            std::numeric_limits<float>::lowest(),
-            std::numeric_limits<float>::lowest()
-        };
-        for (const SceneVertex& vertex : scene.vertices)
-        {
-            for (std::size_t component = 0; component < 3; ++component)
-            {
-                m_sceneBoundsMin[component] = std::min(
-                    m_sceneBoundsMin[component],
-                    vertex.position[component]);
-                m_sceneBoundsMax[component] = std::max(
-                    m_sceneBoundsMax[component],
-                    vertex.position[component]);
-            }
+            m_sceneBoundsMin[component] = modelBounds.minimum[component];
+            m_sceneBoundsMax[component] = modelBounds.maximum[component];
         }
         UpdateCameraFromSceneBounds();
     }

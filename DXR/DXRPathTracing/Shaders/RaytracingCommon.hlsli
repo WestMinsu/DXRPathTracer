@@ -30,7 +30,7 @@ struct SceneMaterial
     float metallic;
     float roughness;
     float3 emission;
-    uint useGlobalPbrParameters;
+    uint pbrParameterMode;
     uint baseColorTextureIndex;
     uint metallicRoughnessTextureIndex;
     uint normalTextureIndex;
@@ -48,6 +48,9 @@ static const uint c_pbrDebugDepth = 4;
 static const uint c_pbrDebugMaterialId = 5;
 static const uint c_pbrDebugNormal = 6;
 static const uint c_invalidSceneTextureIndex = 0xFFFFFFFFu;
+static const uint c_pbrParameterModeFixed = 0u;
+static const uint c_pbrParameterModeGlobal = 1u;
+static const uint c_pbrParameterModeFixedNoOverride = 2u;
 static const uint c_maxMaterialTextures = 64u;
 static const float c_rayTMin = 0.001f;
 static const float c_rayTMax = 1000.0f;

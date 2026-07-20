@@ -31,6 +31,7 @@ namespace
         float iblIntensity = 0.5f;
         UINT validationSeed = 0;
         bool headless = false;
+        bool composeModelRoom = false;
         std::wstring outputPrefix;
         std::wstring sceneFilePath;
     };
@@ -195,6 +196,10 @@ namespace
             {
                 gOptions.sceneFilePath = arguments[++index];
             }
+            else if (argument == L"--model-room")
+            {
+                gOptions.composeModelRoom = true;
+            }
             else if (argument == L"--headless")
             {
                 gOptions.headless = true;
@@ -254,6 +259,7 @@ namespace
             return false;
 
         gRenderer.SetSceneFilePath(gOptions.sceneFilePath);
+        gRenderer.SetComposeModelRoom(gOptions.composeModelRoom);
 
         if (gOptions.captureSamples > 0)
         {

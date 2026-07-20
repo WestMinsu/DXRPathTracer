@@ -23,6 +23,7 @@ public:
         if (!m_sceneFilePath.empty())
             m_sceneType = static_cast<int>(RayTracingManager::c_scenePbrGgx);
     }
+    void SetComposeModelRoom(bool enabled) { m_composeModelRoom = enabled; }
     void Render();
     void Resize(UINT width, UINT height);
     void WaitForGpu();
@@ -121,6 +122,7 @@ private:
     bool m_exitAfterCapture = false;
     std::wstring m_captureOutputPrefix;
     std::wstring m_sceneFilePath;
+    bool m_composeModelRoom = false;
 
     Microsoft::WRL::ComPtr<IDXGIFactory4> m_factory;
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;

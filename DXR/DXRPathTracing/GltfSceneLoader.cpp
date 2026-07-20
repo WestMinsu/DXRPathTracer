@@ -617,7 +617,7 @@ namespace
             material.emission[0] = std::max(source.emissive_factor[0], 0.0f) * emissiveStrength;
             material.emission[1] = std::max(source.emissive_factor[1], 0.0f) * emissiveStrength;
             material.emission[2] = std::max(source.emissive_factor[2], 0.0f) * emissiveStrength;
-            material.useGlobalPbrParameters = 0;
+            material.pbrParameterMode = c_pbrParameterModeFixed;
             scene.materials.push_back(material);
         }
 
