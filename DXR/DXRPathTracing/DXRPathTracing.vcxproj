@@ -131,6 +131,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="CameraPath.h" />
     <ClInclude Include="D3D12Renderer.h" />
     <ClInclude Include="GltfSceneLoader.h" />
     <ClInclude Include="RayTracingManager.h" />
@@ -146,6 +147,7 @@
     <ClInclude Include="ThirdParty\imgui\backends\imgui_impl_win32.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="CameraPath.cpp" />
     <ClCompile Include="D3D12Renderer.cpp" />
     <ClCompile Include="GltfSceneLoader.cpp" />
     <ClCompile Include="main.cpp" />

@@ -15,6 +15,7 @@
   --benchmark `
   --benchmark-output BenchmarkOutput\baseline.csv `
   --benchmark-frames 600 `
+  --camera-path Config\camera_path.json `
   --ray-stats 1 `
   --headless --vsync 0
 ```
@@ -23,7 +24,9 @@
 - `--benchmark-output <csv>`: CSV 출력 경로다. 생략하면
   `BenchmarkOutput/baseline.csv`를 사용한다.
 - `--benchmark-frames <N>`: N개 프레임 기록 후 자동 종료한다. 기본값은
-  600이다.
+  600이다. camera path를 지정하고 이 옵션을 생략하면 경로 끝까지 기록한다.
+- `--camera-path <json>`: `time`, `position[3]`, `target[3]`
+  keyframe을 `frames_per_second`의 고정 시간축으로 재생한다.
 - `--vsync 0|1`: Present 동기화를 제어한다. `--benchmark`에서 명시하지
   않으면 자동으로 끈다.
 - `--ray-stats 0|1`: 깊이별 radiance ray, shadow ray, hit/miss를 GPU
@@ -41,6 +44,8 @@
 - `average_path_length`는
   `(primary ray + bounce ray) / primary ray`다. 현재 NEE 구현 전에는
   `shadow_rays`가 0인 것이 정상이다.
+- `camera_linear_speed`는 장면 좌표 단위/s,
+  `camera_angular_speed`는 시선 방향의 degree/s다.
 - 생성 CSV가 소스 커밋에 포함되지 않도록 `BenchmarkOutput/`은
   `.gitignore`에 등록되어 있다.
 

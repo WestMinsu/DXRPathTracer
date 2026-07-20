@@ -36,9 +36,11 @@ namespace
         bool vsyncSpecified = false;
         bool benchmark = false;
         UINT benchmarkFrames = 600;
+        bool benchmarkFramesSpecified = false;
         bool collectRayStatistics = false;
         bool rayStatisticsSpecified = false;
         std::wstring benchmarkOutput;
+        std::wstring cameraPathFilePath;
         std::wstring outputPrefix;
         std::wstring sceneFilePath;
     };
@@ -230,12 +232,18 @@ namespace
             {
                 gOptions.benchmarkFrames = static_cast<UINT>(
                     _wtoi(arguments[++index]));
+                gOptions.benchmarkFramesSpecified = true;
             }
             else if (argument == L"--ray-stats" &&
                      index + 1 < argumentCount)
             {
                 gOptions.collectRayStatistics = _wtoi(arguments[++index]) != 0;
                 gOptions.rayStatisticsSpecified = true;
+            }
+            else if (argument == L"--camera-path" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.cameraPathFilePath = arguments[++index];
             }
         }
 
@@ -249,6 +257,12 @@ namespace
             gOptions.vsync = false;
         if (gOptions.benchmark && !gOptions.rayStatisticsSpecified)
             gOptions.collectRayStatistics = true;
+        if (gOptions.benchmark &&
+            !gOptions.cameraPathFilePath.empty() &&
+            !gOptions.benchmarkFramesSpecified)
+        {
+            gOptions.benchmarkFrames = 0;
+        }
 
         LocalFree(arguments);
     }
@@ -297,6 +311,7 @@ namespace
 
         gRenderer.SetSceneFilePath(gOptions.sceneFilePath);
         gRenderer.SetComposeModelRoom(gOptions.composeModelRoom);
+        gRenderer.SetCameraPathFilePath(gOptions.cameraPathFilePath);
         gRenderer.SetVSyncEnabled(gOptions.vsync);
         gRenderer.ConfigureBenchmark(
             gOptions.benchmark,

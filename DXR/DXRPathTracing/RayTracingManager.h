@@ -64,6 +64,18 @@ public:
     void SetPbrMaterial(float metallic, float roughness);
     void SetPbrMaterialOverride(bool enabled);
     void SetIblSettings(bool enableIbl, float intensity);
+    bool SetCamera(
+        const std::array<float, 3>& position,
+        const std::array<float, 3>& target);
+    const std::array<float, 3>& GetCameraPosition() const
+    {
+        return m_cameraPosition;
+    }
+    const std::array<float, 3>& GetCameraTarget() const
+    {
+        return m_cameraTarget;
+    }
+    float GetSceneDiagonal() const;
     void SetEnableStatistics(bool enabled) { m_enableStatistics = enabled; }
     void ReadFrameStatistics();
     void SetValidationSeed(UINT validationSeed) { m_validationSeed = validationSeed; }

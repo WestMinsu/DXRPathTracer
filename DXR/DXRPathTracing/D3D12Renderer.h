@@ -11,6 +11,7 @@
 #include <wrl/client.h>
 
 #include "RayTracingManager.h"
+#include "CameraPath.h"
 
 class D3D12Renderer
 {
@@ -27,6 +28,10 @@ public:
     void SetComposeModelRoom(bool enabled) { m_composeModelRoom = enabled; }
     void SetVSyncEnabled(bool enabled) { m_vsyncEnabled = enabled; }
     void SetCollectRayStatistics(bool enabled) { m_collectRayStatistics = enabled; }
+    void SetCameraPathFilePath(const std::wstring& filePath)
+    {
+        m_cameraPathFilePath = filePath;
+    }
     void ConfigureBenchmark(
         bool enabled,
         const std::wstring& outputPath,
@@ -69,6 +74,8 @@ private:
     bool CreateRenderTargetViews();
     bool CreateFence();
     bool CreateGpuTimingResources();
+    bool LoadCameraPath();
+    void UpdateCameraPath();
     void ReadGpuTimingResults();
     bool OpenBenchmarkCsv();
     void RecordFrameMetrics(double cpuFrameMs);
@@ -129,6 +136,8 @@ private:
     bool m_vsyncEnabled = true;
     bool m_tearingSupported = false;
     bool m_collectRayStatistics = false;
+    bool m_cameraPathLoaded = false;
+    bool m_hasPreviousCameraPose = false;
     bool m_showNormalColor = false;
     bool m_enableAccumulation = true;
     bool m_captureActive = false;
@@ -148,6 +157,8 @@ private:
     bool m_exitAfterCapture = false;
     std::wstring m_captureOutputPrefix;
     std::wstring m_sceneFilePath;
+    std::wstring m_cameraPathFilePath;
+    std::wstring m_cameraPathError;
     bool m_composeModelRoom = false;
     bool m_benchmarkEnabled = false;
     bool m_benchmarkFinished = false;
@@ -166,6 +177,13 @@ private:
     double m_cpuMedianMs = 0.0;
     double m_cpuP95Ms = 0.0;
     double m_cpuP99Ms = 0.0;
+    double m_cameraLinearSpeed = 0.0;
+    double m_cameraAngularSpeed = 0.0;
+    double m_objectLinearSpeed = 0.0;
+    double m_objectAngularSpeed = 0.0;
+    UINT64 m_cameraPathFrameIndex = 0;
+    CameraPath m_cameraPath;
+    CameraPose m_previousCameraPose;
     std::vector<double> m_gpuTimingHistory;
     std::vector<double> m_cpuTimingHistory;
 

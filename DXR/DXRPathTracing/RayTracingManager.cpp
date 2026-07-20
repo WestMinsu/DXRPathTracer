@@ -457,6 +457,45 @@ void RayTracingManager::SetIblSettings(bool enableIbl, float intensity)
     ResetAccumulation();
 }
 
+bool RayTracingManager::SetCamera(
+    const std::array<float, 3>& position,
+    const std::array<float, 3>& target)
+{
+    float directionLengthSquared = 0.0f;
+    bool changed = false;
+    for (std::size_t component = 0; component < 3; ++component)
+    {
+        const float direction = target[component] - position[component];
+        directionLengthSquared += direction * direction;
+        changed |= std::abs(position[component] - m_cameraPosition[component]) >
+            0.000001f;
+        changed |= std::abs(target[component] - m_cameraTarget[component]) >
+            0.000001f;
+    }
+    if (directionLengthSquared <= 0.00000001f || !changed)
+        return false;
+
+    m_cameraPosition = position;
+    m_cameraTarget = target;
+    m_autoFrameCamera = false;
+    ResetAccumulation();
+    return true;
+}
+
+float RayTracingManager::GetSceneDiagonal() const
+{
+    float diagonalSquared = 0.0f;
+    for (std::size_t component = 0; component < 3; ++component)
+    {
+        const float extent =
+            m_sceneBoundsMax[component] - m_sceneBoundsMin[component];
+        diagonalSquared += extent * extent;
+    }
+    return diagonalSquared > 0.00000001f
+        ? std::sqrt(diagonalSquared)
+        : 1.0f;
+}
+
 void RayTracingManager::SetExposure(float exposure)
 {
     const float clampedExposure = exposure < -10.0f ? -10.0f : (exposure > 10.0f ? 10.0f : exposure);

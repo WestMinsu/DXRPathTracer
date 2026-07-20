@@ -49,31 +49,103 @@ namespace
         samples.push_back(value);
     }
 
-    bool EnsureParentDirectory(const std::wstring& filePath)
+    HRESULT EnsureParentDirectory(
+        const std::wstring& filePath,
+        std::wstring& resolvedDirectory)
     {
-        wchar_t absolutePath[MAX_PATH] = {};
-        const DWORD absolutePathLength = GetFullPathNameW(
-            filePath.c_str(),
-            _countof(absolutePath),
-            absolutePath,
-            nullptr);
-        const std::wstring pathSource =
-            absolutePathLength > 0 && absolutePathLength < _countof(absolutePath)
-            ? std::wstring(absolutePath, absolutePathLength)
-            : filePath;
+        resolvedDirectory.clear();
+        if (filePath.empty())
+            return E_INVALIDARG;
 
+        const DWORD requiredLength = GetFullPathNameW(
+            filePath.c_str(),
+            0,
+            nullptr,
+            nullptr);
+        if (requiredLength == 0)
+            return HRESULT_FROM_WIN32(GetLastError());
+
+        std::vector<wchar_t> absolutePath(requiredLength);
+        const DWORD writtenLength = GetFullPathNameW(
+            filePath.c_str(),
+            requiredLength,
+            absolutePath.data(),
+            nullptr);
+        if (writtenLength == 0 || writtenLength >= requiredLength)
+            return HRESULT_FROM_WIN32(
+                writtenLength == 0 ? GetLastError() : ERROR_INSUFFICIENT_BUFFER);
+
+        const std::wstring pathSource(absolutePath.data(), writtenLength);
         const std::size_t separator = pathSource.find_last_of(L"\\/");
         if (separator == std::wstring::npos)
-            return true;
+            return S_OK;
 
-        const std::wstring directory = pathSource.substr(0, separator);
-        if (directory.empty())
-            return true;
+        resolvedDirectory = pathSource.substr(0, separator);
+        if (resolvedDirectory.empty())
+            return S_OK;
 
-        const int result = SHCreateDirectoryExW(nullptr, directory.c_str(), nullptr);
-        return result == ERROR_SUCCESS ||
-            result == ERROR_ALREADY_EXISTS ||
-            result == ERROR_FILE_EXISTS;
+        DWORD attributes = GetFileAttributesW(resolvedDirectory.c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES)
+        {
+            return (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0
+                ? S_OK
+                : HRESULT_FROM_WIN32(ERROR_DIRECTORY);
+        }
+
+        const int createResult = SHCreateDirectoryExW(
+            nullptr,
+            resolvedDirectory.c_str(),
+            nullptr);
+        if (createResult == ERROR_SUCCESS ||
+            createResult == ERROR_ALREADY_EXISTS ||
+            createResult == ERROR_FILE_EXISTS)
+        {
+            return S_OK;
+        }
+
+        attributes = GetFileAttributesW(resolvedDirectory.c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES &&
+            (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0)
+        {
+            return S_OK;
+        }
+
+        return HRESULT_FROM_WIN32(static_cast<DWORD>(createResult));
+    }
+
+    double Distance(
+        const std::array<float, 3>& a,
+        const std::array<float, 3>& b)
+    {
+        double distanceSquared = 0.0;
+        for (std::size_t component = 0; component < 3; ++component)
+        {
+            const double difference =
+                static_cast<double>(a[component]) -
+                static_cast<double>(b[component]);
+            distanceSquared += difference * difference;
+        }
+        return std::sqrt(distanceSquared);
+    }
+
+    bool CameraForward(
+        const CameraPose& pose,
+        std::array<double, 3>& direction)
+    {
+        double lengthSquared = 0.0;
+        for (std::size_t component = 0; component < 3; ++component)
+        {
+            direction[component] =
+                static_cast<double>(pose.target[component]) -
+                static_cast<double>(pose.position[component]);
+            lengthSquared += direction[component] * direction[component];
+        }
+        if (lengthSquared <= 0.000000000001)
+            return false;
+        const double inverseLength = 1.0 / std::sqrt(lengthSquared);
+        for (double& component : direction)
+            component *= inverseLength;
+        return true;
     }
 
     UINT GetClientWidth(HWND hWnd)
@@ -140,6 +212,9 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     if (!m_rayTracingManager->Initialize(m_hWnd, m_device.Get(), m_width, m_height))
         return false;
 
+    if (!LoadCameraPath())
+        return false;
+
     if (!InitializeImGui())
         return false;
 
@@ -155,6 +230,7 @@ void D3D12Renderer::Render()
         return;
 
     const auto cpuFrameBegin = std::chrono::steady_clock::now();
+    UpdateCameraPath();
     BuildImGuiFrame();
     m_rayTracingManager->SetShowNormalColor(m_showNormalColor);
     m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
@@ -622,6 +698,81 @@ bool D3D12Renderer::CreateGpuTimingResources()
     return true;
 }
 
+bool D3D12Renderer::LoadCameraPath()
+{
+    if (m_cameraPathFilePath.empty())
+        return true;
+
+    if (!m_cameraPath.Load(m_cameraPathFilePath, &m_cameraPathError))
+    {
+        std::wstring message = L"Camera path loading failed.\n";
+        message += m_cameraPathFilePath;
+        if (!m_cameraPathError.empty())
+        {
+            message += L"\n";
+            message += m_cameraPathError;
+        }
+        MessageBoxW(m_hWnd, message.c_str(), L"Camera Path Error", MB_OK | MB_ICONERROR);
+        return false;
+    }
+
+    m_cameraPathLoaded = true;
+    m_cameraPathFrameIndex = 0;
+    m_hasPreviousCameraPose = false;
+    if (m_benchmarkEnabled && m_benchmarkFrameLimit == 0)
+    {
+        m_benchmarkFrameLimit = static_cast<UINT>(
+            std::ceil(
+                m_cameraPath.GetDurationSeconds() *
+                m_cameraPath.GetFramesPerSecond())) + 1u;
+    }
+    return true;
+}
+
+void D3D12Renderer::UpdateCameraPath()
+{
+    if (!m_cameraPathLoaded || !m_rayTracingManager)
+        return;
+
+    const double framesPerSecond = m_cameraPath.GetFramesPerSecond();
+    const double deltaSeconds = 1.0 / framesPerSecond;
+    const double pathTime =
+        static_cast<double>(m_cameraPathFrameIndex) / framesPerSecond;
+    CameraPose pose;
+    if (!m_cameraPath.Sample(pathTime, pose))
+        return;
+
+    m_cameraLinearSpeed = 0.0;
+    m_cameraAngularSpeed = 0.0;
+    if (m_hasPreviousCameraPose)
+    {
+        m_cameraLinearSpeed =
+            Distance(pose.position, m_previousCameraPose.position) /
+            deltaSeconds;
+
+        std::array<double, 3> previousForward = {};
+        std::array<double, 3> currentForward = {};
+        if (CameraForward(m_previousCameraPose, previousForward) &&
+            CameraForward(pose, currentForward))
+        {
+            double cosine = 0.0;
+            for (std::size_t component = 0; component < 3; ++component)
+                cosine += previousForward[component] * currentForward[component];
+            cosine = (std::max)(-1.0, (std::min)(1.0, cosine));
+            constexpr double radiansToDegrees =
+                57.2957795130823208768;
+            m_cameraAngularSpeed = cosine >= 1.0 - 0.000000000001
+                ? 0.0
+                : std::acos(cosine) * radiansToDegrees / deltaSeconds;
+        }
+    }
+
+    m_rayTracingManager->SetCamera(pose.position, pose.target);
+    m_previousCameraPose = pose;
+    m_hasPreviousCameraPose = true;
+    ++m_cameraPathFrameIndex;
+}
+
 void D3D12Renderer::ReadGpuTimingResults()
 {
     if (!m_gpuTimestampReadback || m_gpuTimestampFrequency == 0)
@@ -664,15 +815,48 @@ bool D3D12Renderer::OpenBenchmarkCsv()
     if (m_benchmarkOutputPath.empty())
         m_benchmarkOutputPath = L"BenchmarkOutput\\baseline.csv";
 
-    if (!EnsureParentDirectory(m_benchmarkOutputPath))
-        return !ReportFailure(E_FAIL, L"Benchmark output directory creation failed.");
+    const DWORD outputAttributes =
+        GetFileAttributesW(m_benchmarkOutputPath.c_str());
+    if ((outputAttributes != INVALID_FILE_ATTRIBUTES &&
+         (outputAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) ||
+        m_benchmarkOutputPath.back() == L'\\' ||
+        m_benchmarkOutputPath.back() == L'/')
+    {
+        if (m_benchmarkOutputPath.back() != L'\\' &&
+            m_benchmarkOutputPath.back() != L'/')
+        {
+            m_benchmarkOutputPath.push_back(L'\\');
+        }
+        m_benchmarkOutputPath += L"baseline.csv";
+    }
+
+    std::wstring resolvedDirectory;
+    const HRESULT directoryResult = EnsureParentDirectory(
+        m_benchmarkOutputPath,
+        resolvedDirectory);
+    if (FAILED(directoryResult))
+    {
+        std::wostringstream message;
+        message << L"Benchmark output directory creation failed."
+                << L"\nOutput: " << m_benchmarkOutputPath;
+        if (!resolvedDirectory.empty())
+            message << L"\nDirectory: " << resolvedDirectory;
+        return !ReportFailure(directoryResult, message.str().c_str());
+    }
 
     errno_t openError = _wfopen_s(
         &m_benchmarkCsv,
         m_benchmarkOutputPath.c_str(),
         L"wb");
     if (openError != 0 || !m_benchmarkCsv)
-        return !ReportFailure(E_FAIL, L"Benchmark CSV creation failed.");
+    {
+        std::wostringstream message;
+        message << L"Benchmark CSV creation failed."
+                << L"\nOutput: " << m_benchmarkOutputPath
+                << L"\nC runtime errno: " << openError;
+        return !ReportFailure(HRESULT_FROM_WIN32(ERROR_OPEN_FAILED),
+            message.str().c_str());
+    }
 
     std::fprintf(
         m_benchmarkCsv,
@@ -710,7 +894,7 @@ void D3D12Renderer::RecordFrameMetrics(double cpuFrameMs)
     std::fprintf(
         m_benchmarkCsv,
         "%llu,%.6f,%.6f,%.6f,%.6f,fixed,1.000000,%d,"
-        "0.000000,0.000000,0.000000,0.000000,%llu,%llu,%llu,"
+        "%.6f,%.6f,%.6f,%.6f,%llu,%llu,%llu,"
         "%.6f,%llu,%llu,%u",
         static_cast<unsigned long long>(m_benchmarkFramesWritten),
         m_cpuFrameMs,
@@ -718,6 +902,10 @@ void D3D12Renderer::RecordFrameMetrics(double cpuFrameMs)
         m_gpuUpscaleMs,
         m_gpuTotalMs,
         m_maxBounce,
+        m_cameraLinearSpeed,
+        m_cameraAngularSpeed,
+        m_objectLinearSpeed,
+        m_objectAngularSpeed,
         static_cast<unsigned long long>(statistics.GetPrimaryRayCount()),
         static_cast<unsigned long long>(statistics.shadowRays),
         static_cast<unsigned long long>(statistics.GetBounceRayCount()),
@@ -944,6 +1132,19 @@ void D3D12Renderer::BuildImGuiFrame()
         m_gpuMedianMs,
         m_gpuP95Ms,
         m_gpuP99Ms);
+    if (m_cameraPathLoaded)
+    {
+        const double pathTime = static_cast<double>(m_cameraPathFrameIndex) /
+            m_cameraPath.GetFramesPerSecond();
+        ImGui::Text(
+            "Camera path: %.2f / %.2f s",
+            pathTime,
+            m_cameraPath.GetDurationSeconds());
+        ImGui::Text(
+            "Camera speed: %.3f units/s, %.2f deg/s",
+            m_cameraLinearSpeed,
+            m_cameraAngularSpeed);
+    }
     if (m_collectRayStatistics && m_rayTracingManager)
     {
         const RayTracingManager::FrameStatistics& statistics =
