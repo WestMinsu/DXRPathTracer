@@ -17,7 +17,12 @@ public:
     ~D3D12Renderer();
 
     bool Initialize(HWND hWnd);
-    void SetSceneFilePath(const std::wstring& sceneFilePath) { m_sceneFilePath = sceneFilePath; }
+    void SetSceneFilePath(const std::wstring& sceneFilePath)
+    {
+        m_sceneFilePath = sceneFilePath;
+        if (!m_sceneFilePath.empty())
+            m_sceneType = static_cast<int>(RayTracingManager::c_scenePbrGgx);
+    }
     void Render();
     void Resize(UINT width, UINT height);
     void WaitForGpu();
@@ -29,6 +34,7 @@ public:
         UINT pbrDebugView,
         float pbrMetallic,
         float pbrRoughness,
+        bool overridePbrMaterial,
         bool enableIbl,
         float iblIntensity,
         UINT validationSeed);
@@ -106,6 +112,7 @@ private:
     int m_pbrDebugView = 0;
     float m_pbrMetallic = 1.0f;
     float m_pbrRoughness = 0.35f;
+    bool m_overridePbrMaterial = false;
     bool m_enableIbl = true;
     float m_iblIntensity = 0.5f;
     UINT m_validationSeed = 0;

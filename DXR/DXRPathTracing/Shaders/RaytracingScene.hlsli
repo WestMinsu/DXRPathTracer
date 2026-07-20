@@ -42,7 +42,8 @@ PbrMaterial GetPbrMaterial(uint primitiveIndex, float2 texCoord)
         material.roughness *= metallicRoughness.g;
         material.metallic *= metallicRoughness.b;
     }
-    if (sceneMaterial.useGlobalPbrParameters != 0)
+    if (sceneMaterial.useGlobalPbrParameters != 0 ||
+        g_overridePbrMaterial != 0)
     {
         material.metallic = g_pbrMetallic;
         material.roughness = g_pbrRoughness;

@@ -26,6 +26,7 @@ namespace
         UINT pbrDebugView = RayTracingManager::c_pbrDebugBeauty;
         float pbrMetallic = 1.0f;
         float pbrRoughness = 0.35f;
+        bool overridePbrMaterial = false;
         bool enableIbl = true;
         float iblIntensity = 0.5f;
         UINT validationSeed = 0;
@@ -173,6 +174,10 @@ namespace
             {
                 gOptions.pbrRoughness = static_cast<float>(_wtof(arguments[++index]));
             }
+            else if (argument == L"--override-pbr-material")
+            {
+                gOptions.overridePbrMaterial = true;
+            }
             else if (argument == L"--ibl-intensity" && index + 1 < argumentCount)
             {
                 gOptions.iblIntensity = static_cast<float>(_wtof(arguments[++index]));
@@ -260,6 +265,7 @@ namespace
                 gOptions.pbrDebugView,
                 gOptions.pbrMetallic,
                 gOptions.pbrRoughness,
+                gOptions.overridePbrMaterial,
                 gOptions.enableIbl,
                 gOptions.iblIntensity,
                 gOptions.validationSeed);

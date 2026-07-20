@@ -34,6 +34,7 @@ public:
     void SetSceneFilePath(const std::wstring& sceneFilePath) { m_sceneFilePath = sceneFilePath; }
     void SetPbrDebugView(UINT pbrDebugView);
     void SetPbrMaterial(float metallic, float roughness);
+    void SetPbrMaterialOverride(bool enabled);
     void SetIblSettings(bool enableIbl, float intensity);
     void SetValidationSeed(UINT validationSeed) { m_validationSeed = validationSeed; }
     void SetExposure(float exposure);
@@ -109,6 +110,7 @@ private:
     UINT m_pbrDebugView = c_pbrDebugBeauty;
     float m_pbrMetallic = 1.0f;
     float m_pbrRoughness = 0.35f;
+    bool m_overridePbrMaterial = false;
     bool m_enableIbl = true;
     float m_iblIntensity = 1.0f;
     UINT m_validationSeed = 0;

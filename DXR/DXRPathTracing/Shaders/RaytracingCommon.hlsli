@@ -87,6 +87,7 @@ cbuffer RenderSettings : register(b0)
     uint g_validationSeed;
     float3 g_cameraPosition;
     float3 g_cameraTarget;
+    uint g_overridePbrMaterial;
 };
 
 uint CreateRandomSeed(uint depth, uint primitiveIndex)

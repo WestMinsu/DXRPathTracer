@@ -36,3 +36,14 @@ PBR 장면에서 glTF 2.0 모델을 사용하려면 `--model` 또는 `--gltf`로
 .\x64\Debug\DXRPathTracing.exe --model Assets\Models\scene.gltf --pbr-debug roughness
 .\x64\Debug\DXRPathTracing.exe --model Assets\Models\scene.gltf --pbr-debug normal
 ```
+
+기본 상태에서는 glTF의 metallic/roughness factor와 텍스처를 그대로 사용한다.
+UI에서 PBR Metallic/Roughness 슬라이더를 움직이면 자동으로 모델 전체에 단일
+시험값을 적용한다. 원본으로 돌아가려면 `Restore glTF Metallic/Roughness`를 누른다.
+
+자동 캡처에서는 `--override-pbr-material`을 사용한다.
+
+```powershell
+.\x64\Debug\DXRPathTracing.exe --model Assets\Models\scene.gltf `
+    --pbr-debug roughness --override-pbr-material --pbr-roughness 0.8
+```

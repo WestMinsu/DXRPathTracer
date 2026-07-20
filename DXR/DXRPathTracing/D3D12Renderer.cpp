@@ -77,6 +77,7 @@ bool D3D12Renderer::Initialize(HWND hWnd)
 
     m_rayTracingManager.reset(new RayTracingManager());
     m_rayTracingManager->SetSceneFilePath(m_sceneFilePath);
+    m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
     if (!m_rayTracingManager->Initialize(m_hWnd, m_device.Get(), m_width, m_height))
         return false;
 
@@ -98,6 +99,7 @@ void D3D12Renderer::Render()
     m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
     m_rayTracingManager->SetPbrDebugView(static_cast<UINT>(m_pbrDebugView));
     m_rayTracingManager->SetPbrMaterial(m_pbrMetallic, m_pbrRoughness);
+    m_rayTracingManager->SetPbrMaterialOverride(m_overridePbrMaterial);
     m_rayTracingManager->SetIblSettings(m_enableIbl, m_iblIntensity);
     m_rayTracingManager->SetValidationSeed(m_validationSeed);
     m_rayTracingManager->SetExposure(m_exposure);
@@ -544,14 +546,39 @@ void D3D12Renderer::BuildImGuiFrame()
             m_rayTracingManager->SetPbrDebugView(static_cast<UINT>(m_pbrDebugView));
         }
 
+        bool restoreGltfMaterial = false;
+        if (!m_sceneFilePath.empty())
+        {
+            ImGui::TextDisabled(
+                m_overridePbrMaterial
+                ? "Material source: uniform slider values"
+                : "Material source: glTF factors and textures");
+            if (m_overridePbrMaterial)
+            {
+                restoreGltfMaterial = ImGui::Button(
+                    "Restore glTF Metallic/Roughness");
+            }
+            else
+            {
+                ImGui::TextDisabled(
+                    "Changing a slider starts a uniform material test.");
+            }
+        }
+
         bool pbrMaterialChanged = false;
         pbrMaterialChanged |= ImGui::SliderFloat("PBR Metallic", &m_pbrMetallic, 0.0f, 1.0f, "%.2f");
         pbrMaterialChanged |= ImGui::SliderFloat("PBR Roughness", &m_pbrRoughness, 0.03f, 1.0f, "%.2f");
-        if (pbrMaterialChanged && m_rayTracingManager)
+        if (!m_sceneFilePath.empty() && pbrMaterialChanged)
+            m_overridePbrMaterial = true;
+        if (restoreGltfMaterial)
+            m_overridePbrMaterial = false;
+
+        if ((restoreGltfMaterial || pbrMaterialChanged) && m_rayTracingManager)
         {
             m_captureActive = false;
             m_saveCurrentRequested = false;
             m_captureStatus.clear();
+            m_rayTracingManager->SetPbrMaterialOverride(m_overridePbrMaterial);
             m_rayTracingManager->SetPbrMaterial(m_pbrMetallic, m_pbrRoughness);
         }
 
@@ -735,6 +762,7 @@ void D3D12Renderer::ConfigureAutomatedCapture(
     UINT pbrDebugView,
     float pbrMetallic,
     float pbrRoughness,
+    bool overridePbrMaterial,
     bool enableIbl,
     float iblIntensity,
     UINT validationSeed)
@@ -748,6 +776,7 @@ void D3D12Renderer::ConfigureAutomatedCapture(
         : static_cast<int>(RayTracingManager::c_sceneCornellBox);
     m_pbrMetallic = pbrMetallic;
     m_pbrRoughness = pbrRoughness;
+    m_overridePbrMaterial = overridePbrMaterial;
     m_enableIbl = enableIbl;
     m_iblIntensity = iblIntensity;
     m_validationSeed = validationSeed;

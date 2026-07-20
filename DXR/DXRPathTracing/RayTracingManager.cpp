@@ -65,8 +65,9 @@ namespace
         UINT validationSeed;
         float cameraPosition[3];
         float cameraTarget[3];
+        UINT overridePbrMaterial;
     };
-    static_assert(sizeof(RenderSettingsConstants) == 19 * sizeof(std::uint32_t));
+    static_assert(sizeof(RenderSettingsConstants) == 20 * sizeof(std::uint32_t));
 
     UINT AlignUp(UINT value, UINT alignment)
     {
@@ -264,7 +265,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         m_cameraTarget.begin(),
         m_cameraTarget.end(),
         renderSettings.cameraTarget);
-    commandList->SetComputeRoot32BitConstants(4, 19, &renderSettings, 0);
+    renderSettings.overridePbrMaterial = m_overridePbrMaterial ? 1u : 0u;
+    commandList->SetComputeRoot32BitConstants(4, 20, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
     commandList->SetComputeRootDescriptorTable(5, environmentHandle);
@@ -372,6 +374,15 @@ void RayTracingManager::SetPbrMaterial(float metallic, float roughness)
     ResetAccumulation();
 }
 
+void RayTracingManager::SetPbrMaterialOverride(bool enabled)
+{
+    if (m_overridePbrMaterial == enabled)
+        return;
+
+    m_overridePbrMaterial = enabled;
+    ResetAccumulation();
+}
+
 void RayTracingManager::SetIblSettings(bool enableIbl, float intensity)
 {
     const float clampedIntensity = intensity < 0.0f ? 0.0f : (intensity > 8.0f ? 8.0f : intensity);
@@ -401,7 +412,8 @@ void RayTracingManager::SetSceneType(UINT sceneType)
 
     m_sceneType = clampedSceneType;
     ResetAccumulation();
-    CreateAccelerationStructures();
+    if (m_device)
+        CreateAccelerationStructures();
 }
 
 bool RayTracingManager::CreateOutputTexture()
@@ -737,7 +749,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 19;
+    rootParameters[4].Constants.Num32BitValues = 20;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     rootParameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
