@@ -1342,8 +1342,8 @@ void D3D12Renderer::BuildImGuiFrame()
     const char* lightingModeNames[] =
     {
         "BSDF Only",
-        "NEE (Area Lights)",
-        "MIS (Power Heuristic)"
+        "NEE (Area + Environment)",
+        "MIS (Area + Environment)"
     };
     if (ImGui::Combo(
         "Lighting",
@@ -1377,12 +1377,25 @@ void D3D12Renderer::BuildImGuiFrame()
     if (m_rayTracingManager && m_rayTracingManager->HasDynamicSphere())
     {
         if (ImGui::Checkbox(
-            "Animate rolling sphere",
-            &m_animateDynamicSphere))
+            "Show metal sphere",
+            &m_showDynamicSphere))
         {
-            m_rayTracingManager->SetDynamicSphereAnimationEnabled(
-                m_animateDynamicSphere);
-            m_rayTracingManager->ResetDynamicSphereTimeline();
+            m_captureActive = false;
+            m_saveCurrentRequested = false;
+            m_captureStatus.clear();
+            m_rayTracingManager->SetDynamicSphereVisible(
+                m_showDynamicSphere);
+        }
+        if (m_showDynamicSphere)
+        {
+            if (ImGui::Checkbox(
+                "Animate rolling sphere",
+                &m_animateDynamicSphere))
+            {
+                m_rayTracingManager->SetDynamicSphereAnimationEnabled(
+                    m_animateDynamicSphere);
+                m_rayTracingManager->ResetDynamicSphereTimeline();
+            }
         }
     }
     if (m_cameraPathLoaded)

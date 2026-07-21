@@ -231,7 +231,7 @@ float3 TracePbrBrdfWithMixtureSampling(
     float3 directLightDirection;
     float3 radianceOverPdf;
     float lightPdf;
-    if (SampleDirectAreaLight(
+    if (SampleDirectLight(
         normal,
         hitPosition,
         directSeed,

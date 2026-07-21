@@ -296,9 +296,36 @@ void MyMissShader_RadianceRay(inout RadiancePayload payload)
         return;
     }
 
-    payload.color = g_sceneType == c_scenePbrGgx && g_enableIbl != 0
-        ? SampleEnvironmentMap(WorldRayDirection())
-        : float3(0.0f, 0.0f, 0.0f);
+    if (g_sceneType != c_scenePbrGgx || g_enableIbl == 0u)
+    {
+        payload.color = float3(0.0f, 0.0f, 0.0f);
+        return;
+    }
+
+    float environmentWeight = 1.0f;
+    if (payload.depth > 0u &&
+        payload.previousWasDelta == 0u &&
+        g_lightingMode != c_lightingModeBsdf)
+    {
+        float lightPdf =
+            EvaluateEnvironmentLightPdf(WorldRayDirection());
+        if (lightPdf > 0.0f)
+        {
+            if (g_lightingMode == c_lightingModeNee)
+            {
+                environmentWeight = 0.0f;
+            }
+            else if (g_lightingMode == c_lightingModeMis)
+            {
+                environmentWeight = PowerHeuristic(
+                    payload.previousBsdfPdf,
+                    lightPdf);
+            }
+        }
+    }
+    payload.color =
+        SampleEnvironmentMap(WorldRayDirection()) *
+        environmentWeight;
 }
 
 [shader("miss")]

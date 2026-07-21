@@ -67,6 +67,15 @@ struct EmissiveTriangle
     uint primitiveIndex;
 };
 
+// Mirrored by GpuEnvironmentAliasEntry in RayTracingManager.cpp.
+struct EnvironmentAliasEntry
+{
+    float acceptProbability;
+    uint aliasIndex;
+    float selectionPdf;
+    uint padding;
+};
+
 static const uint c_sceneCornellBox = 0;
 static const uint c_scenePbrGgx = 1;
 static const uint c_scenePbrGpuValidation = 2;
@@ -112,6 +121,8 @@ StructuredBuffer<uint> g_primitiveMaterialIndices : register(t5);
 Texture2D<float4> g_materialTextures[c_maxMaterialTextures] : register(t6);
 StructuredBuffer<SceneInstanceMetadata> g_instanceMetadata : register(t262);
 StructuredBuffer<EmissiveTriangle> g_emissiveTriangles : register(t263);
+StructuredBuffer<EnvironmentAliasEntry>
+    g_environmentDistribution : register(t264);
 SamplerState g_environmentSampler : register(s0);
 SamplerState g_materialSampler : register(s1);
 
@@ -138,6 +149,10 @@ cbuffer RenderSettings : register(b0)
     uint g_enableRussianRoulette;
     uint g_lightingMode;
     uint g_emissiveTriangleCount;
+    uint g_environmentResolution;
+    uint g_environmentTexelCount;
+    float g_areaLightPower;
+    float g_environmentPower;
 };
 
 void RecordRadianceRay(uint depth)
@@ -318,12 +333,44 @@ float PowerHeuristic(float sampledPdf, float otherPdf)
         max(sampledPdfSquared + otherPdfSquared, 0.000000000001f);
 }
 
+void EmitterSelectionProbabilities(
+    out float areaEmitterPdf,
+    out float environmentEmitterPdf)
+{
+    float areaWeight = g_emissiveTriangleCount > 0u
+        ? max(g_areaLightPower, 0.0f)
+        : 0.0f;
+    float environmentWeight =
+        g_sceneType == c_scenePbrGgx &&
+        g_enableIbl != 0u &&
+        g_environmentTexelCount > 0u
+        ? max(g_environmentPower * g_iblIntensity, 0.0f)
+        : 0.0f;
+    float totalWeight = areaWeight + environmentWeight;
+    if (totalWeight <= 0.0f)
+    {
+        areaEmitterPdf = 0.0f;
+        environmentEmitterPdf = 0.0f;
+        return;
+    }
+
+    areaEmitterPdf = areaWeight / totalWeight;
+    environmentEmitterPdf = environmentWeight / totalWeight;
+}
+
 float EvaluateAreaLightPdf(
     uint primitiveIndex,
     float distanceSquared,
     float3 lightDirection)
 {
-    if (g_emissiveTriangleCount == 0u || distanceSquared <= 0.0f)
+    float areaEmitterPdf;
+    float environmentEmitterPdf;
+    EmitterSelectionProbabilities(
+        areaEmitterPdf,
+        environmentEmitterPdf);
+    if (areaEmitterPdf <= 0.0f ||
+        g_emissiveTriangleCount == 0u ||
+        distanceSquared <= 0.0f)
     {
         return 0.0f;
     }
@@ -348,7 +395,7 @@ float EvaluateAreaLightPdf(
         }
 
         float areaPdf = light.selectionPdf / light.area;
-        return areaPdf * distanceSquared /
+        return areaEmitterPdf * areaPdf * distanceSquared /
             max(lightCosine, 0.000001f);
     }
 
@@ -358,6 +405,7 @@ float EvaluateAreaLightPdf(
 bool SampleDirectAreaLight(
     float3 normal,
     float3 hitPosition,
+    float areaEmitterPdf,
     inout uint seed,
     out float3 lightDirection,
     out float3 radianceOverPdf,
@@ -366,8 +414,7 @@ bool SampleDirectAreaLight(
     lightDirection = normal;
     radianceOverPdf = float3(0.0f, 0.0f, 0.0f);
     lightPdf = 0.0f;
-    if ((g_lightingMode != c_lightingModeNee &&
-         g_lightingMode != c_lightingModeMis) ||
+    if (areaEmitterPdf <= 0.0f ||
         g_emissiveTriangleCount == 0u)
     {
         return false;
@@ -421,7 +468,8 @@ bool SampleDirectAreaLight(
 
     float areaPdf = light.selectionPdf / light.area;
     lightPdf =
-        areaPdf * distanceSquared / max(lightCosine, 0.000001f);
+        areaEmitterPdf * areaPdf * distanceSquared /
+        max(lightCosine, 0.000001f);
     if (lightPdf <= 0.0f)
     {
         return false;
@@ -458,6 +506,278 @@ bool SampleDirectAreaLight(
     return true;
 }
 
+float3 CubemapFaceDirection(
+    uint face,
+    float faceU,
+    float faceV)
+{
+    if (face == 0u)
+        return normalize(float3(1.0f, -faceV, -faceU));
+    if (face == 1u)
+        return normalize(float3(-1.0f, -faceV, faceU));
+    if (face == 2u)
+        return normalize(float3(faceU, 1.0f, faceV));
+    if (face == 3u)
+        return normalize(float3(faceU, -1.0f, -faceV));
+    if (face == 4u)
+        return normalize(float3(faceU, -faceV, 1.0f));
+    return normalize(float3(-faceU, -faceV, -1.0f));
+}
+
+void DirectionToCubemapFace(
+    float3 direction,
+    out uint face,
+    out float faceU,
+    out float faceV)
+{
+    float3 unitDirection = normalize(direction);
+    float3 absoluteDirection = abs(unitDirection);
+    if (absoluteDirection.x >= absoluteDirection.y &&
+        absoluteDirection.x >= absoluteDirection.z)
+    {
+        if (unitDirection.x >= 0.0f)
+        {
+            face = 0u;
+            faceU = -unitDirection.z / absoluteDirection.x;
+            faceV = -unitDirection.y / absoluteDirection.x;
+        }
+        else
+        {
+            face = 1u;
+            faceU = unitDirection.z / absoluteDirection.x;
+            faceV = -unitDirection.y / absoluteDirection.x;
+        }
+    }
+    else if (absoluteDirection.y >= absoluteDirection.z)
+    {
+        if (unitDirection.y >= 0.0f)
+        {
+            face = 2u;
+            faceU = unitDirection.x / absoluteDirection.y;
+            faceV = unitDirection.z / absoluteDirection.y;
+        }
+        else
+        {
+            face = 3u;
+            faceU = unitDirection.x / absoluteDirection.y;
+            faceV = -unitDirection.z / absoluteDirection.y;
+        }
+    }
+    else
+    {
+        if (unitDirection.z >= 0.0f)
+        {
+            face = 4u;
+            faceU = unitDirection.x / absoluteDirection.z;
+            faceV = -unitDirection.y / absoluteDirection.z;
+        }
+        else
+        {
+            face = 5u;
+            faceU = -unitDirection.x / absoluteDirection.z;
+            faceV = -unitDirection.y / absoluteDirection.z;
+        }
+    }
+}
+
+float EnvironmentConditionalPdf(
+    float selectionPdf,
+    float faceU,
+    float faceV)
+{
+    float texelUvPdf =
+        float(g_environmentResolution * g_environmentResolution) * 0.25f;
+    float solidAngleJacobianInverse = pow(
+        1.0f + faceU * faceU + faceV * faceV,
+        1.5f);
+    return selectionPdf * texelUvPdf * solidAngleJacobianInverse;
+}
+
+float EvaluateEnvironmentLightPdf(float3 direction)
+{
+    float areaEmitterPdf;
+    float environmentEmitterPdf;
+    EmitterSelectionProbabilities(
+        areaEmitterPdf,
+        environmentEmitterPdf);
+    if (environmentEmitterPdf <= 0.0f ||
+        g_environmentResolution == 0u ||
+        g_environmentTexelCount == 0u)
+    {
+        return 0.0f;
+    }
+
+    uint face;
+    float faceU;
+    float faceV;
+    DirectionToCubemapFace(direction, face, faceU, faceV);
+    float2 texturePosition = saturate(
+        float2(faceU, faceV) * 0.5f + 0.5f);
+    uint2 texel = min(
+        uint2(texturePosition * float(g_environmentResolution)),
+        uint2(
+            g_environmentResolution - 1u,
+            g_environmentResolution - 1u));
+    uint faceTexelCount =
+        g_environmentResolution * g_environmentResolution;
+    uint texelIndex =
+        face * faceTexelCount +
+        texel.y * g_environmentResolution +
+        texel.x;
+    float selectionPdf =
+        g_environmentDistribution[texelIndex].selectionPdf;
+    return environmentEmitterPdf * EnvironmentConditionalPdf(
+        selectionPdf,
+        faceU,
+        faceV);
+}
+
+bool SampleDirectEnvironmentLight(
+    float3 normal,
+    float3 hitPosition,
+    float environmentEmitterPdf,
+    inout uint seed,
+    out float3 lightDirection,
+    out float3 radianceOverPdf,
+    out float lightPdf)
+{
+    lightDirection = normal;
+    radianceOverPdf = float3(0.0f, 0.0f, 0.0f);
+    lightPdf = 0.0f;
+    if (environmentEmitterPdf <= 0.0f ||
+        g_environmentResolution == 0u ||
+        g_environmentTexelCount == 0u)
+    {
+        return false;
+    }
+
+    float aliasSample =
+        RandomFloat01(seed) * float(g_environmentTexelCount);
+    uint bucketIndex = min(
+        uint(aliasSample),
+        g_environmentTexelCount - 1u);
+    EnvironmentAliasEntry bucket =
+        g_environmentDistribution[bucketIndex];
+    uint selectedIndex = frac(aliasSample) <
+        bucket.acceptProbability
+        ? bucketIndex
+        : min(bucket.aliasIndex, g_environmentTexelCount - 1u);
+    EnvironmentAliasEntry selected =
+        g_environmentDistribution[selectedIndex];
+
+    uint faceTexelCount =
+        g_environmentResolution * g_environmentResolution;
+    uint face = selectedIndex / faceTexelCount;
+    uint faceIndex = selectedIndex - face * faceTexelCount;
+    uint texelY = faceIndex / g_environmentResolution;
+    uint texelX = faceIndex - texelY * g_environmentResolution;
+    float faceU =
+        -1.0f +
+        2.0f *
+        (float(texelX) + RandomFloat01(seed)) /
+        float(g_environmentResolution);
+    float faceV =
+        -1.0f +
+        2.0f *
+        (float(texelY) + RandomFloat01(seed)) /
+        float(g_environmentResolution);
+    lightDirection = CubemapFaceDirection(face, faceU, faceV);
+
+    float surfaceCosine = saturate(dot(normal, lightDirection));
+    if (surfaceCosine <= 0.0f)
+    {
+        return false;
+    }
+
+    lightPdf = environmentEmitterPdf *
+        EnvironmentConditionalPdf(
+            selected.selectionPdf,
+            faceU,
+            faceV);
+    if (lightPdf <= 0.0f)
+    {
+        return false;
+    }
+
+    RayDesc shadowRay;
+    shadowRay.Origin = hitPosition + normal * c_rayOriginBias;
+    shadowRay.Direction = lightDirection;
+    shadowRay.TMin = c_rayTMin;
+    shadowRay.TMax = c_rayTMax;
+
+    ShadowPayload shadowPayload;
+    shadowPayload.occluded = 1u;
+    RecordShadowRay();
+    TraceRay(
+        g_scene,
+        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+            RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
+            RAY_FLAG_FORCE_OPAQUE,
+        0xFF,
+        0,
+        0,
+        1,
+        shadowRay,
+        shadowPayload);
+    if (shadowPayload.occluded != 0u)
+    {
+        return false;
+    }
+
+    radianceOverPdf =
+        SampleEnvironmentMap(lightDirection) / lightPdf;
+    return true;
+}
+
+bool SampleDirectLight(
+    float3 normal,
+    float3 hitPosition,
+    inout uint seed,
+    out float3 lightDirection,
+    out float3 radianceOverPdf,
+    out float lightPdf)
+{
+    lightDirection = normal;
+    radianceOverPdf = float3(0.0f, 0.0f, 0.0f);
+    lightPdf = 0.0f;
+    if (g_lightingMode != c_lightingModeNee &&
+        g_lightingMode != c_lightingModeMis)
+    {
+        return false;
+    }
+
+    float areaEmitterPdf;
+    float environmentEmitterPdf;
+    EmitterSelectionProbabilities(
+        areaEmitterPdf,
+        environmentEmitterPdf);
+    if (areaEmitterPdf + environmentEmitterPdf <= 0.0f)
+    {
+        return false;
+    }
+
+    if (RandomFloat01(seed) < environmentEmitterPdf)
+    {
+        return SampleDirectEnvironmentLight(
+            normal,
+            hitPosition,
+            environmentEmitterPdf,
+            seed,
+            lightDirection,
+            radianceOverPdf,
+            lightPdf);
+    }
+
+    return SampleDirectAreaLight(
+        normal,
+        hitPosition,
+        areaEmitterPdf,
+        seed,
+        lightDirection,
+        radianceOverPdf,
+        lightPdf);
+}
+
 float3 TraceLambertianBounce(
     float3 normal,
     float3 hitPosition,
@@ -473,7 +793,7 @@ float3 TraceLambertianBounce(
     float3 directLightDirection;
     float3 radianceOverPdf;
     float lightPdf;
-    if (SampleDirectAreaLight(
+    if (SampleDirectLight(
         normal,
         hitPosition,
         directSeed,

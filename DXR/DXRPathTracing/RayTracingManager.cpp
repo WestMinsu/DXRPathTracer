@@ -79,8 +79,12 @@ namespace
         UINT enableRussianRoulette;
         UINT lightingMode;
         UINT emissiveTriangleCount;
+        UINT environmentResolution;
+        UINT environmentTexelCount;
+        float areaLightPower;
+        float environmentPower;
     };
-    static_assert(sizeof(RenderSettingsConstants) == 25 * sizeof(std::uint32_t));
+    static_assert(sizeof(RenderSettingsConstants) == 29 * sizeof(std::uint32_t));
 
     struct GpuEmissiveTriangle
     {
@@ -95,9 +99,224 @@ namespace
     };
     static_assert(sizeof(GpuEmissiveTriangle) == 64);
 
+    struct GpuEnvironmentAliasEntry
+    {
+        float acceptProbability;
+        std::uint32_t aliasIndex;
+        float selectionPdf;
+        std::uint32_t padding;
+    };
+    static_assert(sizeof(GpuEnvironmentAliasEntry) == 16);
+
+    float HalfToFloat(std::uint16_t value)
+    {
+        const bool negative = (value & 0x8000u) != 0u;
+        const std::uint32_t exponent =
+            (static_cast<std::uint32_t>(value) >> 10u) & 0x1Fu;
+        const std::uint32_t mantissa =
+            static_cast<std::uint32_t>(value) & 0x03FFu;
+        float result = 0.0f;
+        if (exponent == 0u)
+        {
+            result = std::ldexp(
+                static_cast<float>(mantissa),
+                -24);
+        }
+        else if (exponent == 31u)
+        {
+            result = mantissa == 0u
+                ? std::numeric_limits<float>::infinity()
+                : std::numeric_limits<float>::quiet_NaN();
+        }
+        else
+        {
+            result = std::ldexp(
+                1.0f +
+                    static_cast<float>(mantissa) / 1024.0f,
+                static_cast<int>(exponent) - 15);
+        }
+        return negative ? -result : result;
+    }
+
+    double CubemapAreaElement(double x, double y)
+    {
+        return std::atan2(
+            x * y,
+            std::sqrt(x * x + y * y + 1.0));
+    }
+
+    double CubemapTexelSolidAngle(
+        UINT x,
+        UINT y,
+        UINT resolution)
+    {
+        const double inverseResolution =
+            1.0 / static_cast<double>(resolution);
+        const double x0 =
+            2.0 * static_cast<double>(x) * inverseResolution - 1.0;
+        const double y0 =
+            2.0 * static_cast<double>(y) * inverseResolution - 1.0;
+        const double x1 =
+            2.0 * static_cast<double>(x + 1u) * inverseResolution - 1.0;
+        const double y1 =
+            2.0 * static_cast<double>(y + 1u) * inverseResolution - 1.0;
+        return CubemapAreaElement(x1, y1) -
+            CubemapAreaElement(x0, y1) -
+            CubemapAreaElement(x1, y0) +
+            CubemapAreaElement(x0, y0);
+    }
+
+    bool BuildEnvironmentAliasTable(
+        const DdsCubemapData& cubemap,
+        std::vector<GpuEnvironmentAliasEntry>& entries,
+        float& environmentPower)
+    {
+        if (cubemap.width == 0u ||
+            cubemap.width != cubemap.height ||
+            cubemap.bytesPerPixel != c_bytesPerRgba16FloatPixel)
+        {
+            return false;
+        }
+
+        const UINT resolution = cubemap.width;
+        const UINT faceTexelCount = resolution * resolution;
+        const UINT texelCount = c_cubeFaceCount * faceTexelCount;
+        std::size_t faceByteCount = 0u;
+        for (UINT mip = 0u; mip < cubemap.mipCount; ++mip)
+        {
+            const UINT mipWidth =
+                std::max(cubemap.width >> mip, 1u);
+            const UINT mipHeight =
+                std::max(cubemap.height >> mip, 1u);
+            faceByteCount +=
+                static_cast<std::size_t>(mipWidth) *
+                mipHeight *
+                cubemap.bytesPerPixel;
+        }
+
+        std::vector<double> weights(texelCount, 0.0);
+        double totalWeight = 0.0;
+        for (UINT face = 0u; face < c_cubeFaceCount; ++face)
+        {
+            const std::size_t faceOffset =
+                static_cast<std::size_t>(face) * faceByteCount;
+            for (UINT y = 0u; y < resolution; ++y)
+            {
+                for (UINT x = 0u; x < resolution; ++x)
+                {
+                    const UINT texelIndex =
+                        face * faceTexelCount + y * resolution + x;
+                    const std::size_t byteOffset =
+                        faceOffset +
+                        static_cast<std::size_t>(
+                            y * resolution + x) *
+                        cubemap.bytesPerPixel;
+                    const auto readHalf = [&](std::size_t componentOffset)
+                    {
+                        const std::uint16_t halfValue =
+                            static_cast<std::uint16_t>(
+                                cubemap.texels[
+                                    byteOffset + componentOffset]) |
+                            static_cast<std::uint16_t>(
+                                cubemap.texels[
+                                    byteOffset + componentOffset + 1u]
+                                << 8u);
+                        return HalfToFloat(halfValue);
+                    };
+                    const float red = readHalf(0u);
+                    const float green = readHalf(2u);
+                    const float blue = readHalf(4u);
+                    const double luminance = std::max(
+                        0.0,
+                        static_cast<double>(red) * 0.2126 +
+                        static_cast<double>(green) * 0.7152 +
+                        static_cast<double>(blue) * 0.0722);
+                    const double weight = std::isfinite(luminance)
+                        ? luminance * CubemapTexelSolidAngle(
+                            x,
+                            y,
+                            resolution)
+                        : 0.0;
+                    weights[texelIndex] = weight;
+                    totalWeight += weight;
+                }
+            }
+        }
+
+        environmentPower = totalWeight > 0.0
+            ? static_cast<float>(totalWeight)
+            : 0.0f;
+        entries.assign(texelCount, {});
+        std::vector<double> scaledProbabilities(texelCount, 1.0);
+        std::vector<UINT> smallEntries;
+        std::vector<UINT> largeEntries;
+        smallEntries.reserve(texelCount);
+        largeEntries.reserve(texelCount);
+
+        for (UINT index = 0u; index < texelCount; ++index)
+        {
+            const double selectionPdf = totalWeight > 0.0
+                ? weights[index] / totalWeight
+                : 1.0 / static_cast<double>(texelCount);
+            entries[index].selectionPdf =
+                static_cast<float>(selectionPdf);
+            scaledProbabilities[index] =
+                selectionPdf * static_cast<double>(texelCount);
+            if (scaledProbabilities[index] < 1.0)
+            {
+                smallEntries.push_back(index);
+            }
+            else
+            {
+                largeEntries.push_back(index);
+            }
+        }
+
+        while (!smallEntries.empty() && !largeEntries.empty())
+        {
+            const UINT smallIndex = smallEntries.back();
+            smallEntries.pop_back();
+            const UINT largeIndex = largeEntries.back();
+            largeEntries.pop_back();
+
+            entries[smallIndex].acceptProbability =
+                static_cast<float>(std::max(
+                    0.0,
+                    std::min(
+                        1.0,
+                        scaledProbabilities[smallIndex])));
+            entries[smallIndex].aliasIndex = largeIndex;
+            scaledProbabilities[largeIndex] =
+                scaledProbabilities[largeIndex] +
+                scaledProbabilities[smallIndex] -
+                1.0;
+            if (scaledProbabilities[largeIndex] < 1.0)
+            {
+                smallEntries.push_back(largeIndex);
+            }
+            else
+            {
+                largeEntries.push_back(largeIndex);
+            }
+        }
+
+        for (UINT remainingIndex : smallEntries)
+        {
+            entries[remainingIndex].acceptProbability = 1.0f;
+            entries[remainingIndex].aliasIndex = remainingIndex;
+        }
+        for (UINT remainingIndex : largeEntries)
+        {
+            entries[remainingIndex].acceptProbability = 1.0f;
+            entries[remainingIndex].aliasIndex = remainingIndex;
+        }
+        return true;
+    }
+
     std::vector<GpuEmissiveTriangle> BuildEmissiveTriangles(
         const SceneData& scene,
-        UINT staticIndexCount)
+        UINT staticIndexCount,
+        float& areaLightPower)
     {
         std::vector<GpuEmissiveTriangle> lights;
         const UINT primitiveCount = staticIndexCount / 3u;
@@ -158,6 +377,9 @@ namespace
             lights.push_back(light);
         }
 
+        areaLightPower = totalWeight > 0.0
+            ? static_cast<float>(totalWeight * 3.14159265358979323846)
+            : 0.0f;
         if (totalWeight > 0.0)
         {
             double cumulativeProbability = 0.0;
@@ -339,7 +561,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
 {
     if (!commandList || !m_stateObject || !m_rayGenShaderTable || !m_missShaderTable ||
         !m_hitGroupShaderTable || !m_descriptorHeap || !m_topLevelAS || !m_accumulationTexture ||
-        !m_environmentMap || !m_sceneMaterialBuffer || !m_primitiveMaterialIndexBuffer ||
+        !m_environmentMap || !m_environmentDistributionBuffer ||
+        !m_sceneMaterialBuffer || !m_primitiveMaterialIndexBuffer ||
         !m_instanceMetadataBuffer || !m_emissiveTriangleBuffer ||
         !m_statisticsBuffer ||
         !m_statisticsResetBuffer || !m_statisticsReadbackBuffer)
@@ -410,7 +633,11 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         m_enableRussianRoulette ? 1u : 0u;
     renderSettings.lightingMode = m_lightingMode;
     renderSettings.emissiveTriangleCount = m_emissiveTriangleCount;
-    commandList->SetComputeRoot32BitConstants(4, 25, &renderSettings, 0);
+    renderSettings.environmentResolution = m_environmentResolution;
+    renderSettings.environmentTexelCount = m_environmentTexelCount;
+    renderSettings.areaLightPower = m_areaLightPower;
+    renderSettings.environmentPower = m_environmentPower;
+    commandList->SetComputeRoot32BitConstants(4, 29, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
     commandList->SetComputeRootDescriptorTable(5, environmentHandle);
@@ -430,6 +657,9 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     commandList->SetComputeRootShaderResourceView(
         11,
         m_emissiveTriangleBuffer->GetGPUVirtualAddress());
+    commandList->SetComputeRootShaderResourceView(
+        12,
+        m_environmentDistributionBuffer->GetGPUVirtualAddress());
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -627,6 +857,21 @@ void RayTracingManager::SetDynamicSphereAnimationEnabled(bool enabled)
     if (m_dynamicSphereAnimationEnabled == enabled)
         return;
     m_dynamicSphereAnimationEnabled = enabled;
+}
+
+void RayTracingManager::SetDynamicSphereVisible(bool visible)
+{
+    if (m_dynamicSphereVisible == visible)
+        return;
+
+    m_dynamicSphereVisible = visible;
+    m_dynamicSphereVisibilityDirty = m_hasDynamicSphere;
+    if (!visible)
+    {
+        m_dynamicObjectLinearSpeed = 0.0;
+        m_dynamicObjectAngularSpeed = 0.0;
+    }
+    ResetAccumulation();
 }
 
 void RayTracingManager::SetDynamicSphereDeterministicTimeline(bool enabled)
@@ -914,6 +1159,29 @@ bool RayTracingManager::CreateEnvironmentMap()
         return false;
     }
 
+    std::vector<GpuEnvironmentAliasEntry> environmentDistribution;
+    if (!BuildEnvironmentAliasTable(
+        cubemap,
+        environmentDistribution,
+        m_environmentPower))
+    {
+        ReportMessage(
+            L"Environment importance distribution creation failed.");
+        return false;
+    }
+    m_environmentResolution = cubemap.width;
+    m_environmentTexelCount =
+        static_cast<UINT>(environmentDistribution.size());
+    if (!CreateUploadBuffer(
+        environmentDistribution.data(),
+        sizeof(GpuEnvironmentAliasEntry) *
+            environmentDistribution.size(),
+        L"Environment importance alias table",
+        m_environmentDistributionBuffer))
+    {
+        return false;
+    }
+
     const UINT subresourceCount = c_cubeFaceCount * cubemap.mipCount;
 
     D3D12_RESOURCE_DESC textureDesc = {};
@@ -1077,7 +1345,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     materialTextureRange.OffsetInDescriptorsFromTableStart =
         D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParameters[12] = {};
+    D3D12_ROOT_PARAMETER rootParameters[13] = {};
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParameters[0].DescriptorTable.NumDescriptorRanges = 1;
     rootParameters[0].DescriptorTable.pDescriptorRanges = &outputRange;
@@ -1101,7 +1369,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 25;
+    rootParameters[4].Constants.Num32BitValues = 29;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     rootParameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -1138,6 +1406,11 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[11].Descriptor.ShaderRegister = 263;
     rootParameters[11].Descriptor.RegisterSpace = 0;
     rootParameters[11].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParameters[12].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParameters[12].Descriptor.ShaderRegister = 264;
+    rootParameters[12].Descriptor.RegisterSpace = 0;
+    rootParameters[12].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_STATIC_SAMPLER_DESC staticSamplers[2] = {};
     staticSamplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -1711,7 +1984,10 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     }
 
     std::vector<GpuEmissiveTriangle> emissiveTriangles =
-        BuildEmissiveTriangles(scene, m_staticGeometry.indexCount);
+        BuildEmissiveTriangles(
+            scene,
+            m_staticGeometry.indexCount,
+            m_areaLightPower);
     m_emissiveTriangleCount =
         static_cast<UINT>(emissiveTriangles.size());
     if (emissiveTriangles.empty())
@@ -2150,7 +2426,8 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
         sphereDesc.Transform[2][2] = 1.0f;
         sphereDesc.Transform[2][3] = m_dynamicSphereCenterZ;
         sphereDesc.InstanceID = 1;
-        sphereDesc.InstanceMask = 0xFF;
+        sphereDesc.InstanceMask =
+            m_dynamicSphereVisible ? 0xFF : 0x00;
         sphereDesc.AccelerationStructure =
             m_dynamicSphereBottomLevelAS->GetGPUVirtualAddress();
     }
@@ -2210,6 +2487,7 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
     buildDesc.DestAccelerationStructureData = m_topLevelAS->GetGPUVirtualAddress();
 
     m_buildCommandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
+    m_dynamicSphereVisibilityDirty = false;
     return true;
 }
 
@@ -2257,7 +2535,8 @@ bool RayTracingManager::WriteInstanceDescriptors(
     sphereDesc.Transform[2][2] = 1.0f;
     sphereDesc.Transform[2][3] = m_dynamicSphereCenterZ;
     sphereDesc.InstanceID = 1;
-    sphereDesc.InstanceMask = 0xFF;
+    sphereDesc.InstanceMask =
+        m_dynamicSphereVisible ? 0xFF : 0x00;
     sphereDesc.AccelerationStructure =
         m_dynamicSphereBottomLevelAS->GetGPUVirtualAddress();
 
@@ -2337,11 +2616,23 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
     if (!commandList || !m_topLevelAS || !m_tlasScratchBuffer)
         return false;
 
+    const bool visibilityChanged =
+        m_dynamicSphereVisibilityDirty;
     const float previousPosition = m_dynamicSpherePositionX;
     const float previousRoll = m_dynamicSphereRollRadians;
-    UpdateDynamicSphereMotion();
-    if (std::abs(previousPosition - m_dynamicSpherePositionX) <= 1.0e-7f &&
-        std::abs(previousRoll - m_dynamicSphereRollRadians) <= 1.0e-7f)
+    if (m_dynamicSphereVisible)
+    {
+        UpdateDynamicSphereMotion();
+    }
+    else
+    {
+        m_dynamicObjectLinearSpeed = 0.0;
+        m_dynamicObjectAngularSpeed = 0.0;
+    }
+    const bool transformChanged =
+        std::abs(previousPosition - m_dynamicSpherePositionX) > 1.0e-7f ||
+        std::abs(previousRoll - m_dynamicSphereRollRadians) > 1.0e-7f;
+    if (!visibilityChanged && !transformChanged)
     {
         return true;
     }
@@ -2382,6 +2673,7 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     barrier.UAV.pResource = m_topLevelAS.Get();
     commandList->ResourceBarrier(1, &barrier);
+    m_dynamicSphereVisibilityDirty = false;
     m_dynamicObjectMovedThisFrame = true;
     return true;
 }

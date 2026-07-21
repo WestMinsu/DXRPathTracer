@@ -186,6 +186,7 @@ private:
     bool m_cameraPathPlaybackActive = false;
     bool m_cameraPathAutoPlay = false;
     bool m_animateDynamicSphere = false;
+    bool m_showDynamicSphere = true;
     bool m_hasPreviousCameraPose = false;
     bool m_freeCameraInitialized = false;
     bool m_rightMouseDragging = false;

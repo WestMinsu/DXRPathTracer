@@ -100,6 +100,11 @@ public:
         return m_dynamicObjectAngularSpeed;
     }
     bool HasDynamicSphere() const { return m_hasDynamicSphere; }
+    bool IsDynamicSphereVisible() const
+    {
+        return m_dynamicSphereVisible;
+    }
+    void SetDynamicSphereVisible(bool visible);
     void SetDynamicSphereAnimationEnabled(bool enabled);
     void SetDynamicSphereDeterministicTimeline(bool enabled);
     void ResetDynamicSphereTimeline();
@@ -220,6 +225,8 @@ private:
     bool m_sponzaLite = false;
     bool m_autoFrameCamera = false;
     bool m_hasDynamicSphere = false;
+    bool m_dynamicSphereVisible = true;
+    bool m_dynamicSphereVisibilityDirty = false;
     bool m_dynamicSphereAnimationEnabled = true;
     bool m_dynamicSphereDeterministicTimeline = false;
     float m_dynamicSphereRadius = 0.0f;
@@ -247,6 +254,12 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_statisticsResetBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_statisticsReadbackBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_environmentMap;
+    Microsoft::WRL::ComPtr<ID3D12Resource>
+        m_environmentDistributionBuffer;
+    UINT m_environmentResolution = 0;
+    UINT m_environmentTexelCount = 0;
+    float m_environmentPower = 0.0f;
+    float m_areaLightPower = 0.0f;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_descriptorHeap;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_globalRootSignature;
     Microsoft::WRL::ComPtr<ID3D12StateObject> m_stateObject;
