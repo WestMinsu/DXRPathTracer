@@ -186,8 +186,34 @@ float3 TracePbrBrdfWithMixtureSampling(
     inout uint dynamicTouched,
     float3 pathThroughput)
 {
-    uint seed = CreateRandomSeed(depth, primitiveIndex);
     float3 viewDirection = normalize(-WorldRayDirection());
+    float3 directLighting = float3(0.0f, 0.0f, 0.0f);
+    uint directSeed =
+        CreateRandomSeed(depth, primitiveIndex) ^ 0xA511E9B3u;
+    float3 directLightDirection;
+    float3 radianceOverPdf;
+    if (SampleDirectAreaLight(
+        normal,
+        hitPosition,
+        directSeed,
+        directLightDirection,
+        radianceOverPdf))
+    {
+        directLighting =
+            EvaluateBrdf(
+                material,
+                normal,
+                viewDirection,
+                directLightDirection) *
+            radianceOverPdf;
+    }
+
+    if (depth >= g_maxBounce)
+    {
+        return directLighting;
+    }
+
+    uint seed = CreateRandomSeed(depth, primitiveIndex);
     float3 sampleDirection;
     float3 weightedBrdf;
     if (!SamplePbrBrdfWithMixtureSampling(
@@ -198,7 +224,7 @@ float3 TracePbrBrdfWithMixtureSampling(
         sampleDirection,
         weightedBrdf))
     {
-        return float3(0.0f, 0.0f, 0.0f);
+        return directLighting;
     }
     uint nextDepth = depth + 1u;
     float3 nextThroughput = pathThroughput * weightedBrdf;
@@ -209,7 +235,7 @@ float3 TracePbrBrdfWithMixtureSampling(
         seed,
         survivalProbability))
     {
-        return float3(0.0f, 0.0f, 0.0f);
+        return directLighting;
     }
     float inverseSurvivalProbability = 1.0f / survivalProbability;
 
@@ -230,7 +256,8 @@ float3 TracePbrBrdfWithMixtureSampling(
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
     dynamicTouched |= bouncePayload.dynamicTouched;
 
-    return weightedBrdf *
+    return directLighting +
+        weightedBrdf *
         inverseSurvivalProbability *
         bouncePayload.color;
 }

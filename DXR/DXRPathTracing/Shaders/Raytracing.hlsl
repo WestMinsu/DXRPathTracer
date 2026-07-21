@@ -219,10 +219,19 @@ void MyClosestHitShader_RadianceRay(
     float3 emission = SurfaceEmission(globalPrimitiveIndex);
     if (frontFace && any(emission > 0.0f))
     {
-        payload.color = emission;
+        bool sampledByNee =
+            g_lightingMode == c_lightingModeNee &&
+            g_emissiveTriangleCount > 0u &&
+            payload.depth > 0u;
+        payload.color = sampledByNee
+            ? float3(0.0f, 0.0f, 0.0f)
+            : emission;
         return;
     }
 
+    // Preserve the renderer's existing max-bounce definition: a non-emissive
+    // vertex at the terminal depth must not launch either a bounce ray or an
+    // NEE visibility ray.
     if (payload.depth >= g_maxBounce)
     {
         payload.color = float3(0.0f, 0.0f, 0.0f);
@@ -268,4 +277,10 @@ void MyMissShader_RadianceRay(inout RadiancePayload payload)
     payload.color = g_sceneType == c_scenePbrGgx && g_enableIbl != 0
         ? SampleEnvironmentMap(WorldRayDirection())
         : float3(0.0f, 0.0f, 0.0f);
+}
+
+[shader("miss")]
+void MyMissShader_ShadowRay(inout ShadowPayload payload)
+{
+    payload.occluded = 0u;
 }

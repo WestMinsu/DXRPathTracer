@@ -44,6 +44,8 @@ public:
     static constexpr UINT c_scenePbrGgx = 1;
     static constexpr UINT c_scenePbrGpuValidation = 2;
     static constexpr UINT c_sceneIndirectBounceStress = 3;
+    static constexpr UINT c_lightingModeBsdf = 0;
+    static constexpr UINT c_lightingModeNee = 1;
     static constexpr UINT c_pbrDebugBeauty = 0;
     static constexpr UINT c_pbrDebugAlbedo = 1;
     static constexpr UINT c_pbrDebugMetallic = 2;
@@ -58,6 +60,7 @@ public:
     void SetShowNormalColor(bool showNormalColor);
     void SetMaxBounce(UINT maxBounce);
     void SetRussianRouletteEnabled(bool enabled);
+    void SetLightingMode(UINT lightingMode);
     void SetEnableAccumulation(bool enableAccumulation);
     void SetSceneType(UINT sceneType);
     void SetSceneFilePath(const std::wstring& sceneFilePath) { m_sceneFilePath = sceneFilePath; }
@@ -121,6 +124,8 @@ private:
     static constexpr UINT c_shaderPayloadSize = 8 * sizeof(float);
     static constexpr UINT c_shaderAttributeSize = 2 * sizeof(float);
     static constexpr UINT c_maxBounce = 8;
+    // At most one visibility ray is nested below a radiance vertex. The
+    // terminal radiance vertex exits before tracing NEE or another bounce.
     static constexpr UINT c_maxRecursionDepth = c_maxBounce + 1;
     static constexpr UINT c_tlasFrameCount = 2;
     struct GeometryRange
@@ -137,6 +142,7 @@ private:
     bool CreateGlobalRootSignature();
     bool CreateRaytracingPipelineState();
     bool CreateShaderTables();
+    bool CreateMissShaderTable();
     bool CreateShaderTable(const wchar_t* shaderExportName,
         ID3D12Resource** shaderTable,
         UINT* shaderRecordSize,
@@ -194,6 +200,7 @@ private:
     bool m_showNormalColor = true;
     bool m_enableAccumulation = true;
     bool m_enableRussianRoulette = false;
+    UINT m_lightingMode = c_lightingModeBsdf;
     UINT m_maxBounce = 3;
     UINT m_sceneType = c_sceneCornellBox;
     UINT m_pbrDebugView = c_pbrDebugBeauty;
@@ -254,6 +261,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_sceneMaterialBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_primitiveMaterialIndexBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_instanceMetadataBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_emissiveTriangleBuffer;
+    UINT m_emissiveTriangleCount = 0;
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> m_materialTextures;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_bottomLevelAS;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_dynamicSphereBottomLevelAS;

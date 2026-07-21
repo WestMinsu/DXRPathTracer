@@ -47,6 +47,13 @@ public:
     {
         m_enableRussianRoulette = enabled;
     }
+    void SetInitialLightingMode(UINT lightingMode)
+    {
+        m_lightingMode = static_cast<int>(
+            lightingMode <= RayTracingManager::c_lightingModeNee
+            ? lightingMode
+            : RayTracingManager::c_lightingModeBsdf);
+    }
     void SetInitialDynamicSphereAnimationEnabled(bool enabled)
     {
         m_animateDynamicSphere = enabled;
@@ -186,6 +193,8 @@ private:
     bool m_showNormalColor = false;
     bool m_enableAccumulation = true;
     bool m_enableRussianRoulette = false;
+    int m_lightingMode = static_cast<int>(
+        RayTracingManager::c_lightingModeBsdf);
     bool m_captureActive = false;
     bool m_saveCurrentRequested = false;
     int m_captureTargetSamples = 256;

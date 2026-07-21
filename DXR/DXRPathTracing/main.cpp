@@ -29,6 +29,7 @@ namespace
         float pbrRoughness = 0.35f;
         bool overridePbrMaterial = false;
         bool enableRussianRoulette = false;
+        UINT lightingMode = RayTracingManager::c_lightingModeBsdf;
         bool enableIbl = true;
         float iblIntensity = 0.5f;
         UINT validationSeed = 0;
@@ -176,6 +177,14 @@ namespace
             {
                 gOptions.enableRussianRoulette =
                     _wtoi(arguments[++index]) != 0;
+            }
+            else if (argument == L"--lighting-mode" &&
+                     index + 1 < argumentCount)
+            {
+                const std::wstring lightingMode = arguments[++index];
+                gOptions.lightingMode = lightingMode == L"nee"
+                    ? RayTracingManager::c_lightingModeNee
+                    : RayTracingManager::c_lightingModeBsdf;
             }
             else if (argument == L"--animate-sphere" &&
                      index + 1 < argumentCount)
@@ -437,6 +446,7 @@ namespace
         gRenderer.SetInitialMaxBounce(gOptions.maxBounce);
         gRenderer.SetInitialRussianRouletteEnabled(
             gOptions.enableRussianRoulette);
+        gRenderer.SetInitialLightingMode(gOptions.lightingMode);
         gRenderer.SetInitialDynamicSphereAnimationEnabled(
             gOptions.animateDynamicSphere);
         gRenderer.SetComposeModelRoom(gOptions.composeModelRoom);

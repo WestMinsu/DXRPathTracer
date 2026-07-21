@@ -17,6 +17,11 @@ struct RadiancePayload
     float3 pathThroughput;
 };
 
+struct ShadowPayload
+{
+    uint occluded;
+};
+
 struct PbrMaterial
 {
     float3 baseColor;
@@ -47,9 +52,25 @@ struct SceneInstanceMetadata
     uint reserved;
 };
 
+// Mirrored by GpuEmissiveTriangle in RayTracingManager.cpp.
+struct EmissiveTriangle
+{
+    float3 vertex0;
+    float area;
+    float3 edge1;
+    float selectionPdf;
+    float3 edge2;
+    float selectionCdf;
+    float3 emission;
+    float padding;
+};
+
 static const uint c_sceneCornellBox = 0;
 static const uint c_scenePbrGgx = 1;
 static const uint c_scenePbrGpuValidation = 2;
+static const uint c_sceneIndirectBounceStress = 3;
+static const uint c_lightingModeBsdf = 0u;
+static const uint c_lightingModeNee = 1u;
 static const uint c_pbrDebugBeauty = 0;
 static const uint c_pbrDebugAlbedo = 1;
 static const uint c_pbrDebugMetallic = 2;
@@ -87,6 +108,7 @@ StructuredBuffer<SceneMaterial> g_sceneMaterials : register(t4);
 StructuredBuffer<uint> g_primitiveMaterialIndices : register(t5);
 Texture2D<float4> g_materialTextures[c_maxMaterialTextures] : register(t6);
 StructuredBuffer<SceneInstanceMetadata> g_instanceMetadata : register(t262);
+StructuredBuffer<EmissiveTriangle> g_emissiveTriangles : register(t263);
 SamplerState g_environmentSampler : register(s0);
 SamplerState g_materialSampler : register(s1);
 
@@ -111,6 +133,8 @@ cbuffer RenderSettings : register(b0)
     uint g_enableStatistics;
     uint g_dynamicObjectMoved;
     uint g_enableRussianRoulette;
+    uint g_lightingMode;
+    uint g_emissiveTriangleCount;
 };
 
 void RecordRadianceRay(uint depth)
@@ -282,6 +306,107 @@ float3 SampleEnvironmentMap(float3 direction)
         g_environmentMap.SampleLevel(g_environmentSampler, normalize(direction), 0.0f).rgb,
         float3(0.0f, 0.0f, 0.0f)) * g_iblIntensity;
 }
+
+bool SampleDirectAreaLight(
+    float3 normal,
+    float3 hitPosition,
+    inout uint seed,
+    out float3 lightDirection,
+    out float3 radianceOverPdf)
+{
+    lightDirection = normal;
+    radianceOverPdf = float3(0.0f, 0.0f, 0.0f);
+    if (g_lightingMode != c_lightingModeNee ||
+        g_emissiveTriangleCount == 0u)
+    {
+        return false;
+    }
+
+    float lightSelectionSample = RandomFloat01(seed);
+    uint selectedIndex = g_emissiveTriangleCount - 1u;
+    for (uint lightIndex = 0u;
+         lightIndex < g_emissiveTriangleCount;
+         ++lightIndex)
+    {
+        if (lightSelectionSample <
+            g_emissiveTriangles[lightIndex].selectionCdf)
+        {
+            selectedIndex = lightIndex;
+            break;
+        }
+    }
+
+    EmissiveTriangle light = g_emissiveTriangles[selectedIndex];
+    if (light.area <= 0.0f || light.selectionPdf <= 0.0f)
+    {
+        return false;
+    }
+
+    float squareRootSample = sqrt(RandomFloat01(seed));
+    float secondSample = RandomFloat01(seed);
+    float edge1Weight = squareRootSample * (1.0f - secondSample);
+    float edge2Weight = squareRootSample * secondSample;
+    float3 lightPosition =
+        light.vertex0 +
+        light.edge1 * edge1Weight +
+        light.edge2 * edge2Weight;
+
+    float3 toLight = lightPosition - hitPosition;
+    float distanceSquared = dot(toLight, toLight);
+    if (distanceSquared <= c_rayTMin * c_rayTMin)
+    {
+        return false;
+    }
+    float distanceToLight = sqrt(distanceSquared);
+    lightDirection = toLight / distanceToLight;
+
+    float surfaceCosine = saturate(dot(normal, lightDirection));
+    float3 lightNormal = normalize(cross(light.edge1, light.edge2));
+    float lightCosine = saturate(dot(lightNormal, -lightDirection));
+    if (surfaceCosine <= 0.0f || lightCosine <= 0.0f)
+    {
+        return false;
+    }
+
+    float areaPdf = light.selectionPdf / light.area;
+    float solidAnglePdf =
+        areaPdf * distanceSquared / max(lightCosine, 0.000001f);
+    if (solidAnglePdf <= 0.0f)
+    {
+        return false;
+    }
+
+    RayDesc shadowRay;
+    shadowRay.Origin = hitPosition + normal * c_rayOriginBias;
+    shadowRay.Direction = lightDirection;
+    shadowRay.TMin = c_rayTMin;
+    shadowRay.TMax = max(
+        distanceToLight - 4.0f * c_rayOriginBias,
+        c_rayTMin);
+
+    ShadowPayload shadowPayload;
+    shadowPayload.occluded = 1u;
+    RecordShadowRay();
+    TraceRay(
+        g_scene,
+        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+            RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
+            RAY_FLAG_FORCE_OPAQUE,
+        0xFF,
+        0,
+        0,
+        1,
+        shadowRay,
+        shadowPayload);
+    if (shadowPayload.occluded != 0u)
+    {
+        return false;
+    }
+
+    radianceOverPdf = light.emission / solidAnglePdf;
+    return true;
+}
+
 float3 TraceLambertianBounce(
     float3 normal,
     float3 hitPosition,
@@ -291,6 +416,28 @@ float3 TraceLambertianBounce(
     inout uint dynamicTouched,
     float3 pathThroughput)
 {
+    float3 directLighting = float3(0.0f, 0.0f, 0.0f);
+    uint directSeed =
+        CreateRandomSeed(depth, primitiveIndex) ^ 0xA511E9B3u;
+    float3 directLightDirection;
+    float3 radianceOverPdf;
+    if (SampleDirectAreaLight(
+        normal,
+        hitPosition,
+        directSeed,
+        directLightDirection,
+        radianceOverPdf))
+    {
+        float nDotL = saturate(dot(normal, directLightDirection));
+        directLighting =
+            albedo * c_invPi * nDotL * radianceOverPdf;
+    }
+
+    if (depth >= g_maxBounce)
+    {
+        return directLighting;
+    }
+
     uint seed = CreateRandomSeed(depth, primitiveIndex);
 
     float3 scatterDirection = RandomCosineHemisphereDirection(normal, seed);
@@ -303,7 +450,7 @@ float3 TraceLambertianBounce(
         seed,
         survivalProbability))
     {
-        return float3(0.0f, 0.0f, 0.0f);
+        return directLighting;
     }
     float inverseSurvivalProbability = 1.0f / survivalProbability;
 
@@ -323,6 +470,7 @@ float3 TraceLambertianBounce(
     RecordRadianceRay(bouncePayload.depth);
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
     dynamicTouched |= bouncePayload.dynamicTouched;
-    return albedo * inverseSurvivalProbability * bouncePayload.color;
+    return directLighting +
+        albedo * inverseSurvivalProbability * bouncePayload.color;
 }
 #endif

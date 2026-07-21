@@ -25,6 +25,7 @@ namespace
     constexpr wchar_t c_rayGenShaderName[] = L"MyRaygenShader_RadianceRay";
     constexpr wchar_t c_closestHitShaderName[] = L"MyClosestHitShader_RadianceRay";
     constexpr wchar_t c_missShaderName[] = L"MyMissShader_RadianceRay";
+    constexpr wchar_t c_shadowMissShaderName[] = L"MyMissShader_ShadowRay";
     constexpr wchar_t c_hitGroupName[] = L"MyHitGroup_Triangle_RadianceRay";
     constexpr wchar_t c_compiledShaderRelativePath[] = L"Shaders\\Raytracing.dxil";
     constexpr wchar_t c_environmentMapRelativePath[] = L"Assets\\Textures\\Cubemaps\\HDRI\\autumn_hill_view_4kSpecularHDR.dds";
@@ -76,8 +77,102 @@ namespace
         UINT enableStatistics;
         UINT dynamicObjectMoved;
         UINT enableRussianRoulette;
+        UINT lightingMode;
+        UINT emissiveTriangleCount;
     };
-    static_assert(sizeof(RenderSettingsConstants) == 23 * sizeof(std::uint32_t));
+    static_assert(sizeof(RenderSettingsConstants) == 25 * sizeof(std::uint32_t));
+
+    struct GpuEmissiveTriangle
+    {
+        float vertex0[3];
+        float area;
+        float edge1[3];
+        float selectionPdf;
+        float edge2[3];
+        float selectionCdf;
+        float emission[3];
+        float padding;
+    };
+    static_assert(sizeof(GpuEmissiveTriangle) == 64);
+
+    std::vector<GpuEmissiveTriangle> BuildEmissiveTriangles(
+        const SceneData& scene,
+        UINT staticIndexCount)
+    {
+        std::vector<GpuEmissiveTriangle> lights;
+        const UINT primitiveCount = staticIndexCount / 3u;
+        double totalWeight = 0.0;
+        for (UINT primitiveIndex = 0;
+             primitiveIndex < primitiveCount;
+             ++primitiveIndex)
+        {
+            const std::uint32_t materialIndex =
+                scene.primitiveMaterialIndices[primitiveIndex];
+            const SceneMaterial& material = scene.materials[materialIndex];
+            const float luminance =
+                material.emission[0] * 0.2126f +
+                material.emission[1] * 0.7152f +
+                material.emission[2] * 0.0722f;
+            if (luminance <= 0.0f)
+                continue;
+
+            const std::uint32_t i0 =
+                scene.indices[primitiveIndex * 3u + 0u];
+            const std::uint32_t i1 =
+                scene.indices[primitiveIndex * 3u + 1u];
+            const std::uint32_t i2 =
+                scene.indices[primitiveIndex * 3u + 2u];
+            const SceneVertex& v0 = scene.vertices[i0];
+            const SceneVertex& v1 = scene.vertices[i1];
+            const SceneVertex& v2 = scene.vertices[i2];
+
+            GpuEmissiveTriangle light = {};
+            for (UINT component = 0; component < 3u; ++component)
+            {
+                light.vertex0[component] = v0.position[component];
+                light.edge1[component] =
+                    v1.position[component] - v0.position[component];
+                light.edge2[component] =
+                    v2.position[component] - v0.position[component];
+                light.emission[component] = material.emission[component];
+            }
+            const float crossX =
+                light.edge1[1] * light.edge2[2] -
+                light.edge1[2] * light.edge2[1];
+            const float crossY =
+                light.edge1[2] * light.edge2[0] -
+                light.edge1[0] * light.edge2[2];
+            const float crossZ =
+                light.edge1[0] * light.edge2[1] -
+                light.edge1[1] * light.edge2[0];
+            light.area = 0.5f * std::sqrt(
+                crossX * crossX +
+                crossY * crossY +
+                crossZ * crossZ);
+            if (light.area <= 0.0000001f)
+                continue;
+
+            light.selectionPdf = light.area * luminance;
+            totalWeight += static_cast<double>(light.selectionPdf);
+            lights.push_back(light);
+        }
+
+        if (totalWeight > 0.0)
+        {
+            double cumulativeProbability = 0.0;
+            for (GpuEmissiveTriangle& light : lights)
+            {
+                light.selectionPdf = static_cast<float>(
+                    static_cast<double>(light.selectionPdf) /
+                    totalWeight);
+                cumulativeProbability += light.selectionPdf;
+                light.selectionCdf = static_cast<float>(
+                    cumulativeProbability);
+            }
+            lights.back().selectionCdf = 1.0f;
+        }
+        return lights;
+    }
 
     UINT AlignUp(UINT value, UINT alignment)
     {
@@ -244,7 +339,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     if (!commandList || !m_stateObject || !m_rayGenShaderTable || !m_missShaderTable ||
         !m_hitGroupShaderTable || !m_descriptorHeap || !m_topLevelAS || !m_accumulationTexture ||
         !m_environmentMap || !m_sceneMaterialBuffer || !m_primitiveMaterialIndexBuffer ||
-        !m_instanceMetadataBuffer || !m_statisticsBuffer ||
+        !m_instanceMetadataBuffer || !m_emissiveTriangleBuffer ||
+        !m_statisticsBuffer ||
         !m_statisticsResetBuffer || !m_statisticsReadbackBuffer)
     {
         return;
@@ -311,7 +407,9 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         m_dynamicObjectMovedThisFrame ? 1u : 0u;
     renderSettings.enableRussianRoulette =
         m_enableRussianRoulette ? 1u : 0u;
-    commandList->SetComputeRoot32BitConstants(4, 23, &renderSettings, 0);
+    renderSettings.lightingMode = m_lightingMode;
+    renderSettings.emissiveTriangleCount = m_emissiveTriangleCount;
+    commandList->SetComputeRoot32BitConstants(4, 25, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
     commandList->SetComputeRootDescriptorTable(5, environmentHandle);
@@ -328,13 +426,17 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     commandList->SetComputeRootShaderResourceView(
         10,
         m_instanceMetadataBuffer->GetGPUVirtualAddress());
+    commandList->SetComputeRootShaderResourceView(
+        11,
+        m_emissiveTriangleBuffer->GetGPUVirtualAddress());
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
     dispatchDesc.RayGenerationShaderRecord.StartAddress = m_rayGenShaderTable->GetGPUVirtualAddress();
     dispatchDesc.RayGenerationShaderRecord.SizeInBytes = m_rayGenShaderRecordSize;
     dispatchDesc.MissShaderTable.StartAddress = m_missShaderTable->GetGPUVirtualAddress();
-    dispatchDesc.MissShaderTable.SizeInBytes = m_missShaderRecordSize;
+    dispatchDesc.MissShaderTable.SizeInBytes =
+        m_missShaderRecordSize * 2u;
     dispatchDesc.MissShaderTable.StrideInBytes = m_missShaderRecordSize;
     dispatchDesc.HitGroupTable.StartAddress = m_hitGroupShaderTable->GetGPUVirtualAddress();
     dispatchDesc.HitGroupTable.SizeInBytes = m_hitGroupShaderRecordSize;
@@ -425,6 +527,19 @@ void RayTracingManager::SetRussianRouletteEnabled(bool enabled)
         return;
 
     m_enableRussianRoulette = enabled;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetLightingMode(UINT lightingMode)
+{
+    const UINT clampedLightingMode =
+        lightingMode <= c_lightingModeNee
+        ? lightingMode
+        : c_lightingModeBsdf;
+    if (m_lightingMode == clampedLightingMode)
+        return;
+
+    m_lightingMode = clampedLightingMode;
     ResetAccumulation();
 }
 
@@ -961,7 +1076,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     materialTextureRange.OffsetInDescriptorsFromTableStart =
         D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParameters[11] = {};
+    D3D12_ROOT_PARAMETER rootParameters[12] = {};
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParameters[0].DescriptorTable.NumDescriptorRanges = 1;
     rootParameters[0].DescriptorTable.pDescriptorRanges = &outputRange;
@@ -985,7 +1100,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 23;
+    rootParameters[4].Constants.Num32BitValues = 25;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     rootParameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -1017,6 +1132,11 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[10].Descriptor.ShaderRegister = 262;
     rootParameters[10].Descriptor.RegisterSpace = 0;
     rootParameters[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParameters[11].ParameterType = D3D12_ROOT_PARAMETER_TYPE_SRV;
+    rootParameters[11].Descriptor.ShaderRegister = 263;
+    rootParameters[11].Descriptor.RegisterSpace = 0;
+    rootParameters[11].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_STATIC_SAMPLER_DESC staticSamplers[2] = {};
     staticSamplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
@@ -1074,7 +1194,7 @@ bool RayTracingManager::CreateRaytracingPipelineState()
     if (!LoadCompiledShader(shaderBytes))
         return false;
 
-    D3D12_EXPORT_DESC shaderExports[3] = {};
+    D3D12_EXPORT_DESC shaderExports[4] = {};
     shaderExports[0].Name = c_rayGenShaderName;
     shaderExports[0].ExportToRename = nullptr;
     shaderExports[0].Flags = D3D12_EXPORT_FLAG_NONE;
@@ -1084,6 +1204,9 @@ bool RayTracingManager::CreateRaytracingPipelineState()
     shaderExports[2].Name = c_missShaderName;
     shaderExports[2].ExportToRename = nullptr;
     shaderExports[2].Flags = D3D12_EXPORT_FLAG_NONE;
+    shaderExports[3].Name = c_shadowMissShaderName;
+    shaderExports[3].ExportToRename = nullptr;
+    shaderExports[3].Flags = D3D12_EXPORT_FLAG_NONE;
 
     D3D12_DXIL_LIBRARY_DESC dxilLibraryDesc = {};
     dxilLibraryDesc.DXILLibrary.pShaderBytecode = shaderBytes.data();
@@ -1138,11 +1261,7 @@ bool RayTracingManager::CreateShaderTables()
         m_rayGenShaderTable.ReleaseAndGetAddressOf(),
         &m_rayGenShaderRecordSize,
         L"RayGen shader table") &&
-        CreateShaderTable(
-            c_missShaderName,
-            m_missShaderTable.ReleaseAndGetAddressOf(),
-            &m_missShaderRecordSize,
-            L"Miss shader table") &&
+        CreateMissShaderTable() &&
         CreateShaderTable(
             c_hitGroupName,
             m_hitGroupShaderTable.ReleaseAndGetAddressOf(),
@@ -1256,6 +1375,75 @@ bool RayTracingManager::CreateAccelerationStructures()
     if (!m_hasDynamicSphere)
         m_tlasScratchBuffer.Reset();
     return buildSucceeded;
+}
+
+bool RayTracingManager::CreateMissShaderTable()
+{
+    Microsoft::WRL::ComPtr<ID3D12StateObjectProperties>
+        stateObjectProperties;
+    HRESULT hr = m_stateObject.As(&stateObjectProperties);
+    if (ReportFailure(
+        hr,
+        L"Raytracing state object properties query failed."))
+    {
+        return false;
+    }
+
+    const wchar_t* shaderNames[] =
+    {
+        c_missShaderName,
+        c_shadowMissShaderName
+    };
+    m_missShaderRecordSize = AlignUp(
+        D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES,
+        D3D12_RAYTRACING_SHADER_RECORD_BYTE_ALIGNMENT);
+    const UINT tableSize = AlignUp(
+        m_missShaderRecordSize * _countof(shaderNames),
+        D3D12_RAYTRACING_SHADER_TABLE_BYTE_ALIGNMENT);
+
+    const D3D12_HEAP_PROPERTIES heapProperties =
+        CreateHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+    const D3D12_RESOURCE_DESC bufferDesc =
+        CreateBufferDesc(tableSize);
+    hr = m_device->CreateCommittedResource(
+        &heapProperties,
+        D3D12_HEAP_FLAG_NONE,
+        &bufferDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ,
+        nullptr,
+        IID_PPV_ARGS(&m_missShaderTable));
+    if (ReportFailure(hr, L"Miss shader table creation failed."))
+        return false;
+
+    m_missShaderTable->SetName(L"Miss shader table");
+    void* mappedData = nullptr;
+    D3D12_RANGE readRange = { 0, 0 };
+    hr = m_missShaderTable->Map(0, &readRange, &mappedData);
+    if (ReportFailure(hr, L"Miss shader table mapping failed."))
+        return false;
+
+    std::memset(mappedData, 0, tableSize);
+    for (UINT shaderIndex = 0;
+         shaderIndex < _countof(shaderNames);
+         ++shaderIndex)
+    {
+        void* shaderIdentifier =
+            stateObjectProperties->GetShaderIdentifier(
+                shaderNames[shaderIndex]);
+        if (!shaderIdentifier)
+        {
+            m_missShaderTable->Unmap(0, nullptr);
+            ReportMessage(L"Miss shader identifier was not found.");
+            return false;
+        }
+        std::memcpy(
+            static_cast<std::uint8_t*>(mappedData) +
+                shaderIndex * m_missShaderRecordSize,
+            shaderIdentifier,
+            D3D12_SHADER_IDENTIFIER_SIZE_IN_BYTES);
+    }
+    m_missShaderTable->Unmap(0, nullptr);
+    return true;
 }
 
 bool RayTracingManager::CreateBuildCommandObjects()
@@ -1521,6 +1709,13 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             });
     }
 
+    std::vector<GpuEmissiveTriangle> emissiveTriangles =
+        BuildEmissiveTriangles(scene, m_staticGeometry.indexCount);
+    m_emissiveTriangleCount =
+        static_cast<UINT>(emissiveTriangles.size());
+    if (emissiveTriangles.empty())
+        emissiveTriangles.push_back({});
+
     if (!CreateUploadBuffer(
         scene.vertices.data(),
         sizeof(SceneVertex) * scene.vertices.size(),
@@ -1562,6 +1757,15 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         sizeof(SceneInstanceMetadata) * instanceMetadata.size(),
         L"Raytracing instance metadata buffer",
         m_instanceMetadataBuffer))
+    {
+        return false;
+    }
+
+    if (!CreateUploadBuffer(
+        emissiveTriangles.data(),
+        sizeof(GpuEmissiveTriangle) * emissiveTriangles.size(),
+        L"Raytracing emissive triangle buffer",
+        m_emissiveTriangleBuffer))
     {
         return false;
     }

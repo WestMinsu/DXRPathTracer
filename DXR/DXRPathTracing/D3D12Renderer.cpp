@@ -215,6 +215,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
     m_rayTracingManager->SetRussianRouletteEnabled(
         m_enableRussianRoulette);
+    m_rayTracingManager->SetLightingMode(
+        static_cast<UINT>(m_lightingMode));
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
         m_animateDynamicSphere);
     m_rayTracingManager->SetEnableStatistics(m_collectRayStatistics);
@@ -261,6 +263,8 @@ void D3D12Renderer::Render()
     m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
     m_rayTracingManager->SetRussianRouletteEnabled(
         m_enableRussianRoulette);
+    m_rayTracingManager->SetLightingMode(
+        static_cast<UINT>(m_lightingMode));
     m_rayTracingManager->SetEnableAccumulation(m_enableAccumulation);
     m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
     m_rayTracingManager->SetPbrDebugView(static_cast<UINT>(m_pbrDebugView));
@@ -1090,7 +1094,7 @@ bool D3D12Renderer::OpenBenchmarkCsv()
     std::fprintf(
         m_benchmarkCsv,
         "frame,cpu_ms,gpu_dispatch_ms,gpu_upscale_ms,gpu_total_ms,"
-        "profile,internal_scale,max_bounce,russian_roulette,"
+        "profile,internal_scale,max_bounce,russian_roulette,lighting_mode,"
         "camera_linear_speed,"
         "camera_angular_speed,object_linear_speed,object_angular_speed,"
         "primary_rays,shadow_rays,bounce_rays,average_path_length,"
@@ -1123,7 +1127,7 @@ void D3D12Renderer::RecordFrameMetrics(double cpuFrameMs)
         : 0u;
     std::fprintf(
         m_benchmarkCsv,
-        "%llu,%.6f,%.6f,%.6f,%.6f,fixed,1.000000,%d,%d,"
+        "%llu,%.6f,%.6f,%.6f,%.6f,fixed,1.000000,%d,%d,%d,"
         "%.6f,%.6f,%.6f,%.6f,%llu,%llu,%llu,"
         "%.6f,%llu,%llu,%u",
         static_cast<unsigned long long>(m_benchmarkFramesWritten),
@@ -1133,6 +1137,7 @@ void D3D12Renderer::RecordFrameMetrics(double cpuFrameMs)
         m_gpuTotalMs,
         m_maxBounce,
         m_enableRussianRoulette ? 1 : 0,
+        m_lightingMode,
         m_cameraLinearSpeed,
         m_cameraAngularSpeed,
         m_objectLinearSpeed,
@@ -1334,6 +1339,24 @@ void D3D12Renderer::BuildImGuiFrame()
     ImGui::Checkbox("Show normal color", &m_showNormalColor);
     ImGui::Checkbox("Accumulate samples", &m_enableAccumulation);
     ImGui::SliderInt("Max Bounce", &m_maxBounce, 1, 8);
+    const char* lightingModeNames[] =
+    {
+        "BSDF Only",
+        "NEE (Area Lights)"
+    };
+    if (ImGui::Combo(
+        "Lighting",
+        &m_lightingMode,
+        lightingModeNames,
+        _countof(lightingModeNames)) &&
+        m_rayTracingManager)
+    {
+        m_captureActive = false;
+        m_saveCurrentRequested = false;
+        m_captureStatus.clear();
+        m_rayTracingManager->SetLightingMode(
+            static_cast<UINT>(m_lightingMode));
+    }
     if (ImGui::Checkbox(
         "Russian Roulette (from bounce 3)",
         &m_enableRussianRoulette) &&
