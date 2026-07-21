@@ -130,6 +130,9 @@
     <CustomBuild Include="Shaders\Raytracing.hlsl">
       <Filter>Shader Files</Filter>
     </CustomBuild>
+    <CustomBuild Include="Shaders\AtrousDenoiser.hlsl">
+      <Filter>Shader Files</Filter>
+    </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <None Include="Config\sponza_camera_path.json">

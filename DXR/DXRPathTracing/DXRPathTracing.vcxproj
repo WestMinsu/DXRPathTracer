@@ -173,6 +173,13 @@
       <Outputs>$(OutDir)Shaders\%(Filename).dxil</Outputs>
       <AdditionalInputs>Shaders\RaytracingCommon.hlsli;Shaders\RaytracingScene.hlsli;Shaders\RaytracingPbr.hlsli;%(AdditionalInputs)</AdditionalInputs>
     </CustomBuild>
+    <CustomBuild Include="Shaders\AtrousDenoiser.hlsl">
+      <FileType>Document</FileType>
+      <Command>if not exist &quot;$(OutDir)Shaders&quot; mkdir &quot;$(OutDir)Shaders&quot;
+&quot;$(WindowsSdkDir)bin\$(WindowsTargetPlatformVersion)\x64\dxc.exe&quot; &quot;%(FullPath)&quot; /E CSMain /T cs_6_0 /Fo &quot;$(OutDir)Shaders\%(Filename).dxil&quot;</Command>
+      <Message>Compiling compute shader %(Filename).hlsl</Message>
+      <Outputs>$(OutDir)Shaders\%(Filename).dxil</Outputs>
+    </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <None Include="Config\sponza_camera_path.json" />

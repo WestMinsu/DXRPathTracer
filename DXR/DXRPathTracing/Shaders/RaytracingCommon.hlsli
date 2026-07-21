@@ -111,6 +111,7 @@ static const float c_twoPi = 6.283185307f;
 
 RWTexture2D<float4> g_output : register(u0);
 RWTexture2D<float4> g_accumulation : register(u1);
+RWTexture2D<float4> g_normalDepth : register(u3);
 RWStructuredBuffer<uint> g_statistics : register(u2);
 RaytracingAccelerationStructure g_scene : register(t0);
 StructuredBuffer<Vertex> g_vertices : register(t1);

@@ -62,6 +62,17 @@ public:
     void SetMaxBounce(UINT maxBounce);
     void SetRussianRouletteEnabled(bool enabled);
     void SetLightingMode(UINT lightingMode);
+    void SetAtrousEnabled(bool enabled) { m_enableAtrous = enabled; }
+    void SetAtrousIterationCount(UINT iterationCount)
+    {
+        m_atrousIterationCount =
+            iterationCount < 1u ? 1u : (iterationCount > 5u ? 5u : iterationCount);
+    }
+    void SetAtrousColorSigma(float colorSigma)
+    {
+        m_atrousColorSigma =
+            colorSigma < 0.25f ? 0.25f : (colorSigma > 16.0f ? 16.0f : colorSigma);
+    }
     void SetEnableAccumulation(bool enableAccumulation);
     void SetSceneType(UINT sceneType);
     void SetSceneFilePath(const std::wstring& sceneFilePath) { m_sceneFilePath = sceneFilePath; }
@@ -146,6 +157,7 @@ private:
     bool CreateStatisticsResources();
     bool CreateEnvironmentMap();
     bool CreateGlobalRootSignature();
+    bool CreateAtrousPipeline();
     bool CreateRaytracingPipelineState();
     bool CreateShaderTables();
     bool CreateMissShaderTable();
@@ -184,9 +196,13 @@ private:
         const wchar_t* debugName,
         Microsoft::WRL::ComPtr<ID3D12Resource>& resource);
     bool LoadCompiledShader(std::vector<std::uint8_t>& shaderBytes) const;
+    bool LoadCompiledAtrousShader(
+        std::vector<std::uint8_t>& shaderBytes) const;
     bool ReadBinaryFile(const std::wstring& path, std::vector<std::uint8_t>& bytes) const;
     std::wstring GetCompiledShaderPath() const;
+    std::wstring GetCompiledAtrousShaderPath() const;
     std::wstring GetEnvironmentMapPath() const;
+    void DispatchAtrousFilter(ID3D12GraphicsCommandList4* commandList);
     bool ReportFailure(HRESULT hr, const wchar_t* message) const;
     void ReportMessage(const std::wstring& message) const;
 
@@ -206,6 +222,9 @@ private:
     bool m_showNormalColor = true;
     bool m_enableAccumulation = true;
     bool m_enableRussianRoulette = false;
+    bool m_enableAtrous = false;
+    UINT m_atrousIterationCount = 3;
+    float m_atrousColorSigma = 4.0f;
     UINT m_lightingMode = c_lightingModeBsdf;
     UINT m_maxBounce = 3;
     UINT m_sceneType = c_sceneCornellBox;
@@ -250,6 +269,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_accumulationTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_normalDepthTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_atrousFilterTextureA;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_atrousFilterTextureB;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_statisticsBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_statisticsResetBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_statisticsReadbackBuffer;
@@ -262,6 +284,8 @@ private:
     float m_areaLightPower = 0.0f;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_descriptorHeap;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_globalRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> m_atrousRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_atrousPipelineState;
     Microsoft::WRL::ComPtr<ID3D12StateObject> m_stateObject;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_rayGenShaderTable;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_missShaderTable;

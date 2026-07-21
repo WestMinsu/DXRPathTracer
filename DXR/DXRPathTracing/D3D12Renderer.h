@@ -54,6 +54,20 @@ public:
             ? lightingMode
             : RayTracingManager::c_lightingModeBsdf);
     }
+    void SetInitialAtrousEnabled(bool enabled)
+    {
+        m_enableAtrous = enabled;
+    }
+    void SetInitialAtrousIterationCount(UINT iterationCount)
+    {
+        m_atrousIterations = static_cast<int>(
+            iterationCount < 1u ? 1u : (iterationCount > 5u ? 5u : iterationCount));
+    }
+    void SetInitialAtrousColorSigma(float colorSigma)
+    {
+        m_atrousColorSigma =
+            colorSigma < 0.25f ? 0.25f : (colorSigma > 16.0f ? 16.0f : colorSigma);
+    }
     void SetInitialDynamicSphereAnimationEnabled(bool enabled)
     {
         m_animateDynamicSphere = enabled;
@@ -194,6 +208,9 @@ private:
     bool m_showNormalColor = false;
     bool m_enableAccumulation = true;
     bool m_enableRussianRoulette = false;
+    bool m_enableAtrous = false;
+    int m_atrousIterations = 3;
+    float m_atrousColorSigma = 4.0f;
     int m_lightingMode = static_cast<int>(
         RayTracingManager::c_lightingModeBsdf);
     bool m_captureActive = false;

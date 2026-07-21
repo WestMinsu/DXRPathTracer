@@ -217,6 +217,10 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_enableRussianRoulette);
     m_rayTracingManager->SetLightingMode(
         static_cast<UINT>(m_lightingMode));
+    m_rayTracingManager->SetAtrousEnabled(m_enableAtrous);
+    m_rayTracingManager->SetAtrousIterationCount(
+        static_cast<UINT>(m_atrousIterations));
+    m_rayTracingManager->SetAtrousColorSigma(m_atrousColorSigma);
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
         m_animateDynamicSphere);
     m_rayTracingManager->SetEnableStatistics(m_collectRayStatistics);
@@ -265,6 +269,10 @@ void D3D12Renderer::Render()
         m_enableRussianRoulette);
     m_rayTracingManager->SetLightingMode(
         static_cast<UINT>(m_lightingMode));
+    m_rayTracingManager->SetAtrousEnabled(m_enableAtrous);
+    m_rayTracingManager->SetAtrousIterationCount(
+        static_cast<UINT>(m_atrousIterations));
+    m_rayTracingManager->SetAtrousColorSigma(m_atrousColorSigma);
     m_rayTracingManager->SetEnableAccumulation(m_enableAccumulation);
     m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
     m_rayTracingManager->SetPbrDebugView(static_cast<UINT>(m_pbrDebugView));
@@ -1365,6 +1373,26 @@ void D3D12Renderer::BuildImGuiFrame()
     {
         m_rayTracingManager->SetRussianRouletteEnabled(
             m_enableRussianRoulette);
+    }
+    ImGui::SeparatorText("Denoising");
+    ImGui::Checkbox("A-Trous Denoiser", &m_enableAtrous);
+    if (m_enableAtrous)
+    {
+        ImGui::SliderInt(
+            "A-Trous Iterations",
+            &m_atrousIterations,
+            1,
+            5);
+        ImGui::SliderFloat(
+            "A-Trous Color Sigma",
+            &m_atrousColorSigma,
+            0.25f,
+            16.0f,
+            "%.2f");
+        ImGui::TextDisabled(
+            "Edge-aware normal/depth filter; PNG/display only.");
+        ImGui::TextDisabled(
+            "HDR PFM accumulation remains unfiltered.");
     }
     if (ImGui::Button("Reset samples") && m_rayTracingManager)
     {

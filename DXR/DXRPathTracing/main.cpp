@@ -29,6 +29,9 @@ namespace
         float pbrRoughness = 0.35f;
         bool overridePbrMaterial = false;
         bool enableRussianRoulette = false;
+        bool enableAtrous = false;
+        UINT atrousIterations = 3;
+        float atrousColorSigma = 4.0f;
         UINT lightingMode = RayTracingManager::c_lightingModeBsdf;
         bool enableIbl = true;
         float iblIntensity = 0.5f;
@@ -177,6 +180,24 @@ namespace
             {
                 gOptions.enableRussianRoulette =
                     _wtoi(arguments[++index]) != 0;
+            }
+            else if (argument == L"--atrous" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.enableAtrous =
+                    _wtoi(arguments[++index]) != 0;
+            }
+            else if (argument == L"--atrous-iterations" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.atrousIterations = static_cast<UINT>(
+                    _wtoi(arguments[++index]));
+            }
+            else if (argument == L"--atrous-color-sigma" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.atrousColorSigma =
+                    static_cast<float>(_wtof(arguments[++index]));
             }
             else if (argument == L"--lighting-mode" &&
                      index + 1 < argumentCount)
@@ -459,6 +480,11 @@ namespace
         gRenderer.SetInitialRussianRouletteEnabled(
             gOptions.enableRussianRoulette);
         gRenderer.SetInitialLightingMode(gOptions.lightingMode);
+        gRenderer.SetInitialAtrousEnabled(gOptions.enableAtrous);
+        gRenderer.SetInitialAtrousIterationCount(
+            gOptions.atrousIterations);
+        gRenderer.SetInitialAtrousColorSigma(
+            gOptions.atrousColorSigma);
         gRenderer.SetInitialDynamicSphereAnimationEnabled(
             gOptions.animateDynamicSphere);
         gRenderer.SetComposeModelRoom(gOptions.composeModelRoom);

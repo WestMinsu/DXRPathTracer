@@ -66,6 +66,8 @@ void MyRaygenShader_RadianceRay()
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
+    // A negative depth marks pixels where the primary ray missed geometry.
+    g_normalDepth[launchIndex] = float4(0.0f, 0.0f, 0.0f, -1.0f);
     float3 sampleRadiance = float3(0.0f, 0.0f, 0.0f);
     uint dynamicTouched = 0u;
 
@@ -188,6 +190,12 @@ void MyClosestHitShader_RadianceRay(
             texCoord,
             tangent,
             normal);
+    }
+
+    if (payload.depth == 0u)
+    {
+        g_normalDepth[DispatchRaysIndex().xy] =
+            float4(normal, RayTCurrent());
     }
 
     float3 normalColor = normal * 0.5f + 0.5f;
