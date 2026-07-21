@@ -46,13 +46,15 @@ float3 EvaluateGpuBrdfValidationSample(uint2 launchIndex, uint2 launchDim)
     uint seed = CreateRandomSeed(0u, 0xA511E9B3u + caseIndex * 0x9E3779B9u);
     float3 sampleDirection;
     float3 weightedBrdf;
+    float samplePdf;
     if (!SamplePbrBrdfWithMixtureSampling(
         material,
         normal,
         viewDirection,
         seed,
         sampleDirection,
-        weightedBrdf))
+        weightedBrdf,
+        samplePdf))
     {
         return float3(0.0f, 0.0f, 0.0f);
     }
@@ -105,6 +107,8 @@ void MyRaygenShader_RadianceRay()
         payload.depth = 0;
         payload.dynamicTouched = 0u;
         payload.pathThroughput = float3(1.0f, 1.0f, 1.0f);
+        payload.previousBsdfPdf = 0.0f;
+        payload.previousWasDelta = 1u;
 
         RecordRadianceRay(0u);
         TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
@@ -219,13 +223,31 @@ void MyClosestHitShader_RadianceRay(
     float3 emission = SurfaceEmission(globalPrimitiveIndex);
     if (frontFace && any(emission > 0.0f))
     {
-        bool sampledByNee =
-            g_lightingMode == c_lightingModeNee &&
-            g_emissiveTriangleCount > 0u &&
-            payload.depth > 0u;
-        payload.color = sampledByNee
-            ? float3(0.0f, 0.0f, 0.0f)
-            : emission;
+        float emissionWeight = 1.0f;
+        if (payload.depth > 0u &&
+            payload.previousWasDelta == 0u &&
+            g_lightingMode != c_lightingModeBsdf)
+        {
+            float hitDistance = RayTCurrent();
+            float lightPdf = EvaluateAreaLightPdf(
+                globalPrimitiveIndex,
+                hitDistance * hitDistance,
+                normalize(WorldRayDirection()));
+            if (lightPdf > 0.0f)
+            {
+                if (g_lightingMode == c_lightingModeNee)
+                {
+                    emissionWeight = 0.0f;
+                }
+                else if (g_lightingMode == c_lightingModeMis)
+                {
+                    emissionWeight = PowerHeuristic(
+                        payload.previousBsdfPdf,
+                        lightPdf);
+                }
+            }
+        }
+        payload.color = emission * emissionWeight;
         return;
     }
 

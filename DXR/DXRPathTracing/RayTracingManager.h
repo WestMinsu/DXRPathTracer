@@ -46,6 +46,7 @@ public:
     static constexpr UINT c_sceneIndirectBounceStress = 3;
     static constexpr UINT c_lightingModeBsdf = 0;
     static constexpr UINT c_lightingModeNee = 1;
+    static constexpr UINT c_lightingModeMis = 2;
     static constexpr UINT c_pbrDebugBeauty = 0;
     static constexpr UINT c_pbrDebugAlbedo = 1;
     static constexpr UINT c_pbrDebugMetallic = 2;
@@ -121,7 +122,7 @@ public:
 private:
     static constexpr DXGI_FORMAT c_outputFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     static constexpr DXGI_FORMAT c_accumulationFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
-    static constexpr UINT c_shaderPayloadSize = 8 * sizeof(float);
+    static constexpr UINT c_shaderPayloadSize = 10 * sizeof(float);
     static constexpr UINT c_shaderAttributeSize = 2 * sizeof(float);
     static constexpr UINT c_maxBounce = 8;
     // At most one visibility ray is nested below a radiance vertex. The

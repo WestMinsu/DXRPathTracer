@@ -50,7 +50,7 @@ public:
     void SetInitialLightingMode(UINT lightingMode)
     {
         m_lightingMode = static_cast<int>(
-            lightingMode <= RayTracingManager::c_lightingModeNee
+            lightingMode <= RayTracingManager::c_lightingModeMis
             ? lightingMode
             : RayTracingManager::c_lightingModeBsdf);
     }

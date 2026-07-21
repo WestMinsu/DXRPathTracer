@@ -182,9 +182,21 @@ namespace
                      index + 1 < argumentCount)
             {
                 const std::wstring lightingMode = arguments[++index];
-                gOptions.lightingMode = lightingMode == L"nee"
-                    ? RayTracingManager::c_lightingModeNee
-                    : RayTracingManager::c_lightingModeBsdf;
+                if (lightingMode == L"nee")
+                {
+                    gOptions.lightingMode =
+                        RayTracingManager::c_lightingModeNee;
+                }
+                else if (lightingMode == L"mis")
+                {
+                    gOptions.lightingMode =
+                        RayTracingManager::c_lightingModeMis;
+                }
+                else
+                {
+                    gOptions.lightingMode =
+                        RayTracingManager::c_lightingModeBsdf;
+                }
             }
             else if (argument == L"--animate-sphere" &&
                      index + 1 < argumentCount)

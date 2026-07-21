@@ -1342,7 +1342,8 @@ void D3D12Renderer::BuildImGuiFrame()
     const char* lightingModeNames[] =
     {
         "BSDF Only",
-        "NEE (Area Lights)"
+        "NEE (Area Lights)",
+        "MIS (Power Heuristic)"
     };
     if (ImGui::Combo(
         "Lighting",

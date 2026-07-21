@@ -15,6 +15,8 @@ struct RadiancePayload
     uint depth;
     uint dynamicTouched;
     float3 pathThroughput;
+    float previousBsdfPdf;
+    uint previousWasDelta;
 };
 
 struct ShadowPayload
@@ -62,7 +64,7 @@ struct EmissiveTriangle
     float3 edge2;
     float selectionCdf;
     float3 emission;
-    float padding;
+    uint primitiveIndex;
 };
 
 static const uint c_sceneCornellBox = 0;
@@ -71,6 +73,7 @@ static const uint c_scenePbrGpuValidation = 2;
 static const uint c_sceneIndirectBounceStress = 3;
 static const uint c_lightingModeBsdf = 0u;
 static const uint c_lightingModeNee = 1u;
+static const uint c_lightingModeMis = 2u;
 static const uint c_pbrDebugBeauty = 0;
 static const uint c_pbrDebugAlbedo = 1;
 static const uint c_pbrDebugMetallic = 2;
@@ -307,16 +310,64 @@ float3 SampleEnvironmentMap(float3 direction)
         float3(0.0f, 0.0f, 0.0f)) * g_iblIntensity;
 }
 
+float PowerHeuristic(float sampledPdf, float otherPdf)
+{
+    float sampledPdfSquared = sampledPdf * sampledPdf;
+    float otherPdfSquared = otherPdf * otherPdf;
+    return sampledPdfSquared /
+        max(sampledPdfSquared + otherPdfSquared, 0.000000000001f);
+}
+
+float EvaluateAreaLightPdf(
+    uint primitiveIndex,
+    float distanceSquared,
+    float3 lightDirection)
+{
+    if (g_emissiveTriangleCount == 0u || distanceSquared <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    for (uint lightIndex = 0u;
+         lightIndex < g_emissiveTriangleCount;
+         ++lightIndex)
+    {
+        EmissiveTriangle light = g_emissiveTriangles[lightIndex];
+        if (light.primitiveIndex != primitiveIndex)
+        {
+            continue;
+        }
+
+        float3 lightNormal = normalize(cross(light.edge1, light.edge2));
+        float lightCosine = saturate(dot(lightNormal, -lightDirection));
+        if (light.area <= 0.0f ||
+            light.selectionPdf <= 0.0f ||
+            lightCosine <= 0.0f)
+        {
+            return 0.0f;
+        }
+
+        float areaPdf = light.selectionPdf / light.area;
+        return areaPdf * distanceSquared /
+            max(lightCosine, 0.000001f);
+    }
+
+    return 0.0f;
+}
+
 bool SampleDirectAreaLight(
     float3 normal,
     float3 hitPosition,
     inout uint seed,
     out float3 lightDirection,
-    out float3 radianceOverPdf)
+    out float3 radianceOverPdf,
+    out float lightPdf)
 {
     lightDirection = normal;
     radianceOverPdf = float3(0.0f, 0.0f, 0.0f);
-    if (g_lightingMode != c_lightingModeNee ||
+    lightPdf = 0.0f;
+    if ((g_lightingMode != c_lightingModeNee &&
+         g_lightingMode != c_lightingModeMis) ||
         g_emissiveTriangleCount == 0u)
     {
         return false;
@@ -369,9 +420,9 @@ bool SampleDirectAreaLight(
     }
 
     float areaPdf = light.selectionPdf / light.area;
-    float solidAnglePdf =
+    lightPdf =
         areaPdf * distanceSquared / max(lightCosine, 0.000001f);
-    if (solidAnglePdf <= 0.0f)
+    if (lightPdf <= 0.0f)
     {
         return false;
     }
@@ -403,7 +454,7 @@ bool SampleDirectAreaLight(
         return false;
     }
 
-    radianceOverPdf = light.emission / solidAnglePdf;
+    radianceOverPdf = light.emission / lightPdf;
     return true;
 }
 
@@ -421,16 +472,22 @@ float3 TraceLambertianBounce(
         CreateRandomSeed(depth, primitiveIndex) ^ 0xA511E9B3u;
     float3 directLightDirection;
     float3 radianceOverPdf;
+    float lightPdf;
     if (SampleDirectAreaLight(
         normal,
         hitPosition,
         directSeed,
         directLightDirection,
-        radianceOverPdf))
+        radianceOverPdf,
+        lightPdf))
     {
         float nDotL = saturate(dot(normal, directLightDirection));
+        float bsdfPdf = nDotL * c_invPi;
+        float misWeight = g_lightingMode == c_lightingModeMis
+            ? PowerHeuristic(lightPdf, bsdfPdf)
+            : 1.0f;
         directLighting =
-            albedo * c_invPi * nDotL * radianceOverPdf;
+            albedo * c_invPi * nDotL * radianceOverPdf * misWeight;
     }
 
     if (depth >= g_maxBounce)
@@ -466,6 +523,9 @@ float3 TraceLambertianBounce(
     bouncePayload.dynamicTouched = 0u;
     bouncePayload.pathThroughput =
         nextThroughput * inverseSurvivalProbability;
+    bouncePayload.previousBsdfPdf =
+        saturate(dot(normal, scatterDirection)) * c_invPi;
+    bouncePayload.previousWasDelta = 0u;
 
     RecordRadianceRay(bouncePayload.depth);
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);

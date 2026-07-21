@@ -91,7 +91,7 @@ namespace
         float edge2[3];
         float selectionCdf;
         float emission[3];
-        float padding;
+        std::uint32_t primitiveIndex;
     };
     static_assert(sizeof(GpuEmissiveTriangle) == 64);
 
@@ -153,6 +153,7 @@ namespace
                 continue;
 
             light.selectionPdf = light.area * luminance;
+            light.primitiveIndex = primitiveIndex;
             totalWeight += static_cast<double>(light.selectionPdf);
             lights.push_back(light);
         }
@@ -533,7 +534,7 @@ void RayTracingManager::SetRussianRouletteEnabled(bool enabled)
 void RayTracingManager::SetLightingMode(UINT lightingMode)
 {
     const UINT clampedLightingMode =
-        lightingMode <= c_lightingModeNee
+        lightingMode <= c_lightingModeMis
         ? lightingMode
         : c_lightingModeBsdf;
     if (m_lightingMode == clampedLightingMode)

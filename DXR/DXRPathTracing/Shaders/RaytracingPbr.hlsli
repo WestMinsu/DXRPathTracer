@@ -115,16 +115,59 @@ float PbrSpecularSamplingProbability(PbrMaterial material)
     return lerp(0.5f, 1.0f, saturate(material.metallic));
 }
 
+float PbrBrdfSamplingPdf(
+    PbrMaterial material,
+    float3 normal,
+    float3 viewDirection,
+    float3 lightDirection)
+{
+    float nDotV = saturate(dot(normal, viewDirection));
+    float nDotL = saturate(dot(normal, lightDirection));
+    if (nDotV <= 0.0f || nDotL <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    float3 halfVectorSum = viewDirection + lightDirection;
+    float halfVectorLengthSquared = dot(halfVectorSum, halfVectorSum);
+    if (halfVectorLengthSquared <= 0.00000001f)
+    {
+        return 0.0f;
+    }
+
+    float3 halfVector =
+        halfVectorSum * rsqrt(halfVectorLengthSquared);
+    float vDotH = saturate(dot(viewDirection, halfVector));
+    float nDotH = saturate(dot(normal, halfVector));
+    if (vDotH <= 0.0f || nDotH <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    float specularPdf = DistributionGGX(
+        normal,
+        halfVector,
+        material.roughness) * nDotH /
+        max(4.0f * vDotH, 0.00000001f);
+    float diffusePdf = nDotL * c_invPi;
+    float specularProbability =
+        PbrSpecularSamplingProbability(material);
+    return specularProbability * specularPdf +
+        (1.0f - specularProbability) * diffusePdf;
+}
+
 bool SamplePbrBrdfWithMixtureSampling(
     PbrMaterial material,
     float3 normal,
     float3 viewDirection,
     inout uint seed,
     out float3 sampleDirection,
-    out float3 weightedBrdf)
+    out float3 weightedBrdf,
+    out float samplePdf)
 {
     sampleDirection = normal;
     weightedBrdf = float3(0.0f, 0.0f, 0.0f);
+    samplePdf = 0.0f;
     float specularProbability = PbrSpecularSamplingProbability(material);
     bool sampleSpecular = RandomFloat01(seed) < specularProbability;
 
@@ -154,17 +197,12 @@ bool SamplePbrBrdfWithMixtureSampling(
         return false;
     }
 
-    float3 halfVector = normalize(viewDirection + sampleDirection);
-    float vDotH = saturate(dot(viewDirection, halfVector));
-    float nDotH = saturate(dot(normal, halfVector));
-    float specularPdf = DistributionGGX(
+    samplePdf = PbrBrdfSamplingPdf(
+        material,
         normal,
-        halfVector,
-        material.roughness) * nDotH / max(4.0f * vDotH, 0.00000001f);
-    float diffusePdf = nDotL * c_invPi;
-    float pdf = specularProbability * specularPdf +
-        (1.0f - specularProbability) * diffusePdf;
-    if (pdf <= 0.0f)
+        viewDirection,
+        sampleDirection);
+    if (samplePdf <= 0.0f)
     {
         return false;
     }
@@ -173,7 +211,7 @@ bool SamplePbrBrdfWithMixtureSampling(
         material,
         normal,
         viewDirection,
-        sampleDirection) / pdf;
+        sampleDirection) / samplePdf;
     return true;
 }
 
@@ -192,20 +230,31 @@ float3 TracePbrBrdfWithMixtureSampling(
         CreateRandomSeed(depth, primitiveIndex) ^ 0xA511E9B3u;
     float3 directLightDirection;
     float3 radianceOverPdf;
+    float lightPdf;
     if (SampleDirectAreaLight(
         normal,
         hitPosition,
         directSeed,
         directLightDirection,
-        radianceOverPdf))
+        radianceOverPdf,
+        lightPdf))
     {
+        float bsdfPdf = PbrBrdfSamplingPdf(
+            material,
+            normal,
+            viewDirection,
+            directLightDirection);
+        float misWeight = g_lightingMode == c_lightingModeMis
+            ? PowerHeuristic(lightPdf, bsdfPdf)
+            : 1.0f;
         directLighting =
             EvaluateBrdf(
                 material,
                 normal,
                 viewDirection,
                 directLightDirection) *
-            radianceOverPdf;
+            radianceOverPdf *
+            misWeight;
     }
 
     if (depth >= g_maxBounce)
@@ -216,13 +265,15 @@ float3 TracePbrBrdfWithMixtureSampling(
     uint seed = CreateRandomSeed(depth, primitiveIndex);
     float3 sampleDirection;
     float3 weightedBrdf;
+    float samplePdf;
     if (!SamplePbrBrdfWithMixtureSampling(
         material,
         normal,
         viewDirection,
         seed,
         sampleDirection,
-        weightedBrdf))
+        weightedBrdf,
+        samplePdf))
     {
         return directLighting;
     }
@@ -251,6 +302,8 @@ float3 TracePbrBrdfWithMixtureSampling(
     bouncePayload.dynamicTouched = 0u;
     bouncePayload.pathThroughput =
         nextThroughput * inverseSurvivalProbability;
+    bouncePayload.previousBsdfPdf = samplePdf;
+    bouncePayload.previousWasDelta = 0u;
 
     RecordRadianceRay(bouncePayload.depth);
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
