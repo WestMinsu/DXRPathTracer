@@ -551,7 +551,7 @@ void RayTracingManager::SetExposure(float exposure)
 }
 void RayTracingManager::SetSceneType(UINT sceneType)
 {
-    const UINT clampedSceneType = sceneType <= c_scenePbrGpuValidation
+    const UINT clampedSceneType = sceneType <= c_sceneIndirectBounceStress
         ? sceneType
         : c_sceneCornellBox;
     if (m_sceneType == clampedSceneType)
@@ -1372,9 +1372,12 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     }
     else
     {
-        scene = isPbrScene
-            ? CreatePbrGgxSceneData()
-            : CreateCornellBoxSceneData();
+        if (isPbrScene)
+            scene = CreatePbrGgxSceneData();
+        else if (m_sceneType == c_sceneIndirectBounceStress)
+            scene = CreateIndirectBounceStressSceneData();
+        else
+            scene = CreateCornellBoxSceneData();
     }
 
     m_staticGeometry.vertexCount =
@@ -1491,6 +1494,11 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             m_sceneBoundsMax[component] = modelBounds.maximum[component];
         }
         UpdateCameraFromSceneBounds();
+    }
+    else if (m_sceneType == c_sceneIndirectBounceStress)
+    {
+        m_cameraPosition = { 0.0f, 0.10f, -4.25f };
+        m_cameraTarget = { 1.45f, 0.05f, -0.70f };
     }
     else
     {

@@ -153,6 +153,50 @@ namespace
         scene.primitiveMaterialIndices.push_back(materialIndex);
     }
 
+    void AddAxisAlignedBox(
+        SceneData& scene,
+        Float3 minimum,
+        Float3 maximum,
+        std::uint32_t materialIndex)
+    {
+        AddQuad(scene,
+            MakeFloat3(minimum.x, minimum.y, minimum.z),
+            MakeFloat3(minimum.x, maximum.y, minimum.z),
+            MakeFloat3(maximum.x, maximum.y, minimum.z),
+            MakeFloat3(maximum.x, minimum.y, minimum.z),
+            MakeFloat3(0.0f, 0.0f, -1.0f), materialIndex);
+        AddQuad(scene,
+            MakeFloat3(maximum.x, minimum.y, maximum.z),
+            MakeFloat3(maximum.x, maximum.y, maximum.z),
+            MakeFloat3(minimum.x, maximum.y, maximum.z),
+            MakeFloat3(minimum.x, minimum.y, maximum.z),
+            MakeFloat3(0.0f, 0.0f, 1.0f), materialIndex);
+        AddQuad(scene,
+            MakeFloat3(minimum.x, minimum.y, maximum.z),
+            MakeFloat3(minimum.x, maximum.y, maximum.z),
+            MakeFloat3(minimum.x, maximum.y, minimum.z),
+            MakeFloat3(minimum.x, minimum.y, minimum.z),
+            MakeFloat3(-1.0f, 0.0f, 0.0f), materialIndex);
+        AddQuad(scene,
+            MakeFloat3(maximum.x, minimum.y, minimum.z),
+            MakeFloat3(maximum.x, maximum.y, minimum.z),
+            MakeFloat3(maximum.x, maximum.y, maximum.z),
+            MakeFloat3(maximum.x, minimum.y, maximum.z),
+            MakeFloat3(1.0f, 0.0f, 0.0f), materialIndex);
+        AddQuad(scene,
+            MakeFloat3(minimum.x, maximum.y, minimum.z),
+            MakeFloat3(minimum.x, maximum.y, maximum.z),
+            MakeFloat3(maximum.x, maximum.y, maximum.z),
+            MakeFloat3(maximum.x, maximum.y, minimum.z),
+            MakeFloat3(0.0f, 1.0f, 0.0f), materialIndex);
+        AddQuad(scene,
+            MakeFloat3(minimum.x, minimum.y, maximum.z),
+            MakeFloat3(minimum.x, minimum.y, minimum.z),
+            MakeFloat3(maximum.x, minimum.y, minimum.z),
+            MakeFloat3(maximum.x, minimum.y, maximum.z),
+            MakeFloat3(0.0f, -1.0f, 0.0f), materialIndex);
+    }
+
     void AddCornellBlock(
         SceneData& scene,
         float halfWidth,
@@ -648,6 +692,142 @@ SceneData CreateCornellBoxSceneData()
     AddQuad(scene, MakeFloat3(-c_boxHalfWidth, c_boxFloorY, c_boxNearZ), MakeFloat3(-c_boxHalfWidth, c_boxCeilingY, c_boxNearZ), MakeFloat3(-c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3(-c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3(1.0f, 0.0f, 0.0f), leftWallMaterial);
     AddQuad(scene, MakeFloat3( c_boxHalfWidth, c_boxFloorY, c_boxNearZ), MakeFloat3( c_boxHalfWidth, c_boxFloorY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxCeilingY, c_boxFarZ), MakeFloat3( c_boxHalfWidth, c_boxCeilingY, c_boxNearZ), MakeFloat3(-1.0f, 0.0f, 0.0f), rightWallMaterial);
     AddQuad(scene, MakeFloat3(-c_cornellLightHalfWidth, c_cornellLightY, c_cornellLightNearZ), MakeFloat3( c_cornellLightHalfWidth, c_cornellLightY, c_cornellLightNearZ), MakeFloat3( c_cornellLightHalfWidth, c_cornellLightY, c_cornellLightFarZ), MakeFloat3(-c_cornellLightHalfWidth, c_cornellLightY, c_cornellLightFarZ), MakeFloat3(0.0f, -1.0f, 0.0f), lightMaterial);
+    return scene;
+}
+
+SceneData CreateIndirectBounceStressSceneData()
+{
+    SceneData scene;
+
+    constexpr float floorY = -1.20f;
+    constexpr float ceilingY = 2.20f;
+    constexpr float minimumX = -3.20f;
+    constexpr float maximumX = 3.20f;
+    constexpr float nearZ = -5.00f;
+    constexpr float farZ = 5.00f;
+    constexpr float leftGapMaximumX = -1.00f;
+    constexpr float rightGapMinimumX = 1.00f;
+
+    constexpr std::uint32_t neutralMaterial = 0;
+    constexpr std::uint32_t floorMaterial = 1;
+    constexpr std::uint32_t redMaterial = 2;
+    constexpr std::uint32_t greenMaterial = 3;
+    constexpr std::uint32_t blueMaterial = 4;
+    constexpr std::uint32_t columnMaterial = 5;
+    constexpr std::uint32_t lightMaterial = 6;
+    scene.materials =
+    {
+        MakeMaterial(MakeFloat3(0.82f, 0.82f, 0.82f), 0.0f, 1.0f),
+        MakeMaterial(MakeFloat3(0.72f, 0.72f, 0.72f), 0.0f, 1.0f),
+        MakeMaterial(MakeFloat3(0.78f, 0.10f, 0.07f), 0.0f, 1.0f),
+        MakeMaterial(MakeFloat3(0.09f, 0.68f, 0.16f), 0.0f, 1.0f),
+        MakeMaterial(MakeFloat3(0.08f, 0.18f, 0.76f), 0.0f, 1.0f),
+        MakeMaterial(MakeFloat3(0.68f, 0.68f, 0.68f), 0.0f, 1.0f),
+        MakeMaterial(
+            MakeFloat3(0.0f, 0.0f, 0.0f),
+            0.0f,
+            1.0f,
+            MakeFloat3(1800.0f, 1500.0f, 1100.0f))
+    };
+
+    // Closed outer room.
+    AddQuad(scene,
+        MakeFloat3(minimumX, floorY, nearZ),
+        MakeFloat3(minimumX, floorY, farZ),
+        MakeFloat3(maximumX, floorY, farZ),
+        MakeFloat3(maximumX, floorY, nearZ),
+        MakeFloat3(0.0f, 1.0f, 0.0f), floorMaterial);
+    AddQuad(scene,
+        MakeFloat3(minimumX, ceilingY, nearZ),
+        MakeFloat3(maximumX, ceilingY, nearZ),
+        MakeFloat3(maximumX, ceilingY, farZ),
+        MakeFloat3(minimumX, ceilingY, farZ),
+        MakeFloat3(0.0f, -1.0f, 0.0f), neutralMaterial);
+    AddQuad(scene,
+        MakeFloat3(minimumX, floorY, nearZ),
+        MakeFloat3(maximumX, floorY, nearZ),
+        MakeFloat3(maximumX, ceilingY, nearZ),
+        MakeFloat3(minimumX, ceilingY, nearZ),
+        MakeFloat3(0.0f, 0.0f, 1.0f), neutralMaterial);
+    AddQuad(scene,
+        MakeFloat3(minimumX, floorY, farZ),
+        MakeFloat3(minimumX, floorY, nearZ),
+        MakeFloat3(minimumX, ceilingY, nearZ),
+        MakeFloat3(minimumX, ceilingY, farZ),
+        MakeFloat3(1.0f, 0.0f, 0.0f), neutralMaterial);
+    AddQuad(scene,
+        MakeFloat3(maximumX, floorY, nearZ),
+        MakeFloat3(maximumX, floorY, farZ),
+        MakeFloat3(maximumX, ceilingY, farZ),
+        MakeFloat3(maximumX, ceilingY, nearZ),
+        MakeFloat3(-1.0f, 0.0f, 0.0f), neutralMaterial);
+    AddQuad(scene,
+        MakeFloat3(maximumX, floorY, farZ),
+        MakeFloat3(minimumX, floorY, farZ),
+        MakeFloat3(minimumX, ceilingY, farZ),
+        MakeFloat3(maximumX, ceilingY, farZ),
+        MakeFloat3(0.0f, 0.0f, -1.0f), neutralMaterial);
+
+    // A separate ceiling area light illuminates only the final chamber. It is
+    // hidden behind every baffle from the default camera.
+    constexpr float lightY = ceilingY - 0.002f;
+    AddQuad(scene,
+        MakeFloat3(-2.40f, lightY, 3.35f),
+        MakeFloat3(2.40f, lightY, 3.35f),
+        MakeFloat3(2.40f, lightY, 4.65f),
+        MakeFloat3(-2.40f, lightY, 4.65f),
+        MakeFloat3(0.0f, -1.0f, 0.0f), lightMaterial);
+
+    // Three full-height baffles form a right-left-right light path. A straight
+    // camera ray cannot pass every opening, so the area-light contribution must
+    // arrive through several diffuse reflections.
+    AddQuad(scene,
+        MakeFloat3(minimumX, floorY, -1.50f),
+        MakeFloat3(minimumX, ceilingY, -1.50f),
+        MakeFloat3(rightGapMinimumX, ceilingY, -1.50f),
+        MakeFloat3(rightGapMinimumX, floorY, -1.50f),
+        MakeFloat3(0.0f, 0.0f, -1.0f), redMaterial);
+    AddQuad(scene,
+        MakeFloat3(leftGapMaximumX, floorY, 0.80f),
+        MakeFloat3(leftGapMaximumX, ceilingY, 0.80f),
+        MakeFloat3(maximumX, ceilingY, 0.80f),
+        MakeFloat3(maximumX, floorY, 0.80f),
+        MakeFloat3(0.0f, 0.0f, -1.0f), greenMaterial);
+    AddQuad(scene,
+        MakeFloat3(minimumX, floorY, 3.00f),
+        MakeFloat3(minimumX, ceilingY, 3.00f),
+        MakeFloat3(rightGapMinimumX, ceilingY, 3.00f),
+        MakeFloat3(rightGapMinimumX, floorY, 3.00f),
+        MakeFloat3(0.0f, 0.0f, -1.0f), blueMaterial);
+
+    // Repeated side columns keep the scene visually readable while making
+    // every additional radiance ray traverse a non-trivial static BLAS.
+    constexpr int columnPairCount = 15;
+    constexpr float columnHalfWidth = 0.18f;
+    constexpr float columnHalfDepth = 0.14f;
+    constexpr float columnTopY = 1.45f;
+    for (int columnIndex = 0; columnIndex < columnPairCount; ++columnIndex)
+    {
+        const float t = static_cast<float>(columnIndex) /
+            static_cast<float>(columnPairCount - 1);
+        const float centerZ = nearZ + 0.45f + t * (farZ - nearZ - 0.90f);
+        for (int side = -1; side <= 1; side += 2)
+        {
+            const float centerX = static_cast<float>(side) * 2.78f;
+            AddAxisAlignedBox(
+                scene,
+                MakeFloat3(
+                    centerX - columnHalfWidth,
+                    floorY,
+                    centerZ - columnHalfDepth),
+                MakeFloat3(
+                    centerX + columnHalfWidth,
+                    columnTopY,
+                    centerZ + columnHalfDepth),
+                columnMaterial);
+        }
+    }
+
     return scene;
 }
 

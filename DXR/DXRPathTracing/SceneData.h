@@ -97,6 +97,7 @@ struct SceneAreaLight
 };
 
 SceneData CreateCornellBoxSceneData();
+SceneData CreateIndirectBounceStressSceneData();
 SceneData CreatePbrGgxSceneData();
 SceneData CreateRollingMetalSphereSceneData(float radius);
 bool ComputeSceneBounds(const SceneData& scene, SceneBounds& bounds);

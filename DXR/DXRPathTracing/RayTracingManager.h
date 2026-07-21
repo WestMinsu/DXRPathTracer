@@ -43,6 +43,7 @@ public:
     static constexpr UINT c_sceneCornellBox = 0;
     static constexpr UINT c_scenePbrGgx = 1;
     static constexpr UINT c_scenePbrGpuValidation = 2;
+    static constexpr UINT c_sceneIndirectBounceStress = 3;
     static constexpr UINT c_pbrDebugBeauty = 0;
     static constexpr UINT c_pbrDebugAlbedo = 1;
     static constexpr UINT c_pbrDebugMetallic = 2;

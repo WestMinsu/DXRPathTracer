@@ -1253,7 +1253,8 @@ void D3D12Renderer::BuildImGuiFrame()
     {
         "Cornell Box",
         "PBR",
-        "PBR GPU Validation"
+        "PBR GPU Validation",
+        "Indirect Bounce Stress"
     };
     if (ImGui::Combo("Scene", &m_sceneType, sceneNames, _countof(sceneNames)) && m_rayTracingManager)
     {
@@ -1660,7 +1661,7 @@ void D3D12Renderer::ConfigureAutomatedCapture(
     m_captureOutputPrefix = outputPrefix;
     const UINT clampedMaxBounce = maxBounce < 1u ? 1u : (maxBounce > 8u ? 8u : maxBounce);
     m_maxBounce = static_cast<int>(clampedMaxBounce);
-    m_sceneType = sceneType <= RayTracingManager::c_scenePbrGpuValidation
+    m_sceneType = sceneType <= RayTracingManager::c_sceneIndirectBounceStress
         ? static_cast<int>(sceneType)
         : static_cast<int>(RayTracingManager::c_sceneCornellBox);
     m_pbrMetallic = pbrMetallic;

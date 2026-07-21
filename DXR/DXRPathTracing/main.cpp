@@ -196,6 +196,12 @@ namespace
                     gOptions.sceneType =
                         RayTracingManager::c_scenePbrGpuValidation;
                 }
+                else if (scene == L"indirect" ||
+                         scene == L"indirect-bounce")
+                {
+                    gOptions.sceneType =
+                        RayTracingManager::c_sceneIndirectBounceStress;
+                }
                 else
                 {
                     gOptions.sceneType = RayTracingManager::c_sceneCornellBox;
