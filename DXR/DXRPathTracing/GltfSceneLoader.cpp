@@ -607,6 +607,8 @@ namespace
         material.metallicRoughnessTextureIndex = c_invalidSceneTextureIndex;
         material.normalTextureIndex = c_invalidSceneTextureIndex;
         material.normalTextureScale = 1.0f;
+        material.baseColorAlpha = 1.0f;
+        material.alphaCutoff = -1.0f;
         return material;
     }
 
@@ -648,7 +650,7 @@ namespace
              ++materialIndex)
         {
             const cgltf_material& source = data.materials[materialIndex];
-            if (source.alpha_mode != cgltf_alpha_mode_opaque)
+            if (source.alpha_mode == cgltf_alpha_mode_blend)
             {
                 if (options.skipNonOpaquePrimitives)
                 {
@@ -658,7 +660,7 @@ namespace
                 return Fail(
                     errorMessage,
                     L"Material " + std::to_wstring(materialIndex) +
-                    L" uses alpha masking or blending, which is not supported yet.");
+                    L" uses alpha blending, which is not supported yet.");
             }
             if (source.occlusion_texture.texture && report)
                 ++report->ignoredOcclusionTextureCount;
@@ -676,6 +678,8 @@ namespace
                 material.baseColor[0] = Clamp01(source.pbr_metallic_roughness.base_color_factor[0]);
                 material.baseColor[1] = Clamp01(source.pbr_metallic_roughness.base_color_factor[1]);
                 material.baseColor[2] = Clamp01(source.pbr_metallic_roughness.base_color_factor[2]);
+                material.baseColorAlpha =
+                    Clamp01(source.pbr_metallic_roughness.base_color_factor[3]);
                 material.metallic = Clamp01(source.pbr_metallic_roughness.metallic_factor);
                 material.roughness = Clamp01(source.pbr_metallic_roughness.roughness_factor);
 
@@ -714,6 +718,9 @@ namespace
             material.normalTextureScale = source.normal_texture.texture
                 ? source.normal_texture.scale
                 : 1.0f;
+            material.alphaCutoff = source.alpha_mode == cgltf_alpha_mode_mask
+                ? Clamp01(source.alpha_cutoff)
+                : -1.0f;
 
             const float emissiveStrength = source.has_emissive_strength
                 ? std::max(source.emissive_strength.emissive_strength, 0.0f)
@@ -984,7 +991,7 @@ namespace
             ++report->sourcePrimitiveCount;
 
         if (primitive.material &&
-            primitive.material->alpha_mode != cgltf_alpha_mode_opaque)
+            primitive.material->alpha_mode == cgltf_alpha_mode_blend)
         {
             if (loadOptions.skipNonOpaquePrimitives)
             {
@@ -994,7 +1001,7 @@ namespace
             }
             return Fail(
                 errorMessage,
-                L"A primitive uses alpha masking or blending, which is not supported yet.");
+                L"A primitive uses alpha blending, which is not supported yet.");
         }
 
         if (primitive.type != cgltf_primitive_type_triangles)

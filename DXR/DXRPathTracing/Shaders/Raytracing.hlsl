@@ -211,6 +211,33 @@ void MyRaygenShader_RadianceRay()
     g_output[launchIndex] = float4(ToneMapForDisplay(averageRadiance), 1.0f);
 }
 
+[shader("anyhit")]
+void MyAnyHitShader_AlphaMask(
+    inout RadiancePayload payload,
+    in BuiltInTriangleIntersectionAttributes attributes)
+{
+    SceneInstanceMetadata instanceMetadata =
+        g_instanceMetadata[InstanceID()];
+    uint globalPrimitiveIndex =
+        instanceMetadata.primitiveOffset + PrimitiveIndex();
+    SceneMaterial material = GetSceneMaterial(globalPrimitiveIndex);
+    if (material.alphaCutoff < 0.0f)
+    {
+        return;
+    }
+
+    uint indexOffset =
+        instanceMetadata.indexOffset + PrimitiveIndex() * 3u;
+    uint i0 = instanceMetadata.vertexOffset + g_indices[indexOffset + 0u];
+    uint i1 = instanceMetadata.vertexOffset + g_indices[indexOffset + 1u];
+    uint i2 = instanceMetadata.vertexOffset + g_indices[indexOffset + 2u];
+    float2 texCoord = InterpolateTexCoord(i0, i1, i2, attributes);
+    if (!PassesSceneAlphaMask(globalPrimitiveIndex, texCoord))
+    {
+        IgnoreHit();
+    }
+}
+
 [shader("closesthit")]
 void MyClosestHitShader_RadianceRay(
     inout RadiancePayload payload,

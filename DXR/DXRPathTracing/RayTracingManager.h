@@ -152,6 +152,7 @@ private:
         UINT indexOffset = 0;
         UINT indexCount = 0;
         UINT primitiveOffset = 0;
+        bool containsAlphaMask = false;
     };
     bool CreateOutputTexture();
     bool CreateStatisticsResources();

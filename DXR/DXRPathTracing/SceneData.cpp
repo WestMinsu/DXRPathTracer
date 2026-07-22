@@ -85,7 +85,9 @@ namespace
             c_invalidSceneTextureIndex,
             c_invalidSceneTextureIndex,
             c_invalidSceneTextureIndex,
-            1.0f
+            1.0f,
+            1.0f,
+            -1.0f
         };
     }
 
@@ -348,7 +350,12 @@ bool SceneData::IsValid() const
     {
         if (!validTextureIndex(material.baseColorTextureIndex) ||
             !validTextureIndex(material.metallicRoughnessTextureIndex) ||
-            !validTextureIndex(material.normalTextureIndex))
+            !validTextureIndex(material.normalTextureIndex) ||
+            !std::isfinite(material.baseColorAlpha) ||
+            !std::isfinite(material.alphaCutoff) ||
+            material.baseColorAlpha < 0.0f ||
+            material.baseColorAlpha > 1.0f ||
+            material.alphaCutoff > 1.0f)
         {
             return false;
         }

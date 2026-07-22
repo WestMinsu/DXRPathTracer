@@ -173,11 +173,12 @@ bool WriteSponzaSceneManifest(
         "  \"supported_material_inputs\": [\n"
         "    \"baseColor\",\n"
         "    \"metallicRoughness\",\n"
-        "    \"normalMap\"\n"
+        "    \"normalMap\",\n"
+        "    \"alphaMask\"\n"
         "  ],\n"
         "  \"area_light_count\": %u,\n"
         "  \"dynamic_metal_sphere\": %s,\n"
-        "  \"non_opaque_policy\": \"primitive excluded\",\n"
+        "  \"non_opaque_policy\": \"MASK evaluated, BLEND primitive excluded\",\n"
         "  \"occlusion_policy\": \"texture ignored\"\n"
         "}\n",
         escapedPath.c_str(),

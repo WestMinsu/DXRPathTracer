@@ -24,6 +24,7 @@ namespace
 {
     constexpr wchar_t c_rayGenShaderName[] = L"MyRaygenShader_RadianceRay";
     constexpr wchar_t c_closestHitShaderName[] = L"MyClosestHitShader_RadianceRay";
+    constexpr wchar_t c_anyHitShaderName[] = L"MyAnyHitShader_AlphaMask";
     constexpr wchar_t c_missShaderName[] = L"MyMissShader_RadianceRay";
     constexpr wchar_t c_shadowMissShaderName[] = L"MyMissShader_ShadowRay";
     constexpr wchar_t c_hitGroupName[] = L"MyHitGroup_Triangle_RadianceRay";
@@ -2090,7 +2091,7 @@ bool RayTracingManager::CreateRaytracingPipelineState()
     if (!LoadCompiledShader(shaderBytes))
         return false;
 
-    D3D12_EXPORT_DESC shaderExports[4] = {};
+    D3D12_EXPORT_DESC shaderExports[5] = {};
     shaderExports[0].Name = c_rayGenShaderName;
     shaderExports[0].ExportToRename = nullptr;
     shaderExports[0].Flags = D3D12_EXPORT_FLAG_NONE;
@@ -2103,6 +2104,9 @@ bool RayTracingManager::CreateRaytracingPipelineState()
     shaderExports[3].Name = c_shadowMissShaderName;
     shaderExports[3].ExportToRename = nullptr;
     shaderExports[3].Flags = D3D12_EXPORT_FLAG_NONE;
+    shaderExports[4].Name = c_anyHitShaderName;
+    shaderExports[4].ExportToRename = nullptr;
+    shaderExports[4].Flags = D3D12_EXPORT_FLAG_NONE;
 
     D3D12_DXIL_LIBRARY_DESC dxilLibraryDesc = {};
     dxilLibraryDesc.DXILLibrary.pShaderBytecode = shaderBytes.data();
@@ -2114,6 +2118,7 @@ bool RayTracingManager::CreateRaytracingPipelineState()
     hitGroupDesc.HitGroupExport = c_hitGroupName;
     hitGroupDesc.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
     hitGroupDesc.ClosestHitShaderImport = c_closestHitShaderName;
+    hitGroupDesc.AnyHitShaderImport = c_anyHitShaderName;
 
     D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
     shaderConfig.MaxPayloadSizeInBytes = c_shaderPayloadSize;
@@ -2468,6 +2473,14 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         static_cast<UINT>(scene.vertices.size());
     m_staticGeometry.indexCount =
         static_cast<UINT>(scene.indices.size());
+    for (std::uint32_t materialIndex : scene.primitiveMaterialIndices)
+    {
+        if (scene.materials[materialIndex].alphaCutoff >= 0.0f)
+        {
+            m_staticGeometry.containsAlphaMask = true;
+            break;
+        }
+    }
 
     if (m_sponzaLite && hasModelBounds)
     {
@@ -2967,7 +2980,9 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure(
 
     D3D12_RAYTRACING_GEOMETRY_DESC geometryDesc = {};
     geometryDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
-    geometryDesc.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+    geometryDesc.Flags = geometry.containsAlphaMask
+        ? D3D12_RAYTRACING_GEOMETRY_FLAG_NONE
+        : D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
     geometryDesc.Triangles.VertexBuffer.StartAddress =
         m_vertexBuffer->GetGPUVirtualAddress() +
         static_cast<UINT64>(geometry.vertexOffset) *

@@ -29,6 +29,10 @@ struct SceneMaterial
     std::uint32_t metallicRoughnessTextureIndex;
     std::uint32_t normalTextureIndex;
     float normalTextureScale;
+    float baseColorAlpha;
+    // A negative cutoff marks an opaque material. Non-negative values use
+    // glTF MASK semantics in the any-hit shader.
+    float alphaCutoff;
 };
 
 struct SceneTextureMip
@@ -56,7 +60,7 @@ struct SceneInstanceMetadata
 static_assert(sizeof(SceneVertex) == 48);
 static_assert(offsetof(SceneVertex, texCoord) == 24);
 static_assert(offsetof(SceneVertex, tangent) == 32);
-static_assert(sizeof(SceneMaterial) == 52);
+static_assert(sizeof(SceneMaterial) == 60);
 static_assert(sizeof(SceneInstanceMetadata) == 16);
 static_assert(offsetof(SceneMaterial, metallic) == 12);
 static_assert(offsetof(SceneMaterial, roughness) == 16);
@@ -66,6 +70,8 @@ static_assert(offsetof(SceneMaterial, baseColorTextureIndex) == 36);
 static_assert(offsetof(SceneMaterial, metallicRoughnessTextureIndex) == 40);
 static_assert(offsetof(SceneMaterial, normalTextureIndex) == 44);
 static_assert(offsetof(SceneMaterial, normalTextureScale) == 48);
+static_assert(offsetof(SceneMaterial, baseColorAlpha) == 52);
+static_assert(offsetof(SceneMaterial, alphaCutoff) == 56);
 
 // Flat GPU-ready scene data. A model loader can populate the same structure
 // after applying node transforms and flattening mesh primitives.

@@ -47,6 +47,8 @@ struct SceneMaterial
     uint metallicRoughnessTextureIndex;
     uint normalTextureIndex;
     float normalTextureScale;
+    float baseColorAlpha;
+    float alphaCutoff;
 };
 
 struct SceneInstanceMetadata
@@ -499,8 +501,7 @@ bool SampleDirectAreaLight(
     TraceRay(
         g_scene,
         RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-            RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
-            RAY_FLAG_FORCE_OPAQUE,
+            RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
         0xFF,
         0,
         0,
@@ -721,8 +722,7 @@ bool SampleDirectEnvironmentLight(
     TraceRay(
         g_scene,
         RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
-            RAY_FLAG_SKIP_CLOSEST_HIT_SHADER |
-            RAY_FLAG_FORCE_OPAQUE,
+            RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
         0xFF,
         0,
         0,

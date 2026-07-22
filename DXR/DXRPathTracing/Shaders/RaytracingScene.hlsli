@@ -8,6 +8,25 @@ SceneMaterial GetSceneMaterial(uint primitiveIndex)
     return g_sceneMaterials[g_primitiveMaterialIndices[primitiveIndex]];
 }
 
+bool PassesSceneAlphaMask(uint primitiveIndex, float2 texCoord)
+{
+    SceneMaterial material = GetSceneMaterial(primitiveIndex);
+    if (material.alphaCutoff < 0.0f)
+    {
+        return true;
+    }
+
+    float alpha = material.baseColorAlpha;
+    if (material.baseColorTextureIndex != c_invalidSceneTextureIndex)
+    {
+        uint textureIndex = NonUniformResourceIndex(
+            material.baseColorTextureIndex);
+        alpha *= g_materialTextures[textureIndex].SampleLevel(
+                g_materialSampler, texCoord, 0.0f).a;
+    }
+    return alpha >= material.alphaCutoff;
+}
+
 float3 SurfaceEmission(uint primitiveIndex)
 {
     return GetSceneMaterial(primitiveIndex).emission;
