@@ -138,7 +138,7 @@ public:
 private:
     static constexpr DXGI_FORMAT c_outputFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     static constexpr DXGI_FORMAT c_accumulationFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
-    static constexpr UINT c_shaderPayloadSize = 13 * sizeof(float);
+    static constexpr UINT c_shaderPayloadSize = 19 * sizeof(float);
     static constexpr UINT c_shaderAttributeSize = 2 * sizeof(float);
     static constexpr UINT c_maxBounce = 8;
     // At most one visibility ray is nested below a radiance vertex. The
@@ -272,6 +272,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_normalDepthTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_materialGuideTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_indirectAccumulationTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource>
+        m_diffuseIndirectAccumulationTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource>
+        m_specularIndirectAccumulationTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_luminanceMomentsTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_atrousFilterTextureA;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_atrousFilterTextureB;

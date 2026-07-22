@@ -54,7 +54,11 @@ namespace
         c_atrousFilterAUavIndex + 1;
     constexpr UINT c_atrousOutputUavIndex =
         c_atrousFilterBUavIndex + 1;
-    constexpr UINT c_descriptorCount = c_atrousOutputUavIndex + 1;
+    constexpr UINT c_diffuseIndirectUavIndex =
+        c_atrousOutputUavIndex + 1;
+    constexpr UINT c_specularIndirectUavIndex =
+        c_diffuseIndirectUavIndex + 1;
+    constexpr UINT c_descriptorCount = c_specularIndirectUavIndex + 1;
     constexpr UINT c_statisticsShadowRayIndex =
         RayTracingManager::c_statisticsRayDepthCount;
     constexpr UINT c_statisticsHitIndex = c_statisticsShadowRayIndex + 1;
@@ -604,6 +608,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         !m_environmentMap || !m_environmentDistributionBuffer ||
         !m_sceneMaterialBuffer || !m_primitiveMaterialIndexBuffer ||
         !m_instanceMetadataBuffer || !m_emissiveTriangleBuffer ||
+        !m_diffuseIndirectAccumulationTexture ||
+        !m_specularIndirectAccumulationTexture ||
         !m_statisticsBuffer ||
         !m_statisticsResetBuffer || !m_statisticsReadbackBuffer)
     {
@@ -1186,6 +1192,8 @@ bool RayTracingManager::CreateOutputTexture()
     m_normalDepthTexture.Reset();
     m_materialGuideTexture.Reset();
     m_indirectAccumulationTexture.Reset();
+    m_diffuseIndirectAccumulationTexture.Reset();
+    m_specularIndirectAccumulationTexture.Reset();
     m_luminanceMomentsTexture.Reset();
     m_atrousFilterTextureA.Reset();
     m_atrousFilterTextureB.Reset();
@@ -1276,6 +1284,22 @@ bool RayTracingManager::CreateOutputTexture()
     {
         return false;
     }
+    if (!createFloatTexture(
+        accumulationDesc,
+        m_diffuseIndirectAccumulationTexture,
+        L"Raytracing diffuse indirect accumulation texture",
+        L"Raytracing diffuse indirect accumulation texture creation failed."))
+    {
+        return false;
+    }
+    if (!createFloatTexture(
+        accumulationDesc,
+        m_specularIndirectAccumulationTexture,
+        L"Raytracing specular indirect accumulation texture",
+        L"Raytracing specular indirect accumulation texture creation failed."))
+    {
+        return false;
+    }
     D3D12_RESOURCE_DESC momentsDesc = accumulationDesc;
     momentsDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
     if (!createFloatTexture(
@@ -1361,6 +1385,16 @@ bool RayTracingManager::CreateOutputTexture()
         nullptr,
         &momentsUavDesc,
         descriptorHandle(5));
+    m_device->CreateUnorderedAccessView(
+        m_diffuseIndirectAccumulationTexture.Get(),
+        nullptr,
+        &accumulationUavDesc,
+        descriptorHandle(c_diffuseIndirectUavIndex));
+    m_device->CreateUnorderedAccessView(
+        m_specularIndirectAccumulationTexture.Get(),
+        nullptr,
+        &accumulationUavDesc,
+        descriptorHandle(c_specularIndirectUavIndex));
 
     D3D12_SHADER_RESOURCE_VIEW_DESC floatTextureSrvDesc = {};
     floatTextureSrvDesc.Shader4ComponentMapping =
@@ -1738,7 +1772,7 @@ bool RayTracingManager::CreateEnvironmentMap()
 
 bool RayTracingManager::CreateGlobalRootSignature()
 {
-    D3D12_DESCRIPTOR_RANGE outputRanges[2] = {};
+    D3D12_DESCRIPTOR_RANGE outputRanges[3] = {};
     outputRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     outputRanges[0].NumDescriptors = 2;
     outputRanges[0].BaseShaderRegister = 0;
@@ -1749,6 +1783,12 @@ bool RayTracingManager::CreateGlobalRootSignature()
     outputRanges[1].BaseShaderRegister = 3;
     outputRanges[1].RegisterSpace = 0;
     outputRanges[1].OffsetInDescriptorsFromTableStart = 2;
+    outputRanges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    outputRanges[2].NumDescriptors = 2;
+    outputRanges[2].BaseShaderRegister = 7;
+    outputRanges[2].RegisterSpace = 0;
+    outputRanges[2].OffsetInDescriptorsFromTableStart =
+        c_diffuseIndirectUavIndex;
 
     D3D12_DESCRIPTOR_RANGE environmentRange = {};
     environmentRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;

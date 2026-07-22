@@ -51,13 +51,21 @@ float3 FresnelSchlick(float cosTheta, float3 f0)
     return f0 + (1.0f - f0) * pow(1.0f - saturate(cosTheta), 5.0f);
 }
 
-float3 EvaluateBrdf(PbrMaterial material, float3 normal, float3 viewDirection, float3 lightDirection)
+void EvaluateBrdfComponents(
+    PbrMaterial material,
+    float3 normal,
+    float3 viewDirection,
+    float3 lightDirection,
+    out float3 diffuseContribution,
+    out float3 specularContribution)
 {
+    diffuseContribution = float3(0.0f, 0.0f, 0.0f);
+    specularContribution = float3(0.0f, 0.0f, 0.0f);
     float nDotV = saturate(dot(normal, viewDirection));
     float nDotL = saturate(dot(normal, lightDirection));
     if (nDotV <= 0.0f || nDotL <= 0.0f)
     {
-        return float3(0.0f, 0.0f, 0.0f);
+        return;
     }
 
     float3 halfVectorSum = viewDirection + lightDirection;
@@ -85,7 +93,22 @@ float3 EvaluateBrdf(PbrMaterial material, float3 normal, float3 viewDirection, f
     float3 fresnelLight = FresnelSchlick(nDotL, f0);
     float3 diffuseTransmission = (1.0f - fresnelView) * (1.0f - fresnelLight);
     float3 diffuse = diffuseTransmission * (1.0f - material.metallic) * material.baseColor * c_invPi;
-    return (diffuse + specular) * nDotL;
+    diffuseContribution = diffuse * nDotL;
+    specularContribution = specular * nDotL;
+}
+
+float3 EvaluateBrdf(PbrMaterial material, float3 normal, float3 viewDirection, float3 lightDirection)
+{
+    float3 diffuseContribution;
+    float3 specularContribution;
+    EvaluateBrdfComponents(
+        material,
+        normal,
+        viewDirection,
+        lightDirection,
+        diffuseContribution,
+        specularContribution);
+    return diffuseContribution + specularContribution;
 }
 
 float3 ImportanceSampleGGX(float2 sampleValue, float3 normal, float roughness)
@@ -223,8 +246,12 @@ float3 TracePbrBrdfWithMixtureSampling(
     uint primitiveIndex,
     inout uint dynamicTouched,
     float3 pathThroughput,
+    out float3 localDiffuseIndirectLighting,
+    out float3 localSpecularIndirectLighting,
     out float3 localDirectLighting)
 {
+    localDiffuseIndirectLighting = float3(0.0f, 0.0f, 0.0f);
+    localSpecularIndirectLighting = float3(0.0f, 0.0f, 0.0f);
     float3 viewDirection = normalize(-WorldRayDirection());
     float3 directLighting = float3(0.0f, 0.0f, 0.0f);
     uint directSeed =
@@ -301,6 +328,10 @@ float3 TracePbrBrdfWithMixtureSampling(
     RadiancePayload bouncePayload;
     bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
     bouncePayload.primaryDirectColor = float3(0.0f, 0.0f, 0.0f);
+    bouncePayload.primaryDiffuseIndirectColor =
+        float3(0.0f, 0.0f, 0.0f);
+    bouncePayload.primarySpecularIndirectColor =
+        float3(0.0f, 0.0f, 0.0f);
     bouncePayload.depth = nextDepth;
     bouncePayload.dynamicTouched = 0u;
     bouncePayload.pathThroughput =
@@ -312,9 +343,24 @@ float3 TracePbrBrdfWithMixtureSampling(
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
     dynamicTouched |= bouncePayload.dynamicTouched;
 
+    float3 diffuseContribution;
+    float3 specularContribution;
+    EvaluateBrdfComponents(
+        material,
+        normal,
+        viewDirection,
+        sampleDirection,
+        diffuseContribution,
+        specularContribution);
+    float3 incomingRadianceOverPdf =
+        bouncePayload.color *
+        (inverseSurvivalProbability / samplePdf);
+    localDiffuseIndirectLighting =
+        diffuseContribution * incomingRadianceOverPdf;
+    localSpecularIndirectLighting =
+        specularContribution * incomingRadianceOverPdf;
     return directLighting +
-        weightedBrdf *
-        inverseSurvivalProbability *
-        bouncePayload.color;
+        localDiffuseIndirectLighting +
+        localSpecularIndirectLighting;
 }
 #endif

@@ -76,6 +76,10 @@ void MyRaygenShader_RadianceRay()
     }
     float3 sampleRadiance = float3(0.0f, 0.0f, 0.0f);
     float3 sampleDirectRadiance = float3(0.0f, 0.0f, 0.0f);
+    float3 sampleDiffuseIndirectRadiance =
+        float3(0.0f, 0.0f, 0.0f);
+    float3 sampleSpecularIndirectRadiance =
+        float3(0.0f, 0.0f, 0.0f);
     uint dynamicTouched = 0u;
 
     if (g_sceneType == c_scenePbrGpuValidation)
@@ -115,6 +119,10 @@ void MyRaygenShader_RadianceRay()
         RadiancePayload payload;
         payload.color = float3(0.0f, 0.0f, 0.0f);
         payload.primaryDirectColor = float3(0.0f, 0.0f, 0.0f);
+        payload.primaryDiffuseIndirectColor =
+            float3(0.0f, 0.0f, 0.0f);
+        payload.primarySpecularIndirectColor =
+            float3(0.0f, 0.0f, 0.0f);
         payload.depth = 0;
         payload.dynamicTouched = 0u;
         payload.pathThroughput = float3(1.0f, 1.0f, 1.0f);
@@ -125,6 +133,10 @@ void MyRaygenShader_RadianceRay()
         TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
         sampleRadiance = payload.color;
         sampleDirectRadiance = payload.primaryDirectColor;
+        sampleDiffuseIndirectRadiance =
+            payload.primaryDiffuseIndirectColor;
+        sampleSpecularIndirectRadiance =
+            payload.primarySpecularIndirectColor;
         dynamicTouched = payload.dynamicTouched;
     }
 
@@ -139,8 +151,13 @@ void MyRaygenShader_RadianceRay()
 
     float3 accumulatedColor = sampleRadiance;
     float3 sampleIndirectRadiance =
-        max(sampleRadiance - sampleDirectRadiance, 0.0f);
+        sampleDiffuseIndirectRadiance +
+        sampleSpecularIndirectRadiance;
     float3 accumulatedIndirect = sampleIndirectRadiance;
+    float3 accumulatedDiffuseIndirect =
+        sampleDiffuseIndirectRadiance;
+    float3 accumulatedSpecularIndirect =
+        sampleSpecularIndirectRadiance;
     float sampleIndirectLuminance = dot(
         sampleIndirectRadiance,
         float3(0.2126f, 0.7152f, 0.0722f));
@@ -163,6 +180,10 @@ void MyRaygenShader_RadianceRay()
             {
                 accumulatedIndirect +=
                     g_indirectAccumulation[launchIndex].rgb;
+                accumulatedDiffuseIndirect +=
+                    g_diffuseIndirectAccumulation[launchIndex].rgb;
+                accumulatedSpecularIndirect +=
+                    g_specularIndirectAccumulation[launchIndex].rgb;
                 accumulatedMoments +=
                     g_luminanceMoments[launchIndex];
             }
@@ -180,6 +201,10 @@ void MyRaygenShader_RadianceRay()
     {
         g_indirectAccumulation[launchIndex] =
             float4(accumulatedIndirect, signedSampleCount);
+        g_diffuseIndirectAccumulation[launchIndex] =
+            float4(accumulatedDiffuseIndirect, signedSampleCount);
+        g_specularIndirectAccumulation[launchIndex] =
+            float4(accumulatedSpecularIndirect, signedSampleCount);
         g_luminanceMoments[launchIndex] = accumulatedMoments;
     }
     float3 averageRadiance = accumulatedColor / localSampleCount;
@@ -324,6 +349,8 @@ void MyClosestHitShader_RadianceRay(
 
     if (g_sceneType == c_scenePbrGgx)
     {
+        float3 localDiffuseIndirectLighting;
+        float3 localSpecularIndirectLighting;
         float3 localDirectLighting;
         payload.color = TracePbrBrdfWithMixtureSampling(
             surfaceMaterial,
@@ -333,9 +360,17 @@ void MyClosestHitShader_RadianceRay(
             globalPrimitiveIndex,
             payload.dynamicTouched,
             payload.pathThroughput,
+            localDiffuseIndirectLighting,
+            localSpecularIndirectLighting,
             localDirectLighting);
         if (payload.depth == 0u)
+        {
             payload.primaryDirectColor = localDirectLighting;
+            payload.primaryDiffuseIndirectColor =
+                localDiffuseIndirectLighting;
+            payload.primarySpecularIndirectColor =
+                localSpecularIndirectLighting;
+        }
         return;
     }
 
@@ -350,7 +385,13 @@ void MyClosestHitShader_RadianceRay(
         payload.pathThroughput,
         localDirectLighting);
     if (payload.depth == 0u)
+    {
         payload.primaryDirectColor = localDirectLighting;
+        payload.primaryDiffuseIndirectColor =
+            max(payload.color - localDirectLighting, 0.0f);
+        payload.primarySpecularIndirectColor =
+            float3(0.0f, 0.0f, 0.0f);
+    }
 }
 
 [shader("miss")]

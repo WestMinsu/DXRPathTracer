@@ -13,6 +13,8 @@ struct RadiancePayload
 {
     float3 color;
     float3 primaryDirectColor;
+    float3 primaryDiffuseIndirectColor;
+    float3 primarySpecularIndirectColor;
     uint depth;
     uint dynamicTouched;
     float3 pathThroughput;
@@ -116,6 +118,8 @@ RWTexture2D<float4> g_normalDepth : register(u3);
 RWTexture2D<float4> g_materialGuide : register(u4);
 RWTexture2D<float4> g_indirectAccumulation : register(u5);
 RWTexture2D<float2> g_luminanceMoments : register(u6);
+RWTexture2D<float4> g_diffuseIndirectAccumulation : register(u7);
+RWTexture2D<float4> g_specularIndirectAccumulation : register(u8);
 RWStructuredBuffer<uint> g_statistics : register(u2);
 RaytracingAccelerationStructure g_scene : register(t0);
 StructuredBuffer<Vertex> g_vertices : register(t1);
@@ -848,6 +852,10 @@ float3 TraceLambertianBounce(
     RadiancePayload bouncePayload;
     bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
     bouncePayload.primaryDirectColor = float3(0.0f, 0.0f, 0.0f);
+    bouncePayload.primaryDiffuseIndirectColor =
+        float3(0.0f, 0.0f, 0.0f);
+    bouncePayload.primarySpecularIndirectColor =
+        float3(0.0f, 0.0f, 0.0f);
     bouncePayload.depth = nextDepth;
     bouncePayload.dynamicTouched = 0u;
     bouncePayload.pathThroughput =
