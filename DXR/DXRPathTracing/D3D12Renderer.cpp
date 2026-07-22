@@ -1390,7 +1390,9 @@ void D3D12Renderer::BuildImGuiFrame()
             16.0f,
             "%.2f");
         ImGui::TextDisabled(
-            "Edge-aware normal/depth filter; PNG/display only.");
+            "Variance + normal/depth/albedo/roughness guided.");
+        ImGui::TextDisabled(
+            "Filters indirect light only; lower sigma preserves detail.");
         ImGui::TextDisabled(
             "HDR PFM accumulation remains unfiltered.");
     }

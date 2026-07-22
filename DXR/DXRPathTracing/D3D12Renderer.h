@@ -209,7 +209,7 @@ private:
     bool m_enableAccumulation = true;
     bool m_enableRussianRoulette = false;
     bool m_enableAtrous = false;
-    int m_atrousIterations = 3;
+    int m_atrousIterations = 2;
     float m_atrousColorSigma = 4.0f;
     int m_lightingMode = static_cast<int>(
         RayTracingManager::c_lightingModeBsdf);
@@ -223,7 +223,7 @@ private:
     float m_pbrRoughness = 0.35f;
     bool m_overridePbrMaterial = false;
     bool m_enableIbl = true;
-    float m_iblIntensity = 1.0f;
+    float m_iblIntensity = 2.0f;
     UINT m_validationSeed = 0;
     float m_exposure = 0.0f;
     std::string m_captureStatus;

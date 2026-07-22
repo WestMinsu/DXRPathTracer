@@ -1,0 +1,33 @@
+{
+  "frames_per_second": 60,
+  "loop": false,
+  "description": "Fixed Sponza camera for cross-renderer comparison",
+  "keyframes": [
+    {
+      "time": 0.0,
+      "position": [
+        -2.23048949,
+        6.16025972,
+        0.43386364
+      ],
+      "target": [
+        19.611515,
+        -0.60795927,
+        1.71957517
+      ]
+    },
+    {
+      "time": 3600.0,
+      "position": [
+        -2.23048949,
+        6.16025972,
+        0.43386364
+      ],
+      "target": [
+        19.611515,
+        -0.60795927,
+        1.71957517
+      ]
+    }
+  ]
+}

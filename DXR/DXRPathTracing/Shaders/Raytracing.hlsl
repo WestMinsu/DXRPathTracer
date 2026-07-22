@@ -66,9 +66,16 @@ void MyRaygenShader_RadianceRay()
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
-    // A negative depth marks pixels where the primary ray missed geometry.
-    g_normalDepth[launchIndex] = float4(0.0f, 0.0f, 0.0f, -1.0f);
+    if (g_enableAtrous != 0u)
+    {
+        // A negative depth marks primary rays that missed geometry.
+        g_normalDepth[launchIndex] =
+            float4(0.0f, 0.0f, 0.0f, -1.0f);
+        g_materialGuide[launchIndex] =
+            float4(0.0f, 0.0f, 0.0f, -1.0f);
+    }
     float3 sampleRadiance = float3(0.0f, 0.0f, 0.0f);
+    float3 sampleDirectRadiance = float3(0.0f, 0.0f, 0.0f);
     uint dynamicTouched = 0u;
 
     if (g_sceneType == c_scenePbrGpuValidation)
@@ -76,6 +83,7 @@ void MyRaygenShader_RadianceRay()
         sampleRadiance = EvaluateGpuBrdfValidationSample(
             launchIndex,
             launchDim);
+        sampleDirectRadiance = sampleRadiance;
     }
     else
     {
@@ -106,6 +114,7 @@ void MyRaygenShader_RadianceRay()
 
         RadiancePayload payload;
         payload.color = float3(0.0f, 0.0f, 0.0f);
+        payload.primaryDirectColor = float3(0.0f, 0.0f, 0.0f);
         payload.depth = 0;
         payload.dynamicTouched = 0u;
         payload.pathThroughput = float3(1.0f, 1.0f, 1.0f);
@@ -115,6 +124,7 @@ void MyRaygenShader_RadianceRay()
         RecordRadianceRay(0u);
         TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
         sampleRadiance = payload.color;
+        sampleDirectRadiance = payload.primaryDirectColor;
         dynamicTouched = payload.dynamicTouched;
     }
 
@@ -128,6 +138,15 @@ void MyRaygenShader_RadianceRay()
     }
 
     float3 accumulatedColor = sampleRadiance;
+    float3 sampleIndirectRadiance =
+        max(sampleRadiance - sampleDirectRadiance, 0.0f);
+    float3 accumulatedIndirect = sampleIndirectRadiance;
+    float sampleIndirectLuminance = dot(
+        sampleIndirectRadiance,
+        float3(0.2126f, 0.7152f, 0.0722f));
+    float2 accumulatedMoments = float2(
+        sampleIndirectLuminance,
+        sampleIndirectLuminance * sampleIndirectLuminance);
     float localSampleCount = 1.0f;
     bool dynamicInvalidation =
         g_dynamicObjectMoved != 0u &&
@@ -140,6 +159,13 @@ void MyRaygenShader_RadianceRay()
         if (!dynamicInvalidation && !previousDynamicInvalidation)
         {
             accumulatedColor += previousAccumulation.rgb;
+            if (g_enableAtrous != 0u)
+            {
+                accumulatedIndirect +=
+                    g_indirectAccumulation[launchIndex].rgb;
+                accumulatedMoments +=
+                    g_luminanceMoments[launchIndex];
+            }
             localSampleCount =
                 max(abs(previousAccumulation.a), 1.0f) + 1.0f;
         }
@@ -150,6 +176,12 @@ void MyRaygenShader_RadianceRay()
         : localSampleCount;
     g_accumulation[launchIndex] =
         float4(accumulatedColor, signedSampleCount);
+    if (g_enableAtrous != 0u)
+    {
+        g_indirectAccumulation[launchIndex] =
+            float4(accumulatedIndirect, signedSampleCount);
+        g_luminanceMoments[launchIndex] = accumulatedMoments;
+    }
     float3 averageRadiance = accumulatedColor / localSampleCount;
     g_output[launchIndex] = float4(ToneMapForDisplay(averageRadiance), 1.0f);
 }
@@ -192,10 +224,30 @@ void MyClosestHitShader_RadianceRay(
             normal);
     }
 
-    if (payload.depth == 0u)
+    PbrMaterial surfaceMaterial;
+    if (g_sceneType == c_scenePbrGgx)
+    {
+        surfaceMaterial =
+            GetPbrMaterial(globalPrimitiveIndex, texCoord);
+    }
+    else
+    {
+        surfaceMaterial.baseColor =
+            CornellSurfaceAlbedo(globalPrimitiveIndex);
+        surfaceMaterial.metallic = 0.0f;
+        surfaceMaterial.roughness = 1.0f;
+        surfaceMaterial.emission =
+            SurfaceEmission(globalPrimitiveIndex);
+    }
+
+    if (payload.depth == 0u && g_enableAtrous != 0u)
     {
         g_normalDepth[DispatchRaysIndex().xy] =
             float4(normal, RayTCurrent());
+        g_materialGuide[DispatchRaysIndex().xy] =
+            float4(
+                surfaceMaterial.baseColor,
+                surfaceMaterial.roughness);
     }
 
     float3 normalColor = normal * 0.5f + 0.5f;
@@ -256,6 +308,8 @@ void MyClosestHitShader_RadianceRay(
             }
         }
         payload.color = emission * emissionWeight;
+        if (payload.depth == 0u)
+            payload.primaryDirectColor = payload.color;
         return;
     }
 
@@ -270,27 +324,33 @@ void MyClosestHitShader_RadianceRay(
 
     if (g_sceneType == c_scenePbrGgx)
     {
-        PbrMaterial material =
-            GetPbrMaterial(globalPrimitiveIndex, texCoord);
+        float3 localDirectLighting;
         payload.color = TracePbrBrdfWithMixtureSampling(
-            material,
+            surfaceMaterial,
             normal,
             hitPosition,
             payload.depth,
             globalPrimitiveIndex,
             payload.dynamicTouched,
-            payload.pathThroughput);
+            payload.pathThroughput,
+            localDirectLighting);
+        if (payload.depth == 0u)
+            payload.primaryDirectColor = localDirectLighting;
         return;
     }
 
+    float3 localDirectLighting;
     payload.color = TraceLambertianBounce(
         normal,
         hitPosition,
-        CornellSurfaceAlbedo(globalPrimitiveIndex),
+        surfaceMaterial.baseColor,
         payload.depth,
         globalPrimitiveIndex,
         payload.dynamicTouched,
-        payload.pathThroughput);
+        payload.pathThroughput,
+        localDirectLighting);
+    if (payload.depth == 0u)
+        payload.primaryDirectColor = localDirectLighting;
 }
 
 [shader("miss")]
@@ -334,6 +394,8 @@ void MyMissShader_RadianceRay(inout RadiancePayload payload)
     payload.color =
         SampleEnvironmentMap(WorldRayDirection()) *
         environmentWeight;
+    if (payload.depth == 0u)
+        payload.primaryDirectColor = payload.color;
 }
 
 [shader("miss")]

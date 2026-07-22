@@ -30,11 +30,11 @@ namespace
         bool overridePbrMaterial = false;
         bool enableRussianRoulette = false;
         bool enableAtrous = false;
-        UINT atrousIterations = 3;
+        UINT atrousIterations = 2;
         float atrousColorSigma = 4.0f;
         UINT lightingMode = RayTracingManager::c_lightingModeBsdf;
         bool enableIbl = true;
-        float iblIntensity = 0.5f;
+        float iblIntensity = 2.0f;
         UINT validationSeed = 0;
         bool headless = false;
         bool composeModelRoom = false;

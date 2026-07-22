@@ -12,6 +12,7 @@ struct Vertex
 struct RadiancePayload
 {
     float3 color;
+    float3 primaryDirectColor;
     uint depth;
     uint dynamicTouched;
     float3 pathThroughput;
@@ -112,6 +113,9 @@ static const float c_twoPi = 6.283185307f;
 RWTexture2D<float4> g_output : register(u0);
 RWTexture2D<float4> g_accumulation : register(u1);
 RWTexture2D<float4> g_normalDepth : register(u3);
+RWTexture2D<float4> g_materialGuide : register(u4);
+RWTexture2D<float4> g_indirectAccumulation : register(u5);
+RWTexture2D<float2> g_luminanceMoments : register(u6);
 RWStructuredBuffer<uint> g_statistics : register(u2);
 RaytracingAccelerationStructure g_scene : register(t0);
 StructuredBuffer<Vertex> g_vertices : register(t1);
@@ -154,6 +158,7 @@ cbuffer RenderSettings : register(b0)
     uint g_environmentTexelCount;
     float g_areaLightPower;
     float g_environmentPower;
+    uint g_enableAtrous;
 };
 
 void RecordRadianceRay(uint depth)
@@ -786,7 +791,8 @@ float3 TraceLambertianBounce(
     uint depth,
     uint primitiveIndex,
     inout uint dynamicTouched,
-    float3 pathThroughput)
+    float3 pathThroughput,
+    out float3 localDirectLighting)
 {
     float3 directLighting = float3(0.0f, 0.0f, 0.0f);
     uint directSeed =
@@ -810,6 +816,7 @@ float3 TraceLambertianBounce(
         directLighting =
             albedo * c_invPi * nDotL * radianceOverPdf * misWeight;
     }
+    localDirectLighting = directLighting;
 
     if (depth >= g_maxBounce)
     {
@@ -840,6 +847,7 @@ float3 TraceLambertianBounce(
 
     RadiancePayload bouncePayload;
     bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
+    bouncePayload.primaryDirectColor = float3(0.0f, 0.0f, 0.0f);
     bouncePayload.depth = nextDepth;
     bouncePayload.dynamicTouched = 0u;
     bouncePayload.pathThroughput =

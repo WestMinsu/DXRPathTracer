@@ -25,6 +25,17 @@ Validation/PbrScene/Mitsuba/pbr_scene_*.xml
 Validation/PbrScene/RTXPT/
 Validation/PbrScene/scene_manifest.json
 
+# Generated Indirect Bounce Stress validation assets and renderer outputs.
+# Keep the generator, analysis script, and README under version control.
+Validation/IndirectBounceStress/Results/
+Validation/IndirectBounceStress/Mitsuba/
+Validation/IndirectBounceStress/RTXPT/
+Validation/IndirectBounceStress/scene_manifest.json
+Validation/SponzaPbr/RTXPT/
+Validation/SponzaPbr/Mitsuba/
+Validation/SponzaPbr/Results/
+Validation/SponzaPbr/scene_manifest.json
+
 # Python-generated caches
 __pycache__/
 *.py[cod]

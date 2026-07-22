@@ -62,7 +62,7 @@ public:
     void SetMaxBounce(UINT maxBounce);
     void SetRussianRouletteEnabled(bool enabled);
     void SetLightingMode(UINT lightingMode);
-    void SetAtrousEnabled(bool enabled) { m_enableAtrous = enabled; }
+    void SetAtrousEnabled(bool enabled);
     void SetAtrousIterationCount(UINT iterationCount)
     {
         m_atrousIterationCount =
@@ -138,7 +138,7 @@ public:
 private:
     static constexpr DXGI_FORMAT c_outputFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     static constexpr DXGI_FORMAT c_accumulationFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
-    static constexpr UINT c_shaderPayloadSize = 10 * sizeof(float);
+    static constexpr UINT c_shaderPayloadSize = 13 * sizeof(float);
     static constexpr UINT c_shaderAttributeSize = 2 * sizeof(float);
     static constexpr UINT c_maxBounce = 8;
     // At most one visibility ray is nested below a radiance vertex. The
@@ -223,7 +223,7 @@ private:
     bool m_enableAccumulation = true;
     bool m_enableRussianRoulette = false;
     bool m_enableAtrous = false;
-    UINT m_atrousIterationCount = 3;
+    UINT m_atrousIterationCount = 2;
     float m_atrousColorSigma = 4.0f;
     UINT m_lightingMode = c_lightingModeBsdf;
     UINT m_maxBounce = 3;
@@ -270,6 +270,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_accumulationTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_normalDepthTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_materialGuideTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_indirectAccumulationTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_luminanceMomentsTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_atrousFilterTextureA;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_atrousFilterTextureB;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_statisticsBuffer;

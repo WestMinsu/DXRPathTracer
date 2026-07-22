@@ -222,7 +222,8 @@ float3 TracePbrBrdfWithMixtureSampling(
     uint depth,
     uint primitiveIndex,
     inout uint dynamicTouched,
-    float3 pathThroughput)
+    float3 pathThroughput,
+    out float3 localDirectLighting)
 {
     float3 viewDirection = normalize(-WorldRayDirection());
     float3 directLighting = float3(0.0f, 0.0f, 0.0f);
@@ -256,6 +257,7 @@ float3 TracePbrBrdfWithMixtureSampling(
             radianceOverPdf *
             misWeight;
     }
+    localDirectLighting = directLighting;
 
     if (depth >= g_maxBounce)
     {
@@ -298,6 +300,7 @@ float3 TracePbrBrdfWithMixtureSampling(
 
     RadiancePayload bouncePayload;
     bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
+    bouncePayload.primaryDirectColor = float3(0.0f, 0.0f, 0.0f);
     bouncePayload.depth = nextDepth;
     bouncePayload.dynamicTouched = 0u;
     bouncePayload.pathThroughput =
