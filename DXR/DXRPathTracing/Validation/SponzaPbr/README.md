@@ -8,7 +8,7 @@ MSE, PSNR, ROI 비율 등의 수치 평가는 수행하지 않는다.
 - Khronos core Sponza의 opaque primitive 89개
 - glTF Base Color, Metallic-Roughness, Normal Map
 - 동일한 고정 카메라와 수직 FOV 70도
-- 면광원 16개와 IBL intensity 2.0
+- 면광원 12개와 IBL intensity 2.0
 - 정지된 금속 구
 - 960×540, 512 spp, 최대 8회 표면 산란
 

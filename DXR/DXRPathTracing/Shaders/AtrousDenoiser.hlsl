@@ -2,8 +2,10 @@ Texture2D<float4> g_source : register(t0);
 Texture2D<float4> g_normalDepth : register(t1);
 Texture2D<float4> g_materialGuide : register(t2);
 Texture2D<float2> g_luminanceMoments : register(t3);
-Texture2D<float4> g_indirectAccumulation : register(t4);
-Texture2D<float4> g_totalAccumulation : register(t5);
+Texture2D<float4> g_diffuseIndirectAccumulation : register(t4);
+Texture2D<float4> g_specularIndirectAccumulation : register(t5);
+Texture2D<float4> g_totalAccumulation : register(t6);
+Texture2D<float4> g_filteredDiffuse : register(t7);
 RWTexture2D<float4> g_destination : register(u0);
 
 cbuffer AtrousSettings : register(b0)
@@ -17,7 +19,11 @@ cbuffer AtrousSettings : register(b0)
     float g_colorSigma;
     float g_exposure;
     uint g_demodulateDiffuse;
+    uint g_filterChannel;
 };
+
+static const uint c_filterChannelDiffuse = 0u;
+static const uint c_filterChannelSpecular = 1u;
 
 // A compact B3-style kernel. Two 3x3 passes require 18 taps per pixel,
 // compared with the previous three 5x5 passes (75 taps per pixel).
@@ -108,24 +114,46 @@ float3 ToneMapForDisplay(float3 linearRadiance)
     return LinearToSrgb(saturate(mapped));
 }
 
-float3 ReconstructRadiance(float3 filteredValue, int2 pixel)
+float3 ReconstructRadiance(float3 filteredSpecular, int2 pixel)
 {
-    float3 filteredIndirect =
-        max(RemodulateDiffuse(filteredValue, pixel), 0.0f);
     float3 totalRadiance =
         LoadAverageRadiance(g_totalAccumulation, pixel);
-    float3 originalIndirect =
-        LoadAverageRadiance(g_indirectAccumulation, pixel);
+    float3 originalDiffuse =
+        LoadAverageRadiance(
+            g_diffuseIndirectAccumulation,
+            pixel);
+    float3 originalSpecular =
+        LoadAverageRadiance(
+            g_specularIndirectAccumulation,
+            pixel);
     float3 unfilteredDirect =
-        max(totalRadiance - originalIndirect, 0.0f);
-    return unfilteredDirect + filteredIndirect;
+        max(
+            totalRadiance - originalDiffuse - originalSpecular,
+            0.0f);
+    float3 filteredDiffuse =
+        max(g_filteredDiffuse.Load(int3(pixel, 0)).rgb, 0.0f);
+    return unfilteredDirect +
+        filteredDiffuse +
+        max(filteredSpecular, 0.0f);
 }
 
 void StoreResult(float3 filteredValue, int2 pixel)
 {
-    float3 result = g_finalPass != 0u
-        ? ToneMapForDisplay(ReconstructRadiance(filteredValue, pixel))
-        : filteredValue;
+    float3 result = filteredValue;
+    if (g_finalPass != 0u)
+    {
+        if (g_filterChannel == c_filterChannelDiffuse)
+        {
+            result = max(
+                RemodulateDiffuse(filteredValue, pixel),
+                0.0f);
+        }
+        else
+        {
+            result = ToneMapForDisplay(
+                ReconstructRadiance(filteredValue, pixel));
+        }
+    }
     g_destination[pixel] = float4(result, 1.0f);
 }
 

@@ -75,7 +75,6 @@ void MyRaygenShader_RadianceRay()
             float4(0.0f, 0.0f, 0.0f, -1.0f);
     }
     float3 sampleRadiance = float3(0.0f, 0.0f, 0.0f);
-    float3 sampleDirectRadiance = float3(0.0f, 0.0f, 0.0f);
     float3 sampleDiffuseIndirectRadiance =
         float3(0.0f, 0.0f, 0.0f);
     float3 sampleSpecularIndirectRadiance =
@@ -87,7 +86,6 @@ void MyRaygenShader_RadianceRay()
         sampleRadiance = EvaluateGpuBrdfValidationSample(
             launchIndex,
             launchDim);
-        sampleDirectRadiance = sampleRadiance;
     }
     else
     {
@@ -132,7 +130,6 @@ void MyRaygenShader_RadianceRay()
         RecordRadianceRay(0u);
         TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
         sampleRadiance = payload.color;
-        sampleDirectRadiance = payload.primaryDirectColor;
         sampleDiffuseIndirectRadiance =
             payload.primaryDiffuseIndirectColor;
         sampleSpecularIndirectRadiance =
@@ -150,20 +147,22 @@ void MyRaygenShader_RadianceRay()
     }
 
     float3 accumulatedColor = sampleRadiance;
-    float3 sampleIndirectRadiance =
-        sampleDiffuseIndirectRadiance +
-        sampleSpecularIndirectRadiance;
-    float3 accumulatedIndirect = sampleIndirectRadiance;
     float3 accumulatedDiffuseIndirect =
         sampleDiffuseIndirectRadiance;
     float3 accumulatedSpecularIndirect =
         sampleSpecularIndirectRadiance;
-    float sampleIndirectLuminance = dot(
-        sampleIndirectRadiance,
+    float sampleDiffuseLuminance = dot(
+        sampleDiffuseIndirectRadiance,
         float3(0.2126f, 0.7152f, 0.0722f));
-    float2 accumulatedMoments = float2(
-        sampleIndirectLuminance,
-        sampleIndirectLuminance * sampleIndirectLuminance);
+    float sampleSpecularLuminance = dot(
+        sampleSpecularIndirectRadiance,
+        float3(0.2126f, 0.7152f, 0.0722f));
+    float2 accumulatedDiffuseMoments = float2(
+        sampleDiffuseLuminance,
+        sampleDiffuseLuminance * sampleDiffuseLuminance);
+    float2 accumulatedSpecularMoments = float2(
+        sampleSpecularLuminance,
+        sampleSpecularLuminance * sampleSpecularLuminance);
     float localSampleCount = 1.0f;
     bool dynamicInvalidation =
         g_dynamicObjectMoved != 0u &&
@@ -178,14 +177,14 @@ void MyRaygenShader_RadianceRay()
             accumulatedColor += previousAccumulation.rgb;
             if (g_enableAtrous != 0u)
             {
-                accumulatedIndirect +=
-                    g_indirectAccumulation[launchIndex].rgb;
                 accumulatedDiffuseIndirect +=
                     g_diffuseIndirectAccumulation[launchIndex].rgb;
                 accumulatedSpecularIndirect +=
                     g_specularIndirectAccumulation[launchIndex].rgb;
-                accumulatedMoments +=
-                    g_luminanceMoments[launchIndex];
+                accumulatedDiffuseMoments +=
+                    g_diffuseLuminanceMoments[launchIndex];
+                accumulatedSpecularMoments +=
+                    g_specularLuminanceMoments[launchIndex];
             }
             localSampleCount =
                 max(abs(previousAccumulation.a), 1.0f) + 1.0f;
@@ -199,13 +198,14 @@ void MyRaygenShader_RadianceRay()
         float4(accumulatedColor, signedSampleCount);
     if (g_enableAtrous != 0u)
     {
-        g_indirectAccumulation[launchIndex] =
-            float4(accumulatedIndirect, signedSampleCount);
         g_diffuseIndirectAccumulation[launchIndex] =
             float4(accumulatedDiffuseIndirect, signedSampleCount);
         g_specularIndirectAccumulation[launchIndex] =
             float4(accumulatedSpecularIndirect, signedSampleCount);
-        g_luminanceMoments[launchIndex] = accumulatedMoments;
+        g_diffuseLuminanceMoments[launchIndex] =
+            accumulatedDiffuseMoments;
+        g_specularLuminanceMoments[launchIndex] =
+            accumulatedSpecularMoments;
     }
     float3 averageRadiance = accumulatedColor / localSampleCount;
     g_output[launchIndex] = float4(ToneMapForDisplay(averageRadiance), 1.0f);

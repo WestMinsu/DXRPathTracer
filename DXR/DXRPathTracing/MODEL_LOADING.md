@@ -82,7 +82,7 @@ Assets\KhronosGlTFSampleAssets\Models\Sponza\glTF\Sponza.gltf
 
 - `alphaMode != OPAQUE` primitive 제외
 - Base Color, Metallic-Roughness, Normal Map만 사용
-- `Config\sponza_lights.json`의 하향 사각형 면광원 16개와 IBL 사용
+- `Config\sponza_lights.json`의 하향 사각형 면광원 12개와 IBL 사용
 - 정적 Sponza와 면광원은 하나의 정적 BLAS
 - 줄무늬가 있는 금속 구는 별도의 동적 BLAS
 - 두 instance의 vertex/index/primitive offset은 GPU instance metadata로 구분

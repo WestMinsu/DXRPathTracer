@@ -271,14 +271,18 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_accumulationTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_normalDepthTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_materialGuideTexture;
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_indirectAccumulationTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource>
         m_diffuseIndirectAccumulationTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource>
         m_specularIndirectAccumulationTexture;
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_luminanceMomentsTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource>
+        m_diffuseLuminanceMomentsTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource>
+        m_specularLuminanceMomentsTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_atrousFilterTextureA;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_atrousFilterTextureB;
+    Microsoft::WRL::ComPtr<ID3D12Resource>
+        m_atrousFilteredDiffuseTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_statisticsBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_statisticsResetBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_statisticsReadbackBuffer;
