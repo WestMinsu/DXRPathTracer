@@ -131,9 +131,15 @@ private:
     bool CreateFence();
     bool CreateGpuTimingResources();
     bool LoadCameraPath();
+    bool LoadCameraPathForPlayback();
     void StartCameraPathPlayback();
     void StopCameraPathPlayback();
     void UpdateCameraPath();
+    void StartCameraPathRecording();
+    void StopCameraPathRecording();
+    void UpdateCameraPathRecording(double deltaSeconds);
+    bool SaveRecordedCameraPath();
+    CameraPose GetCurrentCameraPose() const;
     void InitializeFreeCamera();
     void UpdateFreeCamera(double deltaSeconds);
     void ReadGpuTimingResults();
@@ -199,6 +205,7 @@ private:
     bool m_cameraPathLoaded = false;
     bool m_cameraPathPlaybackActive = false;
     bool m_cameraPathAutoPlay = false;
+    bool m_cameraPathRecordingActive = false;
     bool m_animateDynamicSphere = false;
     bool m_showDynamicSphere = true;
     bool m_hasPreviousCameraPose = false;
@@ -262,12 +269,22 @@ private:
     double m_freeCameraLookDistance = 1.0;
     double m_pendingMouseYaw = 0.0;
     double m_pendingMousePitch = 0.0;
+    float m_keyboardTurnSpeedDegrees = 30.0f;
+    double m_cameraRecordingElapsedSeconds = 0.0;
+    double m_cameraRecordingNextSampleSeconds = 0.0;
+    static constexpr double c_cameraRecordingFramesPerSecond = 60.0;
+    char m_cameraRecordingPath[512] = "Config\\recorded_camera_path.json";
+    char m_cameraPlaybackPath[512] = "Config\\recorded_camera_path.json";
+    std::string m_cameraRecordingStatus;
+    std::string m_cameraPlaybackStatus;
     POINT m_lastMousePosition = {};
     std::array<bool, 256> m_keyPressed = {};
     std::chrono::steady_clock::time_point m_lastRenderTime;
     UINT64 m_cameraPathFrameIndex = 0;
     CameraPath m_cameraPath;
     CameraPose m_previousCameraPose;
+    CameraPose m_cameraRecordingPreviousPose;
+    std::vector<CameraPath::Keyframe> m_recordedCameraKeyframes;
     std::vector<double> m_gpuTimingHistory;
     std::vector<double> m_cpuTimingHistory;
 

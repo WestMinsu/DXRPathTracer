@@ -306,13 +306,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 colorScale);
             float spatialWeight =
                 c_kernel[x + 1] * c_kernel[y + 1];
-            float weight =
-                spatialWeight *
-                normalWeight *
-                depthWeight *
-                albedoWeight *
-                roughnessWeight *
-                colorWeight;
+            float weight = spatialWeight * normalWeight * depthWeight * albedoWeight * roughnessWeight * colorWeight;
 
             filteredColor += sampleColor * weight;
             totalWeight += weight;

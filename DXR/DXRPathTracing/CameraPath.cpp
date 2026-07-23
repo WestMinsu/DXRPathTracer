@@ -190,6 +190,51 @@ namespace
         value = match[1].str() == "true";
         return true;
     }
+
+    bool ValidateKeyframes(
+        const std::vector<CameraPath::Keyframe>& keyframes,
+        double framesPerSecond,
+        std::wstring* errorMessage)
+    {
+        if (keyframes.empty())
+        {
+            if (errorMessage)
+                *errorMessage = L"At least one camera keyframe is required.";
+            return false;
+        }
+        if (!std::isfinite(framesPerSecond) || framesPerSecond <= 0.0)
+        {
+            if (errorMessage)
+                *errorMessage = L"frames_per_second must be positive.";
+            return false;
+        }
+        for (std::size_t index = 0; index < keyframes.size(); ++index)
+        {
+            const CameraPath::Keyframe& keyframe = keyframes[index];
+            if (!std::isfinite(keyframe.timeSeconds) ||
+                keyframe.timeSeconds < 0.0 ||
+                (index > 0 &&
+                 keyframe.timeSeconds <= keyframes[index - 1].timeSeconds))
+            {
+                if (errorMessage)
+                    *errorMessage = L"Keyframe times must be strictly increasing.";
+                return false;
+            }
+            for (std::size_t component = 0; component < 3; ++component)
+            {
+                if (!std::isfinite(keyframe.pose.position[component]) ||
+                    !std::isfinite(keyframe.pose.target[component]))
+                {
+                    if (errorMessage)
+                        *errorMessage = L"Camera keyframe values must be finite.";
+                    return false;
+                }
+            }
+        }
+        if (errorMessage)
+            errorMessage->clear();
+        return true;
+    }
 }
 
 bool CameraPath::Load(
@@ -217,30 +262,84 @@ bool CameraPath::Load(
     double parsedFramesPerSecond = 0.0;
     if (ExtractNumber(text, "frames_per_second", parsedFramesPerSecond))
         framesPerSecond = parsedFramesPerSecond;
-    if (!std::isfinite(framesPerSecond) || framesPerSecond <= 0.0)
-    {
-        if (errorMessage)
-            *errorMessage = L"frames_per_second must be positive.";
-        return false;
-    }
-
     bool loop = false;
     ExtractBoolean(text, "loop", loop);
-    for (std::size_t index = 0; index < keyframes.size(); ++index)
-    {
-        if (keyframes[index].timeSeconds < 0.0 ||
-            (index > 0 &&
-             keyframes[index].timeSeconds <= keyframes[index - 1].timeSeconds))
-        {
-            if (errorMessage)
-                *errorMessage = L"Keyframe times must be strictly increasing.";
-            return false;
-        }
-    }
+    return SetKeyframes(keyframes, framesPerSecond, loop, errorMessage);
+}
 
+bool CameraPath::SetKeyframes(
+    const std::vector<Keyframe>& keyframes,
+    double framesPerSecond,
+    bool loop,
+    std::wstring* errorMessage)
+{
+    if (!ValidateKeyframes(keyframes, framesPerSecond, errorMessage))
+        return false;
     m_keyframes = keyframes;
     m_framesPerSecond = framesPerSecond;
     m_loop = loop;
+    if (errorMessage)
+        errorMessage->clear();
+    return true;
+}
+
+bool CameraPath::Save(
+    const std::wstring& filePath,
+    const char* description,
+    std::wstring* errorMessage) const
+{
+    if (!ValidateKeyframes(m_keyframes, m_framesPerSecond, errorMessage))
+        return false;
+
+    FILE* file = nullptr;
+    if (_wfopen_s(&file, filePath.c_str(), L"wb") != 0 || !file)
+    {
+        if (errorMessage)
+            *errorMessage = L"Camera path file could not be created.";
+        return false;
+    }
+
+    const char* safeDescription =
+        description ? description : "Recorded camera path";
+    bool success =
+        std::fprintf(
+            file,
+            R"json({
+  "frames_per_second": %.9g,
+  "loop": %s,
+  "description": "%s",
+  "keyframes": [
+)json",
+            m_framesPerSecond,
+            m_loop ? "true" : "false",
+            safeDescription) > 0;
+    for (std::size_t index = 0; success && index < m_keyframes.size(); ++index)
+    {
+        const Keyframe& keyframe = m_keyframes[index];
+        success = std::fprintf(
+            file,
+            R"json(    { "time": %.9g, "position": [%.9g, %.9g, %.9g], "target": [%.9g, %.9g, %.9g] }%s
+)json",
+            keyframe.timeSeconds,
+            keyframe.pose.position[0],
+            keyframe.pose.position[1],
+            keyframe.pose.position[2],
+            keyframe.pose.target[0],
+            keyframe.pose.target[1],
+            keyframe.pose.target[2],
+            index + 1 < m_keyframes.size() ? "," : "") > 0;
+    }
+    if (success)
+        success = std::fprintf(file, "  ]\n}\n") > 0;
+    if (std::fclose(file) != 0)
+        success = false;
+
+    if (!success)
+    {
+        if (errorMessage)
+            *errorMessage = L"Camera path file could not be written completely.";
+        return false;
+    }
     if (errorMessage)
         errorMessage->clear();
     return true;

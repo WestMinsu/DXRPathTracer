@@ -148,6 +148,55 @@ namespace
         return true;
     }
 
+    CameraPose InterpolateCameraPose(
+        const CameraPose& begin,
+        const CameraPose& end,
+        double amount)
+    {
+        const float t = static_cast<float>(
+            (std::max)(0.0, (std::min)(1.0, amount)));
+        CameraPose pose;
+        for (std::size_t component = 0; component < 3; ++component)
+        {
+            pose.position[component] =
+                begin.position[component] +
+                (end.position[component] - begin.position[component]) * t;
+            pose.target[component] =
+                begin.target[component] +
+                (end.target[component] - begin.target[component]) * t;
+        }
+        return pose;
+    }
+
+    bool Utf8ToWide(const char* text, std::wstring& converted)
+    {
+        converted.clear();
+        if (!text || !text[0])
+            return false;
+        const int requiredLength = MultiByteToWideChar(
+            CP_UTF8,
+            MB_ERR_INVALID_CHARS,
+            text,
+            -1,
+            nullptr,
+            0);
+        if (requiredLength <= 1)
+            return false;
+        std::vector<wchar_t> buffer(static_cast<std::size_t>(requiredLength));
+        if (MultiByteToWideChar(
+                CP_UTF8,
+                MB_ERR_INVALID_CHARS,
+                text,
+                -1,
+                buffer.data(),
+                requiredLength) != requiredLength)
+        {
+            return false;
+        }
+        converted.assign(buffer.data());
+        return true;
+    }
+
     UINT GetClientWidth(HWND hWnd)
     {
         RECT rect = {};
@@ -167,6 +216,8 @@ namespace
 
 D3D12Renderer::~D3D12Renderer()
 {
+    if (m_cameraPathRecordingActive)
+        StopCameraPathRecording();
     WaitForGpu();
     SavePendingCaptures();
     CloseBenchmarkCsv();
@@ -259,7 +310,11 @@ void D3D12Renderer::Render()
     if (m_cameraPathPlaybackActive)
         UpdateCameraPath();
     else
+    {
         UpdateFreeCamera(frameDeltaSeconds);
+        if (m_cameraPathRecordingActive)
+            UpdateCameraPathRecording(frameDeltaSeconds);
+    }
     BuildImGuiFrame();
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
         m_animateDynamicSphere);
@@ -780,10 +835,38 @@ bool D3D12Renderer::LoadCameraPath()
     return true;
 }
 
+bool D3D12Renderer::LoadCameraPathForPlayback()
+{
+    std::wstring filePath;
+    if (!Utf8ToWide(m_cameraPlaybackPath, filePath))
+    {
+        m_cameraPlaybackStatus = "Invalid UTF-8 playback path.";
+        return false;
+    }
+
+    if (!m_cameraPath.Load(filePath, &m_cameraPathError))
+    {
+        m_cameraPathPlaybackActive = false;
+        m_cameraPathLoaded = false;
+        m_cameraPlaybackStatus =
+            "Camera path load failed. Check the file path and JSON.";
+        return false;
+    }
+
+    m_cameraPathFilePath = filePath;
+    m_cameraPathLoaded = true;
+    m_cameraPathFrameIndex = 0;
+    m_hasPreviousCameraPose = false;
+    m_cameraPlaybackStatus = "Loaded playback path.";
+    return true;
+}
+
 void D3D12Renderer::StartCameraPathPlayback()
 {
     if (!m_cameraPathLoaded || !m_rayTracingManager)
         return;
+    if (m_cameraPathRecordingActive)
+        StopCameraPathRecording();
     m_cameraPathPlaybackActive = true;
     m_cameraPathFrameIndex = 0;
     m_hasPreviousCameraPose = false;
@@ -808,6 +891,122 @@ void D3D12Renderer::StopCameraPathPlayback()
     }
     m_freeCameraInitialized = false;
     InitializeFreeCamera();
+}
+
+CameraPose D3D12Renderer::GetCurrentCameraPose() const
+{
+    CameraPose pose;
+    if (!m_rayTracingManager)
+        return pose;
+    pose.position = m_rayTracingManager->GetCameraPosition();
+    pose.target = m_rayTracingManager->GetCameraTarget();
+    return pose;
+}
+
+void D3D12Renderer::StartCameraPathRecording()
+{
+    if (!m_rayTracingManager)
+        return;
+    if (m_cameraPathPlaybackActive)
+        StopCameraPathPlayback();
+
+    m_recordedCameraKeyframes.clear();
+    m_cameraRecordingElapsedSeconds = 0.0;
+    m_cameraRecordingNextSampleSeconds =
+        1.0 / c_cameraRecordingFramesPerSecond;
+    m_cameraRecordingPreviousPose = GetCurrentCameraPose();
+    CameraPath::Keyframe first;
+    first.timeSeconds = 0.0;
+    first.pose = m_cameraRecordingPreviousPose;
+    m_recordedCameraKeyframes.push_back(first);
+    m_cameraPathRecordingActive = true;
+    m_cameraRecordingStatus = "Recording camera at 60 Hz...";
+}
+
+void D3D12Renderer::UpdateCameraPathRecording(double deltaSeconds)
+{
+    if (!m_cameraPathRecordingActive || !m_rayTracingManager)
+        return;
+
+    const double frameDuration = (std::max)(deltaSeconds, 1.0e-6);
+    const double frameBeginTime = m_cameraRecordingElapsedSeconds;
+    const CameraPose currentPose = GetCurrentCameraPose();
+    m_cameraRecordingElapsedSeconds += frameDuration;
+    const double sampleInterval =
+        1.0 / c_cameraRecordingFramesPerSecond;
+    while (m_cameraRecordingNextSampleSeconds <=
+           m_cameraRecordingElapsedSeconds + 1.0e-9)
+    {
+        const double interpolation =
+            (m_cameraRecordingNextSampleSeconds - frameBeginTime) /
+            frameDuration;
+        CameraPath::Keyframe keyframe;
+        keyframe.timeSeconds = m_cameraRecordingNextSampleSeconds;
+        keyframe.pose = InterpolateCameraPose(
+            m_cameraRecordingPreviousPose,
+            currentPose,
+            interpolation);
+        m_recordedCameraKeyframes.push_back(keyframe);
+        m_cameraRecordingNextSampleSeconds += sampleInterval;
+    }
+    m_cameraRecordingPreviousPose = currentPose;
+}
+
+bool D3D12Renderer::SaveRecordedCameraPath()
+{
+    std::wstring filePath;
+    if (!Utf8ToWide(m_cameraRecordingPath, filePath))
+    {
+        m_cameraRecordingStatus = "Invalid UTF-8 output path.";
+        return false;
+    }
+
+    std::wstring directory;
+    const HRESULT directoryResult =
+        EnsureParentDirectory(filePath, directory);
+    if (FAILED(directoryResult))
+    {
+        m_cameraRecordingStatus = "Output directory creation failed.";
+        return false;
+    }
+
+    CameraPath recordedPath;
+    if (!recordedPath.SetKeyframes(
+            m_recordedCameraKeyframes,
+            c_cameraRecordingFramesPerSecond,
+            false,
+            &m_cameraPathError) ||
+        !recordedPath.Save(
+            filePath,
+            "Recorded free-camera path for deterministic benchmarks",
+            &m_cameraPathError))
+    {
+        m_cameraRecordingStatus = "Camera path save failed.";
+        return false;
+    }
+
+    m_cameraRecordingStatus =
+        "Saved. Enter this file under Playback path JSON to play it.";
+    return true;
+}
+
+void D3D12Renderer::StopCameraPathRecording()
+{
+    if (!m_cameraPathRecordingActive)
+        return;
+
+    const CameraPose finalPose = GetCurrentCameraPose();
+    if (m_recordedCameraKeyframes.empty() ||
+        m_cameraRecordingElapsedSeconds >
+            m_recordedCameraKeyframes.back().timeSeconds + 1.0e-9)
+    {
+        CameraPath::Keyframe keyframe;
+        keyframe.timeSeconds = m_cameraRecordingElapsedSeconds;
+        keyframe.pose = finalPose;
+        m_recordedCameraKeyframes.push_back(keyframe);
+    }
+    m_cameraPathRecordingActive = false;
+    SaveRecordedCameraPath();
 }
 
 void D3D12Renderer::OnKey(UINT virtualKey, bool pressed)
@@ -887,6 +1086,23 @@ void D3D12Renderer::UpdateFreeCamera(double deltaSeconds)
     const double previousPitch = m_freeCameraPitch;
     m_freeCameraYaw += m_pendingMouseYaw;
     m_freeCameraPitch += m_pendingMousePitch;
+    const double keyboardPrecision =
+        m_keyPressed[VK_CONTROL] ? 0.25 : 1.0;
+    constexpr double degreesToRadians =
+        0.0174532925199432957692;
+    const double keyboardTurnStep =
+        static_cast<double>(m_keyboardTurnSpeedDegrees) *
+        degreesToRadians *
+        keyboardPrecision *
+        deltaSeconds;
+    if (m_keyPressed[VK_LEFT])
+        m_freeCameraYaw -= keyboardTurnStep;
+    if (m_keyPressed[VK_RIGHT])
+        m_freeCameraYaw += keyboardTurnStep;
+    if (m_keyPressed[VK_UP])
+        m_freeCameraPitch += keyboardTurnStep;
+    if (m_keyPressed[VK_DOWN])
+        m_freeCameraPitch -= keyboardTurnStep;
     constexpr double pitchLimit = 1.5533430342749532;
     m_freeCameraPitch =
         (std::max)(-pitchLimit, (std::min)(pitchLimit, m_freeCameraPitch));
@@ -1428,22 +1644,59 @@ void D3D12Renderer::BuildImGuiFrame()
             }
         }
     }
-    if (m_cameraPathLoaded)
+    ImGui::SeparatorText("Camera controls and recording");
+    ImGui::SliderFloat(
+        "Arrow-key turn speed",
+        &m_keyboardTurnSpeedDegrees,
+        5.0f,
+        120.0f,
+        "%.1f deg/s");
+    ImGui::InputText(
+        "Recording output JSON",
+        m_cameraRecordingPath,
+        sizeof(m_cameraRecordingPath));
+    if (m_cameraPathRecordingActive)
+    {
+        if (ImGui::Button("Stop and save camera recording"))
+            StopCameraPathRecording();
+        ImGui::SameLine();
+        ImGui::Text(
+            "%.2f s / %zu poses",
+            m_cameraRecordingElapsedSeconds,
+            m_recordedCameraKeyframes.size());
+    }
+    else if (ImGui::Button("Start camera recording"))
+    {
+        StartCameraPathRecording();
+    }
+    if (!m_cameraRecordingStatus.empty())
+        ImGui::TextDisabled("%s", m_cameraRecordingStatus.c_str());
+
+    ImGui::InputText(
+        "Playback path JSON",
+        m_cameraPlaybackPath,
+        sizeof(m_cameraPlaybackPath));
+    if (!m_cameraPathRecordingActive)
     {
         if (m_cameraPathPlaybackActive)
         {
             if (ImGui::Button("Stop deterministic camera path"))
                 StopCameraPathPlayback();
         }
-        else if (ImGui::Button("Play deterministic 30s path"))
+        else if (ImGui::Button("Load and play camera path"))
         {
-            StartCameraPathPlayback();
+            if (LoadCameraPathForPlayback())
+                StartCameraPathPlayback();
         }
     }
+    if (!m_cameraPlaybackStatus.empty())
+        ImGui::TextDisabled("%s", m_cameraPlaybackStatus.c_str());
     ImGui::TextDisabled(
         m_cameraPathPlaybackActive
         ? "Camera: deterministic JSON path playing"
-        : "Camera: WASD/QE, Shift, right-drag look");
+        : (m_cameraPathRecordingActive
+            ? "Camera: recording free-camera motion at 60 Hz"
+            : "Camera: WASD/QE, Shift, arrows look, Ctrl = precise turn"));
     if (m_rayTracingManager)
     {
         const std::array<float, 3>& cameraPosition =

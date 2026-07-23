@@ -184,6 +184,8 @@
   <ItemGroup>
     <None Include="Config\sponza_camera_path.json" />
     <None Include="Config\sponza_lights.json" />
+    <None Include="CAMERA_PATH_RECORDING.md" />
+    <None Include="Tools\CameraPath\export_to_rtxpt.py" />
     <None Include="ThirdParty\cgltf\LICENSE" />
     <None Include="Shaders\RaytracingCommon.hlsli" />
     <None Include="Shaders\RaytracingScene.hlsli" />
