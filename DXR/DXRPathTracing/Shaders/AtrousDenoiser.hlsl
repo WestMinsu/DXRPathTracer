@@ -261,14 +261,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float relativeError =
         effectiveError / max(abs(centerLuminance), 0.05f);
 
-    // Progressive accumulation eventually becomes more reliable than a
-    // spatial estimate. Skip filtering once both temporal and local spatial
-    // variation are below 1.5%.
-    if (relativeError < 0.015f)
-    {
-        StoreResult(centerColor, centerPixel);
-        return;
-    }
+    // Avoid a binary filtered/unfiltered switch near convergence. Pixels
+    // transition continuously from spatial filtering to their accumulated
+    // center value as the relative error falls.
+    float filterStrength = smoothstep(0.01f, 0.03f, relativeError);
 
     float colorScale = max(
         g_colorSigma * max(
@@ -327,5 +323,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     filteredColor = totalWeight > 1.0e-6f
         ? filteredColor / totalWeight
         : centerColor;
+    filteredColor = lerp(
+        centerColor,
+        filteredColor,
+        filterStrength);
     StoreResult(filteredColor, centerPixel);
 }
