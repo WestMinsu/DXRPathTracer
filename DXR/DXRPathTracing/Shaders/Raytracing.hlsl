@@ -16,6 +16,110 @@ float3 ToneMapForDisplay(float3 linearRadiance)
     return LinearToSrgb(saturate(mapped));
 }
 
+float UnpackGuideRoughness(float packedRoughness)
+{
+    return packedRoughness >= 1.5f
+        ? packedRoughness - 2.0f
+        : packedRoughness;
+}
+
+bool IsDynamicGuide(float4 materialGuide)
+{
+    return materialGuide.a >= 1.5f;
+}
+
+bool TemporalCameraIsMoving()
+{
+    return
+        length(g_cameraPosition - g_previousCameraPosition) > 1.0e-5f ||
+        length(g_cameraTarget - g_previousCameraTarget) > 1.0e-5f;
+}
+
+bool TemporalSceneIsMoving()
+{
+    return g_dynamicObjectMoved != 0u ||
+        TemporalCameraIsMoving();
+}
+
+bool FindValidatedHistoryPixel(
+    float3 worldPosition,
+    float3 currentNormal,
+    float4 currentMaterial,
+    uint2 resolution,
+    out int2 historyPixel)
+{
+    historyPixel = int2(0, 0);
+    float3 previousForwardVector =
+        g_previousCameraTarget - g_previousCameraPosition;
+    float forwardLength = length(previousForwardVector);
+    if (forwardLength <= 1.0e-5f)
+        return false;
+
+    float3 previousForward = previousForwardVector / forwardLength;
+    float3 previousRightVector = cross(c_cameraUp, previousForward);
+    float rightLength = length(previousRightVector);
+    if (rightLength <= 1.0e-5f)
+        return false;
+    float3 previousRight = previousRightVector / rightLength;
+    float3 previousUp = cross(previousForward, previousRight);
+
+    float3 previousViewVector =
+        worldPosition - g_previousCameraPosition;
+    float previousViewDepth =
+        dot(previousViewVector, previousForward);
+    if (previousViewDepth <= c_rayTMin)
+        return false;
+
+    float tanHalfFov = tan(c_verticalFovRadians * 0.5f);
+    float aspectRatio = float(resolution.x) / float(resolution.y);
+    float2 screenPosition = float2(
+        dot(previousViewVector, previousRight) /
+            (previousViewDepth * tanHalfFov * aspectRatio),
+        dot(previousViewVector, previousUp) /
+            (previousViewDepth * tanHalfFov));
+    float2 previousUv = float2(
+        screenPosition.x * 0.5f + 0.5f,
+        0.5f - screenPosition.y * 0.5f);
+    if (any(previousUv < 0.0f) || any(previousUv >= 1.0f))
+        return false;
+
+    historyPixel = int2(previousUv * float2(resolution));
+    float4 previousNormalDepth =
+        g_previousNormalDepth.Load(int3(historyPixel, 0));
+    float4 previousMaterial =
+        g_previousMaterialGuide.Load(int3(historyPixel, 0));
+    if (previousNormalDepth.w < 0.0f || previousMaterial.a < 0.0f)
+        return false;
+
+    float expectedPreviousDepth = length(previousViewVector);
+    float depthTolerance = max(0.02f, expectedPreviousDepth * 0.02f);
+    if (abs(previousNormalDepth.w - expectedPreviousDepth) > depthTolerance)
+        return false;
+
+    float normalAgreement = dot(
+        normalize(currentNormal),
+        normalize(previousNormalDepth.xyz));
+    if (normalAgreement < 0.90f)
+        return false;
+
+    if (length(currentMaterial.rgb - previousMaterial.rgb) > 0.15f)
+        return false;
+    if (abs(
+        UnpackGuideRoughness(currentMaterial.a) -
+        UnpackGuideRoughness(previousMaterial.a)) > 0.15f)
+    {
+        return false;
+    }
+
+    if (g_dynamicObjectMoved != 0u &&
+        (IsDynamicGuide(currentMaterial) ||
+         IsDynamicGuide(previousMaterial)))
+    {
+        return false;
+    }
+    return true;
+}
+
 bool IsLinearDebugView()
 {
     return g_showNormalColor != 0 ||
@@ -66,7 +170,8 @@ void MyRaygenShader_RadianceRay()
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
-    if (g_enableAtrous != 0u)
+    if (g_enableAtrous != 0u ||
+        g_enableTemporalReprojection != 0u)
     {
         // A negative depth marks primary rays that missed geometry.
         g_normalDepth[launchIndex] =
@@ -80,6 +185,9 @@ void MyRaygenShader_RadianceRay()
     float3 sampleSpecularIndirectRadiance =
         float3(0.0f, 0.0f, 0.0f);
     uint dynamicTouched = 0u;
+    float3 primaryRayDirection = float3(0.0f, 0.0f, 0.0f);
+    bool temporalHistoryAttempted = false;
+    bool temporalHistoryAccepted = false;
 
     if (g_sceneType == c_scenePbrGpuValidation)
     {
@@ -111,6 +219,7 @@ void MyRaygenShader_RadianceRay()
         ray.Origin = g_cameraPosition;
         ray.Direction = normalize(
             cameraForward + cameraRight * screenPosition.x + cameraUp * screenPosition.y);
+        primaryRayDirection = ray.Direction;
         ray.TMin = c_rayTMin;
         ray.TMax = c_rayTMax;
 
@@ -169,25 +278,101 @@ void MyRaygenShader_RadianceRay()
         dynamicTouched != 0u;
     if (g_sampleIndex > 0)
     {
-        float4 previousAccumulation = g_accumulation[launchIndex];
+        int2 historyPixel = int2(launchIndex);
+        bool historyValid = true;
+        if (g_enableTemporalReprojection != 0u)
+        {
+            temporalHistoryAttempted = true;
+            float4 currentMaterial = g_materialGuide[launchIndex];
+            if (TemporalCameraIsMoving())
+            {
+                float4 currentNormalDepth = g_normalDepth[launchIndex];
+                historyValid =
+                    currentNormalDepth.w >= 0.0f &&
+                    currentMaterial.a >= 0.0f &&
+                    FindValidatedHistoryPixel(
+                        g_cameraPosition +
+                            primaryRayDirection * currentNormalDepth.w,
+                        currentNormalDepth.xyz,
+                        currentMaterial,
+                        launchDim,
+                        historyPixel);
+            }
+            else if (g_dynamicObjectMoved != 0u)
+            {
+                float4 previousMaterial =
+                    g_previousMaterialGuide.Load(
+                        int3(historyPixel, 0));
+                historyValid =
+                    !IsDynamicGuide(currentMaterial) &&
+                    !IsDynamicGuide(previousMaterial);
+            }
+            else
+            {
+                // With a static camera and static geometry, sub-pixel ray
+                // jitter changes texture and normal-map samples even though
+                // the same screen pixel is still valid. Reuse its history
+                // directly instead of applying unstable geometric tests.
+                historyValid = true;
+            }
+        }
+
+        float4 previousAccumulation =
+            g_enableTemporalReprojection != 0u
+            ? g_previousAccumulation.Load(int3(historyPixel, 0))
+            : g_accumulation[launchIndex];
         bool previousDynamicInvalidation =
             previousAccumulation.a < 0.0f;
-        if (!dynamicInvalidation && !previousDynamicInvalidation)
+        if (historyValid &&
+            !dynamicInvalidation &&
+            !previousDynamicInvalidation)
         {
-            accumulatedColor += previousAccumulation.rgb;
+            temporalHistoryAccepted =
+                g_enableTemporalReprojection != 0u;
+            float previousSampleCount =
+                max(abs(previousAccumulation.a), 1.0f);
+            float retainedHistoryCount = previousSampleCount;
+            if (g_enableTemporalReprojection != 0u &&
+                TemporalSceneIsMoving())
+            {
+                retainedHistoryCount = min(
+                    previousSampleCount,
+                    31.0f);
+            }
+            float historyScale =
+                retainedHistoryCount / previousSampleCount;
+            accumulatedColor +=
+                previousAccumulation.rgb * historyScale;
             if (g_enableAtrous != 0u)
             {
-                accumulatedDiffuseIndirect +=
-                    g_diffuseIndirectAccumulation[launchIndex].rgb;
-                accumulatedSpecularIndirect +=
-                    g_specularIndirectAccumulation[launchIndex].rgb;
-                accumulatedDiffuseMoments +=
-                    g_diffuseLuminanceMoments[launchIndex];
-                accumulatedSpecularMoments +=
-                    g_specularLuminanceMoments[launchIndex];
+                if (g_enableTemporalReprojection != 0u)
+                {
+                    accumulatedDiffuseIndirect +=
+                        g_previousDiffuseIndirect.Load(
+                            int3(historyPixel, 0)).rgb * historyScale;
+                    accumulatedSpecularIndirect +=
+                        g_previousSpecularIndirect.Load(
+                            int3(historyPixel, 0)).rgb * historyScale;
+                    accumulatedDiffuseMoments +=
+                        g_previousDiffuseMoments.Load(
+                            int3(historyPixel, 0)) * historyScale;
+                    accumulatedSpecularMoments +=
+                        g_previousSpecularMoments.Load(
+                            int3(historyPixel, 0)) * historyScale;
+                }
+                else
+                {
+                    accumulatedDiffuseIndirect +=
+                        g_diffuseIndirectAccumulation[launchIndex].rgb;
+                    accumulatedSpecularIndirect +=
+                        g_specularIndirectAccumulation[launchIndex].rgb;
+                    accumulatedDiffuseMoments +=
+                        g_diffuseLuminanceMoments[launchIndex];
+                    accumulatedSpecularMoments +=
+                        g_specularLuminanceMoments[launchIndex];
+                }
             }
-            localSampleCount =
-                max(abs(previousAccumulation.a), 1.0f) + 1.0f;
+            localSampleCount = retainedHistoryCount + 1.0f;
         }
     }
 
@@ -207,6 +392,26 @@ void MyRaygenShader_RadianceRay()
         g_specularLuminanceMoments[launchIndex] =
             accumulatedSpecularMoments;
     }
+    if (g_temporalDebugView == 1u)
+    {
+        float normalizedHistory = saturate(
+            (localSampleCount - 1.0f) / 31.0f);
+        g_output[launchIndex] = float4(
+            normalizedHistory.xxx,
+            1.0f);
+        return;
+    }
+    if (g_temporalDebugView == 2u)
+    {
+        float3 debugColor = temporalHistoryAttempted
+            ? (temporalHistoryAccepted
+                ? float3(0.0f, 1.0f, 0.0f)
+                : float3(1.0f, 0.0f, 0.0f))
+            : float3(0.0f, 0.0f, 1.0f);
+        g_output[launchIndex] = float4(debugColor, 1.0f);
+        return;
+    }
+
     float3 averageRadiance = accumulatedColor / localSampleCount;
     g_output[launchIndex] = float4(ToneMapForDisplay(averageRadiance), 1.0f);
 }
@@ -292,14 +497,17 @@ void MyClosestHitShader_RadianceRay(
             SurfaceEmission(globalPrimitiveIndex);
     }
 
-    if (payload.depth == 0u && g_enableAtrous != 0u)
+    if (payload.depth == 0u &&
+        (g_enableAtrous != 0u ||
+         g_enableTemporalReprojection != 0u))
     {
         g_normalDepth[DispatchRaysIndex().xy] =
             float4(normal, RayTCurrent());
         g_materialGuide[DispatchRaysIndex().xy] =
             float4(
                 surfaceMaterial.baseColor,
-                surfaceMaterial.roughness);
+                surfaceMaterial.roughness +
+                    (InstanceID() == 1u ? 2.0f : 0.0f));
     }
 
     float3 normalColor = normal * 0.5f + 0.5f;

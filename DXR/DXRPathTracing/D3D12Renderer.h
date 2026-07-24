@@ -58,6 +58,17 @@ public:
     {
         m_enableAtrous = enabled;
     }
+    void SetInitialTemporalReprojectionEnabled(bool enabled)
+    {
+        m_enableTemporalReprojection = enabled;
+    }
+    void SetInitialTemporalDebugView(UINT debugView)
+    {
+        m_temporalDebugView = static_cast<int>(
+            debugView <= RayTracingManager::c_temporalDebugRejectionMask
+            ? debugView
+            : RayTracingManager::c_temporalDebugNone);
+    }
     void SetInitialAtrousIterationCount(UINT iterationCount)
     {
         m_atrousIterations = static_cast<int>(
@@ -215,7 +226,10 @@ private:
     bool m_showNormalColor = false;
     bool m_enableAccumulation = true;
     bool m_enableRussianRoulette = false;
+    bool m_enableTemporalReprojection = false;
     bool m_enableAtrous = false;
+    int m_temporalDebugView = static_cast<int>(
+        RayTracingManager::c_temporalDebugNone);
     int m_atrousIterations = 2;
     float m_atrousColorSigma = 4.0f;
     int m_lightingMode = static_cast<int>(

@@ -63,7 +63,23 @@ namespace
         c_atrousFilterBUavIndex + 1;
     constexpr UINT c_atrousOutputUavIndex =
         c_atrousFilteredDiffuseUavIndex + 1;
-    constexpr UINT c_descriptorCount = c_atrousOutputUavIndex + 1;
+    constexpr UINT c_temporalPreviousAccumulationSrvIndex =
+        c_atrousOutputUavIndex + 1;
+    constexpr UINT c_temporalPreviousNormalDepthSrvIndex =
+        c_temporalPreviousAccumulationSrvIndex + 1;
+    constexpr UINT c_temporalPreviousMaterialGuideSrvIndex =
+        c_temporalPreviousNormalDepthSrvIndex + 1;
+    constexpr UINT c_temporalPreviousDiffuseSrvIndex =
+        c_temporalPreviousMaterialGuideSrvIndex + 1;
+    constexpr UINT c_temporalPreviousSpecularSrvIndex =
+        c_temporalPreviousDiffuseSrvIndex + 1;
+    constexpr UINT c_temporalPreviousDiffuseMomentsSrvIndex =
+        c_temporalPreviousSpecularSrvIndex + 1;
+    constexpr UINT c_temporalPreviousSpecularMomentsSrvIndex =
+        c_temporalPreviousDiffuseMomentsSrvIndex + 1;
+    constexpr UINT c_temporalHistorySrvCount = 7;
+    constexpr UINT c_descriptorCount =
+        c_temporalPreviousSpecularMomentsSrvIndex + 1;
     constexpr UINT c_atrousFilterChannelDiffuse = 0;
     constexpr UINT c_atrousFilterChannelSpecular = 1;
     constexpr UINT c_statisticsShadowRayIndex =
@@ -116,8 +132,14 @@ namespace
         float areaLightPower;
         float environmentPower;
         UINT enableAtrous;
+        UINT temporalPadding0[2];
+        float previousCameraPosition[3];
+        UINT temporalPadding1;
+        float previousCameraTarget[3];
+        UINT enableTemporalReprojection;
+        UINT temporalDebugView;
     };
-    static_assert(sizeof(RenderSettingsConstants) == 30 * sizeof(std::uint32_t));
+    static_assert(sizeof(RenderSettingsConstants) == 41 * sizeof(std::uint32_t));
 
     struct AtrousSettingsConstants
     {
@@ -620,6 +642,13 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         !m_specularIndirectAccumulationTexture ||
         !m_diffuseLuminanceMomentsTexture ||
         !m_specularLuminanceMomentsTexture ||
+        !m_previousAccumulationTexture ||
+        !m_previousNormalDepthTexture ||
+        !m_previousMaterialGuideTexture ||
+        !m_previousDiffuseIndirectAccumulationTexture ||
+        !m_previousSpecularIndirectAccumulationTexture ||
+        !m_previousDiffuseLuminanceMomentsTexture ||
+        !m_previousSpecularLuminanceMomentsTexture ||
         !m_statisticsBuffer ||
         !m_statisticsResetBuffer || !m_statisticsReadbackBuffer)
     {
@@ -628,6 +657,49 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
 
     if (!UpdateTopLevelAccelerationStructure(commandList))
         return;
+
+    const bool shouldAccumulate =
+        m_enableAccumulation &&
+        !m_showNormalColor &&
+        !(m_sceneType == c_scenePbrGgx &&
+          m_pbrDebugView != c_pbrDebugBeauty);
+    const bool useTemporalHistory =
+        shouldAccumulate && m_enableTemporalReprojection;
+
+    WriteTemporalHistoryDescriptors();
+    ID3D12Resource* previousHistoryResources[c_temporalHistorySrvCount] =
+    {
+        m_previousAccumulationTexture.Get(),
+        m_previousNormalDepthTexture.Get(),
+        m_previousMaterialGuideTexture.Get(),
+        m_previousDiffuseIndirectAccumulationTexture.Get(),
+        m_previousSpecularIndirectAccumulationTexture.Get(),
+        m_previousDiffuseLuminanceMomentsTexture.Get(),
+        m_previousSpecularLuminanceMomentsTexture.Get()
+    };
+    D3D12_RESOURCE_BARRIER previousHistoryTransitions
+        [c_temporalHistorySrvCount] = {};
+    if (useTemporalHistory)
+    {
+        for (UINT index = 0;
+             index < c_temporalHistorySrvCount;
+             ++index)
+        {
+            previousHistoryTransitions[index].Type =
+                D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            previousHistoryTransitions[index].Transition.pResource =
+                previousHistoryResources[index];
+            previousHistoryTransitions[index].Transition.StateBefore =
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            previousHistoryTransitions[index].Transition.StateAfter =
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+            previousHistoryTransitions[index].Transition.Subresource =
+                D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        }
+        commandList->ResourceBarrier(
+            c_temporalHistorySrvCount,
+            previousHistoryTransitions);
+    }
 
     if (m_enableStatistics)
     {
@@ -658,7 +730,6 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     commandList->SetComputeRootShaderResourceView(1, m_topLevelAS->GetGPUVirtualAddress());
     commandList->SetComputeRootShaderResourceView(2, m_vertexBuffer->GetGPUVirtualAddress());
     commandList->SetComputeRootShaderResourceView(3, m_indexBuffer->GetGPUVirtualAddress());
-    const bool shouldAccumulate = m_enableAccumulation && !m_showNormalColor && !(m_sceneType == c_scenePbrGgx && m_pbrDebugView != c_pbrDebugBeauty);
     RenderSettingsConstants renderSettings = {};
     renderSettings.showNormalColor = m_showNormalColor ? 1u : 0u;
     renderSettings.frameIndex = m_frameIndex++;
@@ -694,7 +765,18 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     renderSettings.areaLightPower = m_areaLightPower;
     renderSettings.environmentPower = m_environmentPower;
     renderSettings.enableAtrous = m_enableAtrous ? 1u : 0u;
-    commandList->SetComputeRoot32BitConstants(4, 30, &renderSettings, 0);
+    std::copy(
+        m_previousCameraPosition.begin(),
+        m_previousCameraPosition.end(),
+        renderSettings.previousCameraPosition);
+    std::copy(
+        m_previousCameraTarget.begin(),
+        m_previousCameraTarget.end(),
+        renderSettings.previousCameraTarget);
+    renderSettings.enableTemporalReprojection =
+        useTemporalHistory ? 1u : 0u;
+    renderSettings.temporalDebugView = m_temporalDebugView;
+    commandList->SetComputeRoot32BitConstants(4, 41, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
     commandList->SetComputeRootDescriptorTable(5, environmentHandle);
@@ -717,6 +799,14 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     commandList->SetComputeRootShaderResourceView(
         12,
         m_environmentDistributionBuffer->GetGPUVirtualAddress());
+    D3D12_GPU_DESCRIPTOR_HANDLE temporalHistoryHandle =
+        m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
+    temporalHistoryHandle.ptr +=
+        static_cast<SIZE_T>(c_temporalPreviousAccumulationSrvIndex) *
+        m_descriptorSize;
+    commandList->SetComputeRootDescriptorTable(
+        13,
+        temporalHistoryHandle);
     commandList->SetPipelineState1(m_stateObject.Get());
 
     D3D12_DISPATCH_RAYS_DESC dispatchDesc = {};
@@ -762,8 +852,50 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         commandList->ResourceBarrier(1, &statisticsToCopy);
     }
 
-    if (m_enableAtrous && shouldAccumulate)
+    if (m_enableAtrous &&
+        shouldAccumulate &&
+        m_temporalDebugView == c_temporalDebugNone)
         DispatchAtrousFilter(commandList);
+
+    if (useTemporalHistory)
+    {
+        for (UINT index = 0;
+             index < c_temporalHistorySrvCount;
+             ++index)
+        {
+            std::swap(
+                previousHistoryTransitions[index].Transition.StateBefore,
+                previousHistoryTransitions[index].Transition.StateAfter);
+        }
+        commandList->ResourceBarrier(
+            c_temporalHistorySrvCount,
+            previousHistoryTransitions);
+
+        std::swap(
+            m_accumulationTexture,
+            m_previousAccumulationTexture);
+        std::swap(
+            m_normalDepthTexture,
+            m_previousNormalDepthTexture);
+        std::swap(
+            m_materialGuideTexture,
+            m_previousMaterialGuideTexture);
+        std::swap(
+            m_diffuseIndirectAccumulationTexture,
+            m_previousDiffuseIndirectAccumulationTexture);
+        std::swap(
+            m_specularIndirectAccumulationTexture,
+            m_previousSpecularIndirectAccumulationTexture);
+        std::swap(
+            m_diffuseLuminanceMomentsTexture,
+            m_previousDiffuseLuminanceMomentsTexture);
+        std::swap(
+            m_specularLuminanceMomentsTexture,
+            m_previousSpecularLuminanceMomentsTexture);
+    }
+
+    m_previousCameraPosition = m_cameraPosition;
+    m_previousCameraTarget = m_cameraTarget;
 
     if (shouldAccumulate)
     {
@@ -1010,6 +1142,13 @@ void RayTracingManager::DispatchAtrousFilter(
         inputTransitions);
 }
 
+void RayTracingManager::ResetAccumulation()
+{
+    m_accumulatedSampleCount = 0;
+    m_previousCameraPosition = m_cameraPosition;
+    m_previousCameraTarget = m_cameraTarget;
+}
+
 bool RayTracingManager::Resize(UINT width, UINT height)
 {
     if (width == 0 || height == 0)
@@ -1067,6 +1206,22 @@ void RayTracingManager::SetAtrousEnabled(bool enabled)
 
     m_enableAtrous = enabled;
     ResetAccumulation();
+}
+
+void RayTracingManager::SetTemporalReprojectionEnabled(bool enabled)
+{
+    if (m_enableTemporalReprojection == enabled)
+        return;
+
+    m_enableTemporalReprojection = enabled;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetTemporalDebugView(UINT debugView)
+{
+    m_temporalDebugView = debugView <= c_temporalDebugRejectionMask
+        ? debugView
+        : c_temporalDebugNone;
 }
 
 void RayTracingManager::SetLightingMode(UINT lightingMode)
@@ -1156,7 +1311,8 @@ bool RayTracingManager::SetCamera(
     m_cameraPosition = position;
     m_cameraTarget = target;
     m_autoFrameCamera = false;
-    ResetAccumulation();
+    if (!m_enableTemporalReprojection)
+        ResetAccumulation();
     return true;
 }
 
@@ -1252,12 +1408,19 @@ bool RayTracingManager::CreateOutputTexture()
 
     m_outputTexture.Reset();
     m_accumulationTexture.Reset();
+    m_previousAccumulationTexture.Reset();
     m_normalDepthTexture.Reset();
+    m_previousNormalDepthTexture.Reset();
     m_materialGuideTexture.Reset();
+    m_previousMaterialGuideTexture.Reset();
     m_diffuseIndirectAccumulationTexture.Reset();
+    m_previousDiffuseIndirectAccumulationTexture.Reset();
     m_specularIndirectAccumulationTexture.Reset();
+    m_previousSpecularIndirectAccumulationTexture.Reset();
     m_diffuseLuminanceMomentsTexture.Reset();
+    m_previousDiffuseLuminanceMomentsTexture.Reset();
     m_specularLuminanceMomentsTexture.Reset();
+    m_previousSpecularLuminanceMomentsTexture.Reset();
     m_atrousFilterTextureA.Reset();
     m_atrousFilterTextureB.Reset();
     m_atrousFilteredDiffuseTexture.Reset();
@@ -1324,9 +1487,25 @@ bool RayTracingManager::CreateOutputTexture()
 
     if (!createFloatTexture(
         accumulationDesc,
+        m_previousAccumulationTexture,
+        L"Raytracing previous accumulation texture",
+        L"Raytracing previous accumulation texture creation failed."))
+    {
+        return false;
+    }
+    if (!createFloatTexture(
+        accumulationDesc,
         m_normalDepthTexture,
         L"Raytracing primary normal and depth",
         L"Raytracing normal/depth texture creation failed."))
+    {
+        return false;
+    }
+    if (!createFloatTexture(
+        accumulationDesc,
+        m_previousNormalDepthTexture,
+        L"Raytracing previous primary normal and depth",
+        L"Raytracing previous normal/depth texture creation failed."))
     {
         return false;
     }
@@ -1341,6 +1520,14 @@ bool RayTracingManager::CreateOutputTexture()
         return false;
     }
     if (!createFloatTexture(
+        materialGuideDesc,
+        m_previousMaterialGuideTexture,
+        L"Raytracing previous primary material guide",
+        L"Raytracing previous material guide texture creation failed."))
+    {
+        return false;
+    }
+    if (!createFloatTexture(
         accumulationDesc,
         m_diffuseIndirectAccumulationTexture,
         L"Raytracing diffuse indirect accumulation texture",
@@ -1350,9 +1537,25 @@ bool RayTracingManager::CreateOutputTexture()
     }
     if (!createFloatTexture(
         accumulationDesc,
+        m_previousDiffuseIndirectAccumulationTexture,
+        L"Raytracing previous diffuse indirect accumulation texture",
+        L"Raytracing previous diffuse accumulation creation failed."))
+    {
+        return false;
+    }
+    if (!createFloatTexture(
+        accumulationDesc,
         m_specularIndirectAccumulationTexture,
         L"Raytracing specular indirect accumulation texture",
         L"Raytracing specular indirect accumulation texture creation failed."))
+    {
+        return false;
+    }
+    if (!createFloatTexture(
+        accumulationDesc,
+        m_previousSpecularIndirectAccumulationTexture,
+        L"Raytracing previous specular indirect accumulation texture",
+        L"Raytracing previous specular accumulation creation failed."))
     {
         return false;
     }
@@ -1368,9 +1571,25 @@ bool RayTracingManager::CreateOutputTexture()
     }
     if (!createFloatTexture(
         momentsDesc,
+        m_previousDiffuseLuminanceMomentsTexture,
+        L"Raytracing previous diffuse luminance moments",
+        L"Raytracing previous diffuse moments creation failed."))
+    {
+        return false;
+    }
+    if (!createFloatTexture(
+        momentsDesc,
         m_specularLuminanceMomentsTexture,
         L"Raytracing specular luminance moments",
         L"Raytracing specular moments texture creation failed."))
+    {
+        return false;
+    }
+    if (!createFloatTexture(
+        momentsDesc,
+        m_previousSpecularLuminanceMomentsTexture,
+        L"Raytracing previous specular luminance moments",
+        L"Raytracing previous specular moments creation failed."))
     {
         return false;
     }
@@ -1586,7 +1805,110 @@ bool RayTracingManager::CreateOutputTexture()
         }
     }
 
+    WriteTemporalHistoryDescriptors();
     return true;
+}
+
+void RayTracingManager::WriteTemporalHistoryDescriptors()
+{
+    if (!m_device || !m_descriptorHeap)
+        return;
+
+    const auto descriptorHandle = [&](UINT descriptorIndex)
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE handle =
+            m_descriptorHeap->GetCPUDescriptorHandleForHeapStart();
+        handle.ptr +=
+            static_cast<SIZE_T>(descriptorIndex) * m_descriptorSize;
+        return handle;
+    };
+
+    D3D12_UNORDERED_ACCESS_VIEW_DESC float4UavDesc = {};
+    float4UavDesc.Format = c_accumulationFormat;
+    float4UavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    D3D12_UNORDERED_ACCESS_VIEW_DESC materialUavDesc = float4UavDesc;
+    materialUavDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    D3D12_UNORDERED_ACCESS_VIEW_DESC momentsUavDesc = float4UavDesc;
+    momentsUavDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
+
+    m_device->CreateUnorderedAccessView(
+        m_accumulationTexture.Get(), nullptr, &float4UavDesc,
+        descriptorHandle(1));
+    m_device->CreateUnorderedAccessView(
+        m_normalDepthTexture.Get(), nullptr, &float4UavDesc,
+        descriptorHandle(2));
+    m_device->CreateUnorderedAccessView(
+        m_materialGuideTexture.Get(), nullptr, &materialUavDesc,
+        descriptorHandle(3));
+    m_device->CreateUnorderedAccessView(
+        m_diffuseIndirectAccumulationTexture.Get(), nullptr, &float4UavDesc,
+        descriptorHandle(4));
+    m_device->CreateUnorderedAccessView(
+        m_specularIndirectAccumulationTexture.Get(), nullptr, &float4UavDesc,
+        descriptorHandle(5));
+    m_device->CreateUnorderedAccessView(
+        m_diffuseLuminanceMomentsTexture.Get(), nullptr, &momentsUavDesc,
+        descriptorHandle(6));
+    m_device->CreateUnorderedAccessView(
+        m_specularLuminanceMomentsTexture.Get(), nullptr, &momentsUavDesc,
+        descriptorHandle(7));
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC float4SrvDesc = {};
+    float4SrvDesc.Shader4ComponentMapping =
+        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    float4SrvDesc.Format = c_accumulationFormat;
+    float4SrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    float4SrvDesc.Texture2D.MostDetailedMip = 0;
+    float4SrvDesc.Texture2D.MipLevels = 1;
+    float4SrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+    D3D12_SHADER_RESOURCE_VIEW_DESC materialSrvDesc = float4SrvDesc;
+    materialSrvDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    D3D12_SHADER_RESOURCE_VIEW_DESC momentsSrvDesc = float4SrvDesc;
+    momentsSrvDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
+
+    m_device->CreateShaderResourceView(
+        m_diffuseIndirectAccumulationTexture.Get(), &float4SrvDesc,
+        descriptorHandle(c_atrousDiffuseIndirectSrvIndex));
+    m_device->CreateShaderResourceView(
+        m_specularIndirectAccumulationTexture.Get(), &float4SrvDesc,
+        descriptorHandle(c_atrousSpecularIndirectSrvIndex));
+    m_device->CreateShaderResourceView(
+        m_normalDepthTexture.Get(), &float4SrvDesc,
+        descriptorHandle(c_atrousNormalDepthSrvIndex));
+    m_device->CreateShaderResourceView(
+        m_materialGuideTexture.Get(), &materialSrvDesc,
+        descriptorHandle(c_atrousMaterialGuideSrvIndex));
+    m_device->CreateShaderResourceView(
+        m_diffuseLuminanceMomentsTexture.Get(), &momentsSrvDesc,
+        descriptorHandle(c_atrousDiffuseMomentsSrvIndex));
+    m_device->CreateShaderResourceView(
+        m_specularLuminanceMomentsTexture.Get(), &momentsSrvDesc,
+        descriptorHandle(c_atrousSpecularMomentsSrvIndex));
+    m_device->CreateShaderResourceView(
+        m_accumulationTexture.Get(), &float4SrvDesc,
+        descriptorHandle(c_atrousTotalSrvIndex));
+
+    m_device->CreateShaderResourceView(
+        m_previousAccumulationTexture.Get(), &float4SrvDesc,
+        descriptorHandle(c_temporalPreviousAccumulationSrvIndex));
+    m_device->CreateShaderResourceView(
+        m_previousNormalDepthTexture.Get(), &float4SrvDesc,
+        descriptorHandle(c_temporalPreviousNormalDepthSrvIndex));
+    m_device->CreateShaderResourceView(
+        m_previousMaterialGuideTexture.Get(), &materialSrvDesc,
+        descriptorHandle(c_temporalPreviousMaterialGuideSrvIndex));
+    m_device->CreateShaderResourceView(
+        m_previousDiffuseIndirectAccumulationTexture.Get(), &float4SrvDesc,
+        descriptorHandle(c_temporalPreviousDiffuseSrvIndex));
+    m_device->CreateShaderResourceView(
+        m_previousSpecularIndirectAccumulationTexture.Get(), &float4SrvDesc,
+        descriptorHandle(c_temporalPreviousSpecularSrvIndex));
+    m_device->CreateShaderResourceView(
+        m_previousDiffuseLuminanceMomentsTexture.Get(), &momentsSrvDesc,
+        descriptorHandle(c_temporalPreviousDiffuseMomentsSrvIndex));
+    m_device->CreateShaderResourceView(
+        m_previousSpecularLuminanceMomentsTexture.Get(), &momentsSrvDesc,
+        descriptorHandle(c_temporalPreviousSpecularMomentsSrvIndex));
 }
 
 bool RayTracingManager::CreateStatisticsResources()
@@ -1888,7 +2210,15 @@ bool RayTracingManager::CreateGlobalRootSignature()
     materialTextureRange.OffsetInDescriptorsFromTableStart =
         D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
 
-    D3D12_ROOT_PARAMETER rootParameters[13] = {};
+    D3D12_DESCRIPTOR_RANGE temporalHistoryRange = {};
+    temporalHistoryRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    temporalHistoryRange.NumDescriptors = c_temporalHistorySrvCount;
+    temporalHistoryRange.BaseShaderRegister = 265;
+    temporalHistoryRange.RegisterSpace = 0;
+    temporalHistoryRange.OffsetInDescriptorsFromTableStart =
+        D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND;
+
+    D3D12_ROOT_PARAMETER rootParameters[14] = {};
     rootParameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParameters[0].DescriptorTable.NumDescriptorRanges =
         _countof(outputRanges);
@@ -1913,7 +2243,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 30;
+    rootParameters[4].Constants.Num32BitValues = 41;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     rootParameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -1955,6 +2285,13 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[12].Descriptor.ShaderRegister = 264;
     rootParameters[12].Descriptor.RegisterSpace = 0;
     rootParameters[12].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    rootParameters[13].ParameterType =
+        D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParameters[13].DescriptorTable.NumDescriptorRanges = 1;
+    rootParameters[13].DescriptorTable.pDescriptorRanges =
+        &temporalHistoryRange;
+    rootParameters[13].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_STATIC_SAMPLER_DESC staticSamplers[2] = {};
     staticSamplers[0].Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;

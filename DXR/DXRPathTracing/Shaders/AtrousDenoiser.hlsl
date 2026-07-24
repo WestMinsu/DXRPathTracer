@@ -39,6 +39,13 @@ float Luminance(float3 color)
     return dot(color, float3(0.2126f, 0.7152f, 0.0722f));
 }
 
+float GuideRoughness(float packedRoughness)
+{
+    return packedRoughness >= 1.5f
+        ? packedRoughness - 2.0f
+        : packedRoughness;
+}
+
 float3 LoadAverageRadiance(Texture2D<float4> textureResource, int2 pixel)
 {
     float4 value = textureResource.Load(int3(pixel, 0));
@@ -222,7 +229,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             float albedoWeight = exp(
                 -length(localMaterial.rgb - centerMaterial.rgb) / 0.12f);
             float roughnessWeight = exp(
-                -abs(localMaterial.a - centerMaterial.a) / 0.10f);
+                -abs(
+                    GuideRoughness(localMaterial.a) -
+                    GuideRoughness(centerMaterial.a)) / 0.10f);
             float spatialWeight =
                 c_kernel[localX + 1] * c_kernel[localY + 1];
             float guideWeight =
@@ -300,7 +309,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             float albedoWeight = exp(
                 -length(sampleMaterial.rgb - centerMaterial.rgb) / 0.12f);
             float roughnessWeight = exp(
-                -abs(sampleMaterial.a - centerMaterial.a) / 0.10f);
+                -abs(
+                    GuideRoughness(sampleMaterial.a) -
+                    GuideRoughness(centerMaterial.a)) / 0.10f);
             float colorWeight = exp(
                 -abs(Luminance(sampleColor) - centerLuminance) /
                 colorScale);

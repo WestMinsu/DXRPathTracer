@@ -54,6 +54,9 @@ public:
     static constexpr UINT c_pbrDebugDepth = 4;
     static constexpr UINT c_pbrDebugMaterialId = 5;
     static constexpr UINT c_pbrDebugNormal = 6;
+    static constexpr UINT c_temporalDebugNone = 0;
+    static constexpr UINT c_temporalDebugHistoryLength = 1;
+    static constexpr UINT c_temporalDebugRejectionMask = 2;
 
     bool Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height);
     bool Resize(UINT width, UINT height);
@@ -62,6 +65,8 @@ public:
     void SetMaxBounce(UINT maxBounce);
     void SetRussianRouletteEnabled(bool enabled);
     void SetLightingMode(UINT lightingMode);
+    void SetTemporalReprojectionEnabled(bool enabled);
+    void SetTemporalDebugView(UINT debugView);
     void SetAtrousEnabled(bool enabled);
     void SetAtrousIterationCount(UINT iterationCount)
     {
@@ -123,12 +128,17 @@ public:
     void ReadFrameStatistics();
     void SetValidationSeed(UINT validationSeed) { m_validationSeed = validationSeed; }
     void SetExposure(float exposure);
-    void ResetAccumulation() { m_accumulatedSampleCount = 0; }
+    void ResetAccumulation();
     UINT GetAccumulatedSampleCount() const { return m_accumulatedSampleCount; }
     const FrameStatistics& GetFrameStatistics() const { return m_frameStatistics; }
 
     ID3D12Resource* GetOutputResource() const { return m_outputTexture.Get(); }
-    ID3D12Resource* GetAccumulationResource() const { return m_accumulationTexture.Get(); }
+    ID3D12Resource* GetAccumulationResource() const
+    {
+        return m_enableTemporalReprojection
+            ? m_previousAccumulationTexture.Get()
+            : m_accumulationTexture.Get();
+    }
     ID3D12DescriptorHeap* GetDescriptorHeap() const { return m_descriptorHeap.Get(); }
     ID3D12RootSignature* GetGlobalRootSignature() const { return m_globalRootSignature.Get(); }
     ID3D12StateObject* GetStateObject() const { return m_stateObject.Get(); }
@@ -204,6 +214,7 @@ private:
     std::wstring GetCompiledAtrousShaderPath() const;
     std::wstring GetEnvironmentMapPath() const;
     void DispatchAtrousFilter(ID3D12GraphicsCommandList4* commandList);
+    void WriteTemporalHistoryDescriptors();
     bool ReportFailure(HRESULT hr, const wchar_t* message) const;
     void ReportMessage(const std::wstring& message) const;
 
@@ -223,7 +234,9 @@ private:
     bool m_showNormalColor = true;
     bool m_enableAccumulation = true;
     bool m_enableRussianRoulette = false;
+    bool m_enableTemporalReprojection = false;
     bool m_enableAtrous = false;
+    UINT m_temporalDebugView = c_temporalDebugNone;
     UINT m_atrousIterationCount = 2;
     float m_atrousColorSigma = 4.0f;
     UINT m_lightingMode = c_lightingModeBsdf;
@@ -266,20 +279,35 @@ private:
     std::array<float, 3> m_sceneBoundsMax = { 0.0f, 0.0f, 0.0f };
     std::array<float, 3> m_cameraPosition = { 0.0f, 0.15f, -1.2f };
     std::array<float, 3> m_cameraTarget = { 0.0f, 0.0f, 0.0f };
+    std::array<float, 3> m_previousCameraPosition =
+        { 0.0f, 0.15f, -1.2f };
+    std::array<float, 3> m_previousCameraTarget =
+        { 0.0f, 0.0f, 0.0f };
 
     Microsoft::WRL::ComPtr<ID3D12Device5> m_device;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_outputTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_accumulationTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_previousAccumulationTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_normalDepthTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_previousNormalDepthTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_materialGuideTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_previousMaterialGuideTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource>
         m_diffuseIndirectAccumulationTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource>
+        m_previousDiffuseIndirectAccumulationTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource>
         m_specularIndirectAccumulationTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource>
+        m_previousSpecularIndirectAccumulationTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource>
         m_diffuseLuminanceMomentsTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource>
+        m_previousDiffuseLuminanceMomentsTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource>
         m_specularLuminanceMomentsTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource>
+        m_previousSpecularLuminanceMomentsTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_atrousFilterTextureA;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_atrousFilterTextureB;
     Microsoft::WRL::ComPtr<ID3D12Resource>

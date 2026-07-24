@@ -29,7 +29,9 @@ namespace
         float pbrRoughness = 0.35f;
         bool overridePbrMaterial = false;
         bool enableRussianRoulette = false;
+        bool enableTemporalReprojection = false;
         bool enableAtrous = false;
+        UINT temporalDebugView = RayTracingManager::c_temporalDebugNone;
         UINT atrousIterations = 2;
         float atrousColorSigma = 4.0f;
         UINT lightingMode = RayTracingManager::c_lightingModeBsdf;
@@ -186,6 +188,34 @@ namespace
             {
                 gOptions.enableAtrous =
                     _wtoi(arguments[++index]) != 0;
+            }
+            else if (argument == L"--temporal-reprojection" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.enableTemporalReprojection =
+                    _wtoi(arguments[++index]) != 0;
+            }
+            else if (argument == L"--temporal-debug" &&
+                     index + 1 < argumentCount)
+            {
+                const std::wstring debugView = arguments[++index];
+                if (debugView == L"history" ||
+                    debugView == L"history-length")
+                {
+                    gOptions.temporalDebugView =
+                        RayTracingManager::c_temporalDebugHistoryLength;
+                }
+                else if (debugView == L"rejection" ||
+                         debugView == L"rejection-mask")
+                {
+                    gOptions.temporalDebugView =
+                        RayTracingManager::c_temporalDebugRejectionMask;
+                }
+                else
+                {
+                    gOptions.temporalDebugView =
+                        RayTracingManager::c_temporalDebugNone;
+                }
             }
             else if (argument == L"--atrous-iterations" &&
                      index + 1 < argumentCount)
@@ -481,6 +511,10 @@ namespace
             gOptions.enableRussianRoulette);
         gRenderer.SetInitialLightingMode(gOptions.lightingMode);
         gRenderer.SetInitialAtrousEnabled(gOptions.enableAtrous);
+        gRenderer.SetInitialTemporalReprojectionEnabled(
+            gOptions.enableTemporalReprojection);
+        gRenderer.SetInitialTemporalDebugView(
+            gOptions.temporalDebugView);
         gRenderer.SetInitialAtrousIterationCount(
             gOptions.atrousIterations);
         gRenderer.SetInitialAtrousColorSigma(

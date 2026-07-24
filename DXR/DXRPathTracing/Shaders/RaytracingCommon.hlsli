@@ -134,6 +134,13 @@ StructuredBuffer<SceneInstanceMetadata> g_instanceMetadata : register(t262);
 StructuredBuffer<EmissiveTriangle> g_emissiveTriangles : register(t263);
 StructuredBuffer<EnvironmentAliasEntry>
     g_environmentDistribution : register(t264);
+Texture2D<float4> g_previousAccumulation : register(t265);
+Texture2D<float4> g_previousNormalDepth : register(t266);
+Texture2D<float4> g_previousMaterialGuide : register(t267);
+Texture2D<float4> g_previousDiffuseIndirect : register(t268);
+Texture2D<float4> g_previousSpecularIndirect : register(t269);
+Texture2D<float2> g_previousDiffuseMoments : register(t270);
+Texture2D<float2> g_previousSpecularMoments : register(t271);
 SamplerState g_environmentSampler : register(s0);
 SamplerState g_materialSampler : register(s1);
 
@@ -165,6 +172,12 @@ cbuffer RenderSettings : register(b0)
     float g_areaLightPower;
     float g_environmentPower;
     uint g_enableAtrous;
+    uint2 g_temporalPadding0;
+    float3 g_previousCameraPosition;
+    uint g_temporalPadding1;
+    float3 g_previousCameraTarget;
+    uint g_enableTemporalReprojection;
+    uint g_temporalDebugView;
 };
 
 void RecordRadianceRay(uint depth)

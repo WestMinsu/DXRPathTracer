@@ -268,6 +268,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_enableRussianRoulette);
     m_rayTracingManager->SetLightingMode(
         static_cast<UINT>(m_lightingMode));
+    m_rayTracingManager->SetTemporalReprojectionEnabled(
+        m_enableTemporalReprojection);
     m_rayTracingManager->SetAtrousEnabled(m_enableAtrous);
     m_rayTracingManager->SetAtrousIterationCount(
         static_cast<UINT>(m_atrousIterations));
@@ -324,6 +326,12 @@ void D3D12Renderer::Render()
         m_enableRussianRoulette);
     m_rayTracingManager->SetLightingMode(
         static_cast<UINT>(m_lightingMode));
+    m_rayTracingManager->SetTemporalReprojectionEnabled(
+        m_enableTemporalReprojection);
+    m_rayTracingManager->SetTemporalDebugView(
+        m_enableTemporalReprojection
+        ? static_cast<UINT>(m_temporalDebugView)
+        : RayTracingManager::c_temporalDebugNone);
     m_rayTracingManager->SetAtrousEnabled(m_enableAtrous);
     m_rayTracingManager->SetAtrousIterationCount(
         static_cast<UINT>(m_atrousIterations));
@@ -1591,7 +1599,37 @@ void D3D12Renderer::BuildImGuiFrame()
             m_enableRussianRoulette);
     }
     ImGui::SeparatorText("Denoising");
-    ImGui::Checkbox("A-Trous Denoiser", &m_enableAtrous);
+    ImGui::Checkbox(
+        "Temporal Reprojection",
+        &m_enableTemporalReprojection);
+    if (m_enableTemporalReprojection)
+    {
+        const char* temporalDebugNames[] =
+        {
+            "None",
+            "History Length",
+            "History Rejection Mask"
+        };
+        ImGui::Combo(
+            "Temporal Debug View",
+            &m_temporalDebugView,
+            temporalDebugNames,
+            _countof(temporalDebugNames));
+        if (m_temporalDebugView == static_cast<int>(
+            RayTracingManager::c_temporalDebugHistoryLength))
+        {
+            ImGui::TextDisabled("History Length: black = 1, white = 32 or more.");
+        }
+        else if (m_temporalDebugView == static_cast<int>(
+            RayTracingManager::c_temporalDebugRejectionMask))
+        {
+            ImGui::TextDisabled("History: green = accepted, red = rejected, blue = unavailable.");
+        }
+        ImGui::TextDisabled(
+            "Motion history is capped at 32 frames; still views keep accumulating.");
+    }
+
+    ImGui::Checkbox("A-Trous Filter", &m_enableAtrous);
     if (m_enableAtrous)
     {
         ImGui::SliderInt(
