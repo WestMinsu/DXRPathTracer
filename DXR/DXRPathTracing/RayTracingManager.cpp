@@ -2032,12 +2032,36 @@ bool RayTracingManager::CreateEnvironmentMap()
     m_environmentResolution = cubemap.width;
     m_environmentTexelCount =
         static_cast<UINT>(environmentDistribution.size());
+    const UINT64 environmentDistributionSize =
+        sizeof(GpuEnvironmentAliasEntry) *
+        environmentDistribution.size();
+    const D3D12_HEAP_PROPERTIES distributionDefaultHeap =
+        CreateHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+    const D3D12_RESOURCE_DESC distributionBufferDesc =
+        CreateBufferDesc(environmentDistributionSize);
+    HRESULT hr = m_device->CreateCommittedResource(
+        &distributionDefaultHeap,
+        D3D12_HEAP_FLAG_NONE,
+        &distributionBufferDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        nullptr,
+        IID_PPV_ARGS(&m_environmentDistributionBuffer));
+    if (ReportFailure(
+        hr,
+        L"Environment importance DEFAULT buffer creation failed."))
+    {
+        return false;
+    }
+    m_environmentDistributionBuffer->SetName(
+        L"Environment importance alias table");
+
+    Microsoft::WRL::ComPtr<ID3D12Resource>
+        environmentDistributionUploadBuffer;
     if (!CreateUploadBuffer(
         environmentDistribution.data(),
-        sizeof(GpuEnvironmentAliasEntry) *
-            environmentDistribution.size(),
-        L"Environment importance alias table",
-        m_environmentDistributionBuffer))
+        environmentDistributionSize,
+        L"Environment importance alias table staging buffer",
+        environmentDistributionUploadBuffer))
     {
         return false;
     }
@@ -2058,7 +2082,7 @@ bool RayTracingManager::CreateEnvironmentMap()
     textureDesc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
     const D3D12_HEAP_PROPERTIES defaultHeapProperties = CreateHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
-    HRESULT hr = m_device->CreateCommittedResource(
+    hr = m_device->CreateCommittedResource(
         &defaultHeapProperties,
         D3D12_HEAP_FLAG_NONE,
         &textureDesc,
@@ -2141,6 +2165,13 @@ bool RayTracingManager::CreateEnvironmentMap()
     if (ReportFailure(hr, L"Environment upload command list reset failed."))
         return false;
 
+    m_buildCommandList->CopyBufferRegion(
+        m_environmentDistributionBuffer.Get(),
+        0,
+        environmentDistributionUploadBuffer.Get(),
+        0,
+        environmentDistributionSize);
+
     for (UINT subresourceIndex = 0; subresourceIndex < subresourceCount; ++subresourceIndex)
     {
         D3D12_TEXTURE_COPY_LOCATION sourceLocation = {};
@@ -2156,13 +2187,25 @@ bool RayTracingManager::CreateEnvironmentMap()
         m_buildCommandList->CopyTextureRegion(&destinationLocation, 0, 0, 0, &sourceLocation, nullptr);
     }
 
-    D3D12_RESOURCE_BARRIER barrier = {};
-    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Transition.pResource = m_environmentMap.Get();
-    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    m_buildCommandList->ResourceBarrier(1, &barrier);
+    D3D12_RESOURCE_BARRIER barriers[2] = {};
+    barriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers[0].Transition.pResource =
+        m_environmentDistributionBuffer.Get();
+    barriers[0].Transition.StateBefore =
+        D3D12_RESOURCE_STATE_COPY_DEST;
+    barriers[0].Transition.StateAfter =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    barriers[0].Transition.Subresource =
+        D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barriers[1].Transition.pResource = m_environmentMap.Get();
+    barriers[1].Transition.StateBefore =
+        D3D12_RESOURCE_STATE_COPY_DEST;
+    barriers[1].Transition.StateAfter =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    barriers[1].Transition.Subresource =
+        D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_buildCommandList->ResourceBarrier(2, barriers);
 
     if (!ExecuteBuildCommandListAndWait())
         return false;
@@ -3060,59 +3103,112 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     if (emissiveTriangles.empty())
         emissiveTriangles.push_back({});
 
-    if (!CreateUploadBuffer(
-        scene.vertices.data(),
-        sizeof(SceneVertex) * scene.vertices.size(),
-        L"Raytracing scene vertex buffer",
-        m_vertexBuffer))
+    HRESULT hr = m_buildCommandAllocator->Reset();
+    if (ReportFailure(
+        hr,
+        L"Static scene upload command allocator reset failed."))
+    {
+        return false;
+    }
+    hr = m_buildCommandList->Reset(m_buildCommandAllocator.Get(), nullptr);
+    if (ReportFailure(
+        hr,
+        L"Static scene upload command list reset failed."))
     {
         return false;
     }
 
-    if (!CreateUploadBuffer(
-        scene.indices.data(),
-        sizeof(std::uint32_t) * scene.indices.size(),
-        L"Raytracing scene index buffer",
-        m_indexBuffer))
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> uploadBuffers;
+    uploadBuffers.reserve(6u);
+    auto createStaticGpuBuffer = [this, &uploadBuffers](
+        const void* data,
+        UINT64 sizeInBytes,
+        const wchar_t* debugName,
+        Microsoft::WRL::ComPtr<ID3D12Resource>& destination) -> bool
     {
-        return false;
-    }
+        const D3D12_HEAP_PROPERTIES defaultHeap =
+            CreateHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
+        const D3D12_RESOURCE_DESC bufferDesc =
+            CreateBufferDesc(sizeInBytes);
+        HRESULT createResult = m_device->CreateCommittedResource(
+            &defaultHeap,
+            D3D12_HEAP_FLAG_NONE,
+            &bufferDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            nullptr,
+            IID_PPV_ARGS(&destination));
+        if (ReportFailure(
+            createResult,
+            L"Static scene DEFAULT buffer creation failed."))
+        {
+            return false;
+        }
+        destination->SetName(debugName);
 
-    if (!CreateUploadBuffer(
-        scene.materials.data(),
-        sizeof(SceneMaterial) * scene.materials.size(),
-        L"Raytracing scene material buffer",
-        m_sceneMaterialBuffer))
-    {
-        return false;
-    }
+        Microsoft::WRL::ComPtr<ID3D12Resource> uploadBuffer;
+        if (!CreateUploadBuffer(
+            data,
+            sizeInBytes,
+            L"Static scene staging buffer",
+            uploadBuffer))
+        {
+            return false;
+        }
 
-    if (!CreateUploadBuffer(
-        scene.primitiveMaterialIndices.data(),
-        sizeof(std::uint32_t) * scene.primitiveMaterialIndices.size(),
-        L"Raytracing primitive material index buffer",
-        m_primitiveMaterialIndexBuffer))
-    {
-        return false;
-    }
+        m_buildCommandList->CopyBufferRegion(
+            destination.Get(),
+            0,
+            uploadBuffer.Get(),
+            0,
+            sizeInBytes);
+        D3D12_RESOURCE_BARRIER barrier = {};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        barrier.Transition.pResource = destination.Get();
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+        barrier.Transition.StateAfter =
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        barrier.Transition.Subresource =
+            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        m_buildCommandList->ResourceBarrier(1, &barrier);
+        uploadBuffers.push_back(uploadBuffer);
+        return true;
+    };
 
-    if (!CreateUploadBuffer(
-        instanceMetadata.data(),
-        sizeof(SceneInstanceMetadata) * instanceMetadata.size(),
-        L"Raytracing instance metadata buffer",
-        m_instanceMetadataBuffer))
+    if (!createStaticGpuBuffer(
+            scene.vertices.data(),
+            sizeof(SceneVertex) * scene.vertices.size(),
+            L"Raytracing scene vertex buffer",
+            m_vertexBuffer) ||
+        !createStaticGpuBuffer(
+            scene.indices.data(),
+            sizeof(std::uint32_t) * scene.indices.size(),
+            L"Raytracing scene index buffer",
+            m_indexBuffer) ||
+        !createStaticGpuBuffer(
+            scene.materials.data(),
+            sizeof(SceneMaterial) * scene.materials.size(),
+            L"Raytracing scene material buffer",
+            m_sceneMaterialBuffer) ||
+        !createStaticGpuBuffer(
+            scene.primitiveMaterialIndices.data(),
+            sizeof(std::uint32_t) * scene.primitiveMaterialIndices.size(),
+            L"Raytracing primitive material index buffer",
+            m_primitiveMaterialIndexBuffer) ||
+        !createStaticGpuBuffer(
+            instanceMetadata.data(),
+            sizeof(SceneInstanceMetadata) * instanceMetadata.size(),
+            L"Raytracing instance metadata buffer",
+            m_instanceMetadataBuffer) ||
+        !createStaticGpuBuffer(
+            emissiveTriangles.data(),
+            sizeof(GpuEmissiveTriangle) * emissiveTriangles.size(),
+            L"Raytracing emissive triangle buffer",
+            m_emissiveTriangleBuffer))
     {
         return false;
     }
-
-    if (!CreateUploadBuffer(
-        emissiveTriangles.data(),
-        sizeof(GpuEmissiveTriangle) * emissiveTriangles.size(),
-        L"Raytracing emissive triangle buffer",
-        m_emissiveTriangleBuffer))
-    {
+    if (!ExecuteBuildCommandListAndWait())
         return false;
-    }
 
     if (m_sponzaLite && hasLoadReport)
     {
