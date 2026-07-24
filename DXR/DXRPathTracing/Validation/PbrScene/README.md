@@ -29,7 +29,7 @@ Validation/PbrScene/Results/BrdfPhysicalValidation/
 - Reciprocity: 입사·출사 방향을 바꿔도 BRDF가 같은지 검사한다.
 - GGX D normalization: 반구 적분값이 1인지 검사한다.
 - White furnace: 균일한 흰색 입사 radiance에서 반사 에너지가 1을 넘는지 검사한다.
-- PDF consistency: ImportanceSampleGGX가 실제로 생성하는 확률분포와
+- PDF consistency: ImportanceSampleGGXVisibleNormal이 생성하는 VNDF와
   throughput 계산에 사용하는 GGX PDF가 같은지 검사한다.
 - Monte Carlo convergence: SPP를 증가시켰을 때 확률적 추정값이 결정론적
   반구 적분값으로 수렴하는지 검사한다.

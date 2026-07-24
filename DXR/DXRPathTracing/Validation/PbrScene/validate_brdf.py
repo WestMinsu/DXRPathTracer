@@ -87,6 +87,23 @@ def geometry_smith_height_correlated(
     return np.where((n_dot_v > 0.0) & (n_dot_l > 0.0), value, 0.0)
 
 
+def geometry_smith_g1_ggx(
+    n_dot_direction,
+    roughness: float,
+) -> np.ndarray:
+    # Match GeometrySmithG1GGX used by the visible-normal PDF.
+    n_dot_direction = np.asarray(n_dot_direction, dtype=np.float64)
+    alpha = ggx_alpha(roughness)
+    alpha_squared = alpha * alpha
+    root = np.sqrt(np.maximum(
+        n_dot_direction * n_dot_direction * (1.0 - alpha_squared)
+        + alpha_squared,
+        0.0))
+    value = (2.0 * n_dot_direction) / np.maximum(
+        n_dot_direction + root, HLSL_EPSILON)
+    return np.where(n_dot_direction > 0.0, value, 0.0)
+
+
 def fresnel_schlick(cos_theta: np.ndarray, f0: np.ndarray) -> np.ndarray:
     cos_theta = np.clip(np.asarray(cos_theta, dtype=np.float64), 0.0, 1.0)
     return f0 + (1.0 - f0) * (1.0 - cos_theta[..., None]) ** 5
@@ -468,9 +485,16 @@ def pdf_ggx_shader(view: np.ndarray, lights: np.ndarray, roughness: float) -> np
         np.linalg.norm(half_vectors, axis=1)[:, None], np.finfo(np.float64).tiny)
     v_dot_h = np.clip(half_vectors @ view, 0.0, 1.0)
     n_dot_h = np.clip(half_vectors[:, 2], 0.0, 1.0)
-    pdf = (distribution_ggx(n_dot_h, roughness) * n_dot_h
-           / np.maximum(4.0 * v_dot_h, HLSL_SPECULAR_DENOMINATOR_EPSILON))
-    active = (lights[:, 2] > 0.0) & (v_dot_h > 0.0)
+    n_dot_v = float(np.clip(view[2], 0.0, 1.0))
+    visible_normal_pdf = (
+        distribution_ggx(n_dot_h, roughness)
+        * geometry_smith_g1_ggx(n_dot_v, roughness)
+        * v_dot_h
+        / max(n_dot_v, HLSL_SPECULAR_DENOMINATOR_EPSILON))
+    pdf = visible_normal_pdf / np.maximum(
+        4.0 * v_dot_h, HLSL_SPECULAR_DENOMINATOR_EPSILON)
+    active = ((lights[:, 2] > 0.0) & (v_dot_h > 0.0)
+              & (n_dot_h > 0.0) & (n_dot_v > 0.0))
     return np.where(active, pdf, 0.0)
 
 
@@ -479,20 +503,27 @@ def pdf_ggx_sampling_distribution(
     lights: np.ndarray,
     roughness: float,
 ) -> np.ndarray:
-    """Actual proposal density implied by ImportanceSampleGGX."""
+    """Proposal density implied by GGX visible-normal sampling."""
     lights = np.atleast_2d(lights)
     half_vectors = lights + view[None, :]
     half_vectors /= np.maximum(
         np.linalg.norm(half_vectors, axis=1)[:, None], np.finfo(np.float64).tiny)
     v_dot_h = np.clip(half_vectors @ view, 0.0, 1.0)
     n_dot_h = np.clip(half_vectors[:, 2], 0.0, 1.0)
-    pdf = (distribution_ggx(n_dot_h, roughness) * n_dot_h
-           / np.maximum(4.0 * v_dot_h, np.finfo(np.float64).tiny))
-    active = (lights[:, 2] > 0.0) & (v_dot_h > 0.0)
+    n_dot_v = float(np.clip(view[2], 0.0, 1.0))
+    visible_normal_pdf = (
+        distribution_ggx(n_dot_h, roughness)
+        * geometry_smith_g1_ggx(n_dot_v, roughness)
+        * v_dot_h
+        / max(n_dot_v, np.finfo(np.float64).tiny))
+    pdf = visible_normal_pdf / np.maximum(
+        4.0 * v_dot_h, np.finfo(np.float64).tiny)
+    active = ((lights[:, 2] > 0.0) & (v_dot_h > 0.0)
+              & (n_dot_h > 0.0) & (n_dot_v > 0.0))
     return np.where(active, pdf, 0.0)
 
 
-def sample_ggx_ndf(
+def sample_ggx_vndf(
     rng: np.random.Generator,
     view: np.ndarray,
     roughness: float,
@@ -500,14 +531,45 @@ def sample_ggx_ndf(
 ):
     samples = rng.random((sample_count, 2), dtype=np.float64)
     alpha = ggx_alpha(roughness)
-    alpha_squared = alpha * alpha
-    phi = samples[:, 0] * (2.0 * PI)
-    cos_theta = np.sqrt((1.0 - samples[:, 1]) / np.maximum(
-        1.0 + (alpha_squared - 1.0) * samples[:, 1], HLSL_EPSILON))
-    sin_theta = np.sqrt(np.maximum(0.0, 1.0 - cos_theta * cos_theta))
-    half_vectors = np.stack((sin_theta * np.cos(phi),
-                             sin_theta * np.sin(phi),
-                             cos_theta), axis=1)
+    stretched_view = np.array(
+        [alpha * view[0], alpha * view[1], max(0.0, view[2])],
+        dtype=np.float64)
+    stretched_view /= max(
+        np.linalg.norm(stretched_view), np.finfo(np.float64).tiny)
+
+    lensq = float(np.dot(stretched_view[:2], stretched_view[:2]))
+    if lensq > 0.0:
+        basis_x = np.array(
+            [-stretched_view[1], stretched_view[0], 0.0],
+            dtype=np.float64) / math.sqrt(lensq)
+    else:
+        basis_x = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    basis_y = np.cross(stretched_view, basis_x)
+
+    radius = np.sqrt(samples[:, 0])
+    phi = samples[:, 1] * (2.0 * PI)
+    projected_x = radius * np.cos(phi)
+    projected_y = radius * np.sin(phi)
+    interpolation = 0.5 * (1.0 + stretched_view[2])
+    projected_y = (
+        (1.0 - interpolation)
+        * np.sqrt(np.maximum(0.0, 1.0 - projected_x * projected_x))
+        + interpolation * projected_y)
+    projected_z = np.sqrt(np.maximum(
+        0.0, 1.0 - projected_x * projected_x - projected_y * projected_y))
+    stretched_normals = (
+        projected_x[:, None] * basis_x[None, :]
+        + projected_y[:, None] * basis_y[None, :]
+        + projected_z[:, None] * stretched_view[None, :])
+
+    half_vectors = np.stack((
+        alpha * stretched_normals[:, 0],
+        alpha * stretched_normals[:, 1],
+        np.maximum(0.0, stretched_normals[:, 2]),
+    ), axis=1)
+    half_vectors /= np.maximum(
+        np.linalg.norm(half_vectors, axis=1)[:, None],
+        np.finfo(np.float64).tiny)
     v_dot_h = half_vectors @ view
     lights = 2.0 * v_dot_h[:, None] * half_vectors - view[None, :]
     valid = (v_dot_h > 0.0) & (lights[:, 2] > 0.0)
@@ -546,7 +608,7 @@ def sample_brdf_mixture(
 
     specular_count = int(np.count_nonzero(choose_specular))
     if specular_count:
-        specular_lights, specular_valid = sample_ggx_ndf(
+        specular_lights, specular_valid = sample_ggx_vndf(
             rng, view, roughness, specular_count)
         lights[choose_specular] = specular_lights
         valid[choose_specular] = specular_valid
@@ -579,7 +641,7 @@ def run_pdf_consistency(
         for n_dot_v in (0.2, 0.5, 1.0):
             view = view_direction(n_dot_v)
             rng = np.random.default_rng(1000 + case_index * 17 + int(n_dot_v * 100))
-            lights, valid = sample_ggx_ndf(rng, view, roughness, sample_count)
+            lights, valid = sample_ggx_vndf(rng, view, roughness, sample_count)
             success_probability = float(np.mean(valid))
             shader_mass = 0.0
             if np.any(valid):
@@ -588,8 +650,8 @@ def run_pdf_consistency(
                 sample_pdf = pdf_ggx_sampling_distribution(
                     view, valid_lights, roughness)
                 # Importance-integrate the shader PDF with samples drawn from
-                # the actual proposal distribution. Invalid reflections are
-                # the discrete rejection event of NDF sampling.
+                # the actual proposal distribution. Reflections below the
+                # macrosurface remain a discrete rejection event.
                 shader_mass = float(np.sum(shader_pdf / sample_pdf) / sample_count)
             sample_mass = success_probability
             mass_error = 0.0
@@ -927,7 +989,7 @@ def write_korean_summary(
             "- 거친 흰색 금속의 반사율 손실은 single-scatter GGX에서 누락된 다중 산란 에너지입니다.")
     if not pdf_summary["passed"]:
         lines.append(
-            "- ImportanceSampleGGX가 생성하는 분포와 셰이더가 나누는 PDF가 일치하지 않는 구간이 있습니다.")
+            "- GGX VNDF 샘플러가 생성하는 분포와 셰이더가 나누는 PDF가 일치하지 않는 구간이 있습니다.")
     if not convergence_summary["passed"]:
         if not pdf_summary["passed"]:
             lines.append(

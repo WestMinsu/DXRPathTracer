@@ -46,6 +46,27 @@ float GeometrySmithHeightCorrelatedGGX(
     return (2.0f * nDotV * nDotL) / max(smithV + smithL, 0.000001f);
 }
 
+float GeometrySmithG1GGX(
+    float3 normal,
+    float3 direction,
+    float roughness)
+{
+    float nDotDirection = saturate(dot(normal, direction));
+    if (nDotDirection <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    float alpha = GgxAlpha(roughness);
+    float alphaSquared = alpha * alpha;
+    float root = sqrt(max(
+        nDotDirection * nDotDirection * (1.0f - alphaSquared) +
+            alphaSquared,
+        0.0f));
+    return (2.0f * nDotDirection) /
+        max(nDotDirection + root, 0.000001f);
+}
+
 float3 FresnelSchlick(float cosTheta, float3 f0)
 {
     return f0 + (1.0f - f0) * pow(1.0f - saturate(cosTheta), 5.0f);
@@ -111,23 +132,65 @@ float3 EvaluateBrdf(PbrMaterial material, float3 normal, float3 viewDirection, f
     return diffuseContribution + specularContribution;
 }
 
-float3 ImportanceSampleGGX(float2 sampleValue, float3 normal, float roughness)
+float3 ImportanceSampleGGXVisibleNormal(
+    float2 sampleValue,
+    float3 normal,
+    float3 viewDirection,
+    float roughness)
 {
     float alpha = GgxAlpha(roughness);
-    float alphaSquared = alpha * alpha;
-    float phi = sampleValue.x * c_twoPi;
-    float cosTheta = sqrt((1.0f - sampleValue.y) / max(1.0f + (alphaSquared - 1.0f) * sampleValue.y, 0.000001f));
-    float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
-
-    float sinPhi;
-    float cosPhi;
-    sincos(phi, sinPhi, cosPhi);
-
     float3 tangent = abs(normal.z) < 0.999f
         ? normalize(cross(float3(0.0f, 0.0f, 1.0f), normal))
         : normalize(cross(float3(0.0f, 1.0f, 0.0f), normal));
     float3 bitangent = cross(normal, tangent);
-    float3 localHalfVector = float3(sinTheta * cosPhi, sinTheta * sinPhi, cosTheta);
+
+    float3 localView = float3(
+        dot(viewDirection, tangent),
+        dot(viewDirection, bitangent),
+        saturate(dot(viewDirection, normal)));
+
+    // Heitz 2018: sample the GGX distribution of normals visible from V.
+    // Stretching makes the ellipsoid isotropic in this intermediate space.
+    float3 stretchedView = normalize(float3(
+        alpha * localView.x,
+        alpha * localView.y,
+        localView.z));
+
+    float lensq =
+        stretchedView.x * stretchedView.x +
+        stretchedView.y * stretchedView.y;
+    float3 basisX = lensq > 0.0f
+        ? float3(-stretchedView.y, stretchedView.x, 0.0f) *
+            rsqrt(lensq)
+        : float3(1.0f, 0.0f, 0.0f);
+    float3 basisY = cross(stretchedView, basisX);
+
+    float radius = sqrt(sampleValue.x);
+    float phi = c_twoPi * sampleValue.y;
+    float sinPhi;
+    float cosPhi;
+    sincos(phi, sinPhi, cosPhi);
+    float projectedX = radius * cosPhi;
+    float projectedY = radius * sinPhi;
+
+    float interpolation = 0.5f * (1.0f + stretchedView.z);
+    projectedY =
+        (1.0f - interpolation) *
+            sqrt(max(0.0f, 1.0f - projectedX * projectedX)) +
+        interpolation * projectedY;
+
+    float projectedZ = sqrt(max(
+        0.0f,
+        1.0f - projectedX * projectedX - projectedY * projectedY));
+    float3 stretchedNormal =
+        projectedX * basisX +
+        projectedY * basisY +
+        projectedZ * stretchedView;
+
+    float3 localHalfVector = normalize(float3(
+        alpha * stretchedNormal.x,
+        alpha * stretchedNormal.y,
+        max(0.0f, stretchedNormal.z)));
     return normalize(tangent * localHalfVector.x + bitangent * localHalfVector.y + normal * localHalfVector.z);
 }
 
@@ -167,10 +230,19 @@ float PbrBrdfSamplingPdf(
         return 0.0f;
     }
 
-    float specularPdf = DistributionGGX(
-        normal,
-        halfVector,
-        material.roughness) * nDotH /
+    float visibleNormalPdf =
+        DistributionGGX(
+            normal,
+            halfVector,
+            material.roughness) *
+        GeometrySmithG1GGX(
+            normal,
+            viewDirection,
+            material.roughness) *
+        vDotH /
+        max(nDotV, 0.00000001f);
+    float specularPdf =
+        visibleNormalPdf /
         max(4.0f * vDotH, 0.00000001f);
     float diffusePdf = nDotL * c_invPi;
     float specularProbability =
@@ -197,9 +269,10 @@ bool SamplePbrBrdfWithMixtureSampling(
     if (sampleSpecular)
     {
         float2 sampleValue = float2(RandomFloat01(seed), RandomFloat01(seed));
-        float3 sampledHalfVector = ImportanceSampleGGX(
+        float3 sampledHalfVector = ImportanceSampleGGXVisibleNormal(
             sampleValue,
             normal,
+            viewDirection,
             material.roughness);
         float sampledVDotH = saturate(dot(viewDirection, sampledHalfVector));
         if (sampledVDotH <= 0.0f)
