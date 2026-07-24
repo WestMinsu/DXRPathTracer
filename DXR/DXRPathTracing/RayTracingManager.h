@@ -274,7 +274,9 @@ private:
     bool m_dynamicObjectMovedThisFrame = false;
     UINT64 m_dynamicSceneFrameIndex = 0;
     GeometryRange m_staticGeometry;
+    GeometryRange m_staticAlphaGeometry;
     GeometryRange m_dynamicSphereGeometry;
+    bool m_hasStaticAlphaGeometry = false;
     std::array<float, 3> m_sceneBoundsMin = { 0.0f, 0.0f, 0.0f };
     std::array<float, 3> m_sceneBoundsMax = { 0.0f, 0.0f, 0.0f };
     std::array<float, 3> m_cameraPosition = { 0.0f, 0.15f, -1.2f };
@@ -343,11 +345,13 @@ private:
     UINT m_emissiveTriangleCount = 0;
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> m_materialTextures;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_bottomLevelAS;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_staticAlphaBottomLevelAS;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_dynamicSphereBottomLevelAS;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_topLevelAS;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,
         c_tlasFrameCount> m_instanceDescBuffers;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_blasScratchBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_staticAlphaBlasScratchBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_dynamicSphereBlasScratchBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_tlasScratchBuffer;
     FrameStatistics m_frameStatistics;

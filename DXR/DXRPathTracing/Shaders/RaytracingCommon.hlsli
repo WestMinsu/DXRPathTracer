@@ -56,7 +56,7 @@ struct SceneInstanceMetadata
     uint vertexOffset;
     uint indexOffset;
     uint primitiveOffset;
-    uint reserved;
+    uint flags;
 };
 
 // Mirrored by GpuEmissiveTriangle in RayTracingManager.cpp.
@@ -105,6 +105,8 @@ static const uint c_statisticsShadowRayIndex = 9u;
 static const uint c_statisticsHitIndex = 10u;
 static const uint c_statisticsMissIndex = 11u;
 static const uint c_russianRouletteStartBounce = 3u;
+static const uint c_instanceFlagDynamic = 1u;
+static const uint c_primaryGuideRayDepth = 0xFFFFFFFFu;
 static const float c_rayTMin = 0.001f;
 static const float c_rayTMax = 1000.0f;
 static const float c_rayOriginBias = 0.001f;

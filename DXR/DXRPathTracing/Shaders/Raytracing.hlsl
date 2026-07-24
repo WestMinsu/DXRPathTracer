@@ -170,8 +170,17 @@ void MyRaygenShader_RadianceRay()
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
-    if (g_enableAtrous != 0u ||
-        g_enableTemporalReprojection != 0u)
+    bool guidesEnabled =
+        g_enableAccumulation != 0u &&
+        (g_enableAtrous != 0u ||
+         g_enableTemporalReprojection != 0u);
+    bool updatePrimaryGuides =
+        guidesEnabled &&
+        (g_enableTemporalReprojection != 0u ||
+         g_sampleIndex == 0u ||
+         g_dynamicObjectMoved != 0u ||
+         TemporalCameraIsMoving());
+    if (updatePrimaryGuides)
     {
         // A negative depth marks primary rays that missed geometry.
         g_normalDepth[launchIndex] =
@@ -244,6 +253,52 @@ void MyRaygenShader_RadianceRay()
         sampleSpecularIndirectRadiance =
             payload.primarySpecularIndirectColor;
         dynamicTouched = payload.dynamicTouched;
+
+        if (updatePrimaryGuides)
+        {
+            float2 guideUv =
+                (float2(launchIndex) + float2(0.5f, 0.5f)) /
+                float2(launchDim);
+            float2 guideScreenPosition = float2(
+                (guideUv.x * 2.0f - 1.0f) *
+                    aspectRatio * tanHalfFov,
+                (1.0f - guideUv.y * 2.0f) * tanHalfFov);
+
+            RayDesc guideRay;
+            guideRay.Origin = g_cameraPosition;
+            guideRay.Direction = normalize(
+                cameraForward +
+                cameraRight * guideScreenPosition.x +
+                cameraUp * guideScreenPosition.y);
+            guideRay.TMin = c_rayTMin;
+            guideRay.TMax = c_rayTMax;
+
+            RadiancePayload guidePayload;
+            guidePayload.color = float3(0.0f, 0.0f, 0.0f);
+            guidePayload.primaryDirectColor =
+                float3(0.0f, 0.0f, 0.0f);
+            guidePayload.primaryDiffuseIndirectColor =
+                float3(0.0f, 0.0f, 0.0f);
+            guidePayload.primarySpecularIndirectColor =
+                float3(0.0f, 0.0f, 0.0f);
+            guidePayload.depth = c_primaryGuideRayDepth;
+            guidePayload.dynamicTouched = 0u;
+            guidePayload.pathThroughput =
+                float3(1.0f, 1.0f, 1.0f);
+            guidePayload.previousBsdfPdf = 0.0f;
+            guidePayload.previousWasDelta = 1u;
+
+            TraceRay(
+                g_scene,
+                RAY_FLAG_NONE,
+                0xFF,
+                0,
+                1,
+                0,
+                guideRay,
+                guidePayload);
+            primaryRayDirection = guideRay.Direction;
+        }
     }
 
     if (g_enableAccumulation == 0)
@@ -448,10 +503,14 @@ void MyClosestHitShader_RadianceRay(
     inout RadiancePayload payload,
     in BuiltInTriangleIntersectionAttributes attributes)
 {
-    RecordSurfaceHit();
+    bool guideOnly = payload.depth == c_primaryGuideRayDepth;
+    if (!guideOnly)
+        RecordSurfaceHit();
     SceneInstanceMetadata instanceMetadata =
         g_instanceMetadata[InstanceID()];
-    if (InstanceID() == 1u)
+    bool dynamicInstance =
+        (instanceMetadata.flags & c_instanceFlagDynamic) != 0u;
+    if (!guideOnly && dynamicInstance)
         payload.dynamicTouched = 1u;
     uint globalPrimitiveIndex =
         instanceMetadata.primitiveOffset + PrimitiveIndex();
@@ -462,16 +521,17 @@ void MyClosestHitShader_RadianceRay(
     uint i2 = instanceMetadata.vertexOffset + g_indices[indexOffset + 2u];
 
     float3 normal = InterpolateNormal(i0, i1, i2, attributes);
-    float2 texCoord = InterpolateTexCoord(i0, i1, i2, attributes);
-    float4 tangent = InterpolateTangent(i0, i1, i2, attributes);
     float3x3 objectToWorld = (float3x3)ObjectToWorld3x4();
     normal = normalize(mul(objectToWorld, normal));
-    tangent.xyz = normalize(mul(objectToWorld, tangent.xyz));
     bool frontFace = dot(normal, WorldRayDirection()) < 0.0f;
     if (!frontFace)
     {
         normal = -normal;
     }
+
+    float2 texCoord = InterpolateTexCoord(i0, i1, i2, attributes);
+    float4 tangent = InterpolateTangent(i0, i1, i2, attributes);
+    tangent.xyz = normalize(mul(objectToWorld, tangent.xyz));
     if (g_sceneType == c_scenePbrGgx)
     {
         normal = ApplySceneNormalMap(
@@ -497,9 +557,7 @@ void MyClosestHitShader_RadianceRay(
             SurfaceEmission(globalPrimitiveIndex);
     }
 
-    if (payload.depth == 0u &&
-        (g_enableAtrous != 0u ||
-         g_enableTemporalReprojection != 0u))
+    if (guideOnly)
     {
         g_normalDepth[DispatchRaysIndex().xy] =
             float4(normal, RayTCurrent());
@@ -507,7 +565,9 @@ void MyClosestHitShader_RadianceRay(
             float4(
                 surfaceMaterial.baseColor,
                 surfaceMaterial.roughness +
-                    (InstanceID() == 1u ? 2.0f : 0.0f));
+                    (dynamicInstance ? 2.0f : 0.0f));
+        payload.color = float3(0.0f, 0.0f, 0.0f);
+        return;
     }
 
     float3 normalColor = normal * 0.5f + 0.5f;
@@ -539,7 +599,6 @@ void MyClosestHitShader_RadianceRay(
         return;
     }
 
-    float3 hitPosition = WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
     float3 emission = SurfaceEmission(globalPrimitiveIndex);
     if (frontFace && any(emission > 0.0f))
     {
@@ -581,6 +640,9 @@ void MyClosestHitShader_RadianceRay(
         payload.color = float3(0.0f, 0.0f, 0.0f);
         return;
     }
+
+    float3 hitPosition =
+        WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
 
     if (g_sceneType == c_scenePbrGgx)
     {
@@ -632,6 +694,12 @@ void MyClosestHitShader_RadianceRay(
 [shader("miss")]
 void MyMissShader_RadianceRay(inout RadiancePayload payload)
 {
+    if (payload.depth == c_primaryGuideRayDepth)
+    {
+        payload.color = float3(0.0f, 0.0f, 0.0f);
+        return;
+    }
+
     RecordRadianceMiss();
     if (g_showNormalColor != 0 ||
         (g_sceneType == c_scenePbrGgx && g_pbrDebugView != c_pbrDebugBeauty))

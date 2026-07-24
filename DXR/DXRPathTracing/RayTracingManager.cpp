@@ -2584,16 +2584,27 @@ bool RayTracingManager::CreateAccelerationStructures()
     if (!BuildBottomLevelAccelerationStructure())
         return false;
 
-    D3D12_RESOURCE_BARRIER blasBarriers[2] = {};
-    blasBarriers[0].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    blasBarriers[0].UAV.pResource = m_bottomLevelAS.Get();
-    UINT blasBarrierCount = 1;
+    D3D12_RESOURCE_BARRIER blasBarriers[3] = {};
+    UINT blasBarrierCount = 0;
+    blasBarriers[blasBarrierCount].Type =
+        D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    blasBarriers[blasBarrierCount].UAV.pResource = m_bottomLevelAS.Get();
+    ++blasBarrierCount;
+    if (m_hasStaticAlphaGeometry)
+    {
+        blasBarriers[blasBarrierCount].Type =
+            D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        blasBarriers[blasBarrierCount].UAV.pResource =
+            m_staticAlphaBottomLevelAS.Get();
+        ++blasBarrierCount;
+    }
     if (m_hasDynamicSphere)
     {
-        blasBarriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        blasBarriers[1].UAV.pResource =
+        blasBarriers[blasBarrierCount].Type =
+            D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        blasBarriers[blasBarrierCount].UAV.pResource =
             m_dynamicSphereBottomLevelAS.Get();
-        blasBarrierCount = 2;
+        ++blasBarrierCount;
     }
     m_buildCommandList->ResourceBarrier(
         blasBarrierCount,
@@ -2609,6 +2620,7 @@ bool RayTracingManager::CreateAccelerationStructures()
 
     const bool buildSucceeded = ExecuteBuildCommandListAndWait();
     m_blasScratchBuffer.Reset();
+    m_staticAlphaBlasScratchBuffer.Reset();
     m_dynamicSphereBlasScratchBuffer.Reset();
     if (!m_hasDynamicSphere)
         m_tlasScratchBuffer.Reset();
@@ -2735,7 +2747,9 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     m_hasDynamicSphere = false;
     m_dynamicSceneFrameIndex = 0;
     m_staticGeometry = {};
+    m_staticAlphaGeometry = {};
     m_dynamicSphereGeometry = {};
+    m_hasStaticAlphaGeometry = false;
     const bool isPbrScene = m_sceneType == c_scenePbrGgx ||
         m_sceneType == c_scenePbrGpuValidation;
     if (isPbrScene && !m_sceneFilePath.empty())
@@ -2806,17 +2820,83 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             scene = CreateCornellBoxSceneData();
     }
 
-    m_staticGeometry.vertexCount =
-        static_cast<UINT>(scene.vertices.size());
-    m_staticGeometry.indexCount =
-        static_cast<UINT>(scene.indices.size());
-    for (std::uint32_t materialIndex : scene.primitiveMaterialIndices)
+    // Keep opaque and alpha-tested triangles in separate BLASes. A single
+    // non-opaque geometry would force Any-Hit processing on every Sponza
+    // triangle merely because a small subset uses glTF alpha MASK.
+    std::vector<std::uint32_t> opaqueIndices;
+    std::vector<std::uint32_t> alphaIndices;
+    std::vector<std::uint32_t> opaqueMaterials;
+    std::vector<std::uint32_t> alphaMaterials;
+    opaqueIndices.reserve(scene.indices.size());
+    alphaIndices.reserve(scene.indices.size());
+    opaqueMaterials.reserve(scene.primitiveMaterialIndices.size());
+    alphaMaterials.reserve(scene.primitiveMaterialIndices.size());
+    for (std::size_t primitiveIndex = 0;
+         primitiveIndex < scene.primitiveMaterialIndices.size();
+         ++primitiveIndex)
     {
-        if (scene.materials[materialIndex].alphaCutoff >= 0.0f)
-        {
-            m_staticGeometry.containsAlphaMask = true;
-            break;
-        }
+        const std::uint32_t materialIndex =
+            scene.primitiveMaterialIndices[primitiveIndex];
+        const bool alphaMasked =
+            scene.materials[materialIndex].alphaCutoff >= 0.0f;
+        std::vector<std::uint32_t>& destinationIndices =
+            alphaMasked ? alphaIndices : opaqueIndices;
+        std::vector<std::uint32_t>& destinationMaterials =
+            alphaMasked ? alphaMaterials : opaqueMaterials;
+        const std::size_t sourceIndex = primitiveIndex * 3u;
+        destinationIndices.push_back(scene.indices[sourceIndex + 0u]);
+        destinationIndices.push_back(scene.indices[sourceIndex + 1u]);
+        destinationIndices.push_back(scene.indices[sourceIndex + 2u]);
+        destinationMaterials.push_back(materialIndex);
+    }
+
+    const UINT staticVertexCount =
+        static_cast<UINT>(scene.vertices.size());
+    if (!opaqueIndices.empty() &&
+        !alphaIndices.empty())
+    {
+        scene.indices.clear();
+        scene.indices.reserve(opaqueIndices.size() + alphaIndices.size());
+        scene.indices.insert(
+            scene.indices.end(),
+            opaqueIndices.begin(),
+            opaqueIndices.end());
+        scene.indices.insert(
+            scene.indices.end(),
+            alphaIndices.begin(),
+            alphaIndices.end());
+
+        scene.primitiveMaterialIndices.clear();
+        scene.primitiveMaterialIndices.reserve(
+            opaqueMaterials.size() + alphaMaterials.size());
+        scene.primitiveMaterialIndices.insert(
+            scene.primitiveMaterialIndices.end(),
+            opaqueMaterials.begin(),
+            opaqueMaterials.end());
+        scene.primitiveMaterialIndices.insert(
+            scene.primitiveMaterialIndices.end(),
+            alphaMaterials.begin(),
+            alphaMaterials.end());
+
+        m_staticGeometry.vertexCount = staticVertexCount;
+        m_staticGeometry.indexCount =
+            static_cast<UINT>(opaqueIndices.size());
+        m_staticAlphaGeometry.vertexCount = staticVertexCount;
+        m_staticAlphaGeometry.indexOffset =
+            m_staticGeometry.indexCount;
+        m_staticAlphaGeometry.indexCount =
+            static_cast<UINT>(alphaIndices.size());
+        m_staticAlphaGeometry.primitiveOffset =
+            static_cast<UINT>(opaqueMaterials.size());
+        m_staticAlphaGeometry.containsAlphaMask = true;
+        m_hasStaticAlphaGeometry = true;
+    }
+    else
+    {
+        m_staticGeometry.vertexCount = staticVertexCount;
+        m_staticGeometry.indexCount =
+            static_cast<UINT>(scene.indices.size());
+        m_staticGeometry.containsAlphaMask = !alphaIndices.empty();
     }
 
     if (m_sponzaLite && hasModelBounds)
@@ -2944,6 +3024,16 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     m_indexCount = static_cast<UINT>(scene.indices.size());
 
     std::vector<SceneInstanceMetadata> instanceMetadata(1);
+    if (m_hasStaticAlphaGeometry)
+    {
+        instanceMetadata.push_back(
+            {
+                m_staticAlphaGeometry.vertexOffset,
+                m_staticAlphaGeometry.indexOffset,
+                m_staticAlphaGeometry.primitiveOffset,
+                0u
+            });
+    }
     if (m_hasDynamicSphere)
     {
         instanceMetadata.push_back(
@@ -2951,14 +3041,19 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
                 m_dynamicSphereGeometry.vertexOffset,
                 m_dynamicSphereGeometry.indexOffset,
                 m_dynamicSphereGeometry.primitiveOffset,
-                0u
+                1u
             });
     }
 
+    const UINT staticIndexCount =
+        m_staticGeometry.indexCount +
+        (m_hasStaticAlphaGeometry
+            ? m_staticAlphaGeometry.indexCount
+            : 0u);
     std::vector<GpuEmissiveTriangle> emissiveTriangles =
         BuildEmissiveTriangles(
             scene,
-            m_staticGeometry.indexCount,
+            staticIndexCount,
             m_areaLightPower);
     m_emissiveTriangleCount =
         static_cast<UINT>(emissiveTriangles.size());
@@ -3291,6 +3386,16 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure()
         return false;
     }
 
+    if (m_hasStaticAlphaGeometry &&
+        !BuildBottomLevelAccelerationStructure(
+            m_staticAlphaGeometry,
+            L"Static alpha-mask bottom level acceleration structure",
+            m_staticAlphaBottomLevelAS,
+            m_staticAlphaBlasScratchBuffer))
+    {
+        return false;
+    }
+
     if (m_hasDynamicSphere &&
         !BuildBottomLevelAccelerationStructure(
             m_dynamicSphereGeometry,
@@ -3377,7 +3482,10 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure(
 
 bool RayTracingManager::BuildTopLevelAccelerationStructure()
 {
-    const UINT instanceCount = m_hasDynamicSphere ? 2u : 1u;
+    const UINT staticInstanceCount =
+        m_hasStaticAlphaGeometry ? 2u : 1u;
+    const UINT instanceCount =
+        staticInstanceCount + (m_hasDynamicSphere ? 1u : 0u);
     std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs(instanceCount);
     instanceDescs[0].Transform[0][0] = 1.0f;
     instanceDescs[0].Transform[1][1] = 1.0f;
@@ -3386,11 +3494,23 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
     instanceDescs[0].InstanceMask = 0xFF;
     instanceDescs[0].AccelerationStructure =
         m_bottomLevelAS->GetGPUVirtualAddress();
+    if (m_hasStaticAlphaGeometry)
+    {
+        D3D12_RAYTRACING_INSTANCE_DESC& alphaDesc = instanceDescs[1];
+        alphaDesc.Transform[0][0] = 1.0f;
+        alphaDesc.Transform[1][1] = 1.0f;
+        alphaDesc.Transform[2][2] = 1.0f;
+        alphaDesc.InstanceID = 1u;
+        alphaDesc.InstanceMask = 0xFF;
+        alphaDesc.AccelerationStructure =
+            m_staticAlphaBottomLevelAS->GetGPUVirtualAddress();
+    }
     if (m_hasDynamicSphere)
     {
         const float cosine = std::cos(m_dynamicSphereRollRadians);
         const float sine = std::sin(m_dynamicSphereRollRadians);
-        D3D12_RAYTRACING_INSTANCE_DESC& sphereDesc = instanceDescs[1];
+        D3D12_RAYTRACING_INSTANCE_DESC& sphereDesc =
+            instanceDescs[staticInstanceCount];
         sphereDesc.Transform[0][0] = cosine;
         sphereDesc.Transform[0][1] = -sine;
         sphereDesc.Transform[0][3] = m_dynamicSpherePositionX;
@@ -3399,7 +3519,7 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
         sphereDesc.Transform[1][3] = m_dynamicSphereCenterY;
         sphereDesc.Transform[2][2] = 1.0f;
         sphereDesc.Transform[2][3] = m_dynamicSphereCenterZ;
-        sphereDesc.InstanceID = 1;
+        sphereDesc.InstanceID = staticInstanceCount;
         sphereDesc.InstanceMask =
             m_dynamicSphereVisible ? 0xFF : 0x00;
         sphereDesc.AccelerationStructure =
@@ -3485,10 +3605,13 @@ bool RayTracingManager::WriteInstanceDescriptors(
     if (ReportFailure(hr, L"TLAS instance descriptor mapping failed."))
         return false;
 
+    const UINT staticInstanceCount =
+        m_hasStaticAlphaGeometry ? 2u : 1u;
+    const UINT instanceCount = staticInstanceCount + 1u;
     std::memset(
         instanceDescs,
         0,
-        sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * 2u);
+        sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * instanceCount);
     instanceDescs[0].Transform[0][0] = 1.0f;
     instanceDescs[0].Transform[1][1] = 1.0f;
     instanceDescs[0].Transform[2][2] = 1.0f;
@@ -3497,9 +3620,22 @@ bool RayTracingManager::WriteInstanceDescriptors(
     instanceDescs[0].AccelerationStructure =
         m_bottomLevelAS->GetGPUVirtualAddress();
 
+    if (m_hasStaticAlphaGeometry)
+    {
+        D3D12_RAYTRACING_INSTANCE_DESC& alphaDesc = instanceDescs[1];
+        alphaDesc.Transform[0][0] = 1.0f;
+        alphaDesc.Transform[1][1] = 1.0f;
+        alphaDesc.Transform[2][2] = 1.0f;
+        alphaDesc.InstanceID = 1u;
+        alphaDesc.InstanceMask = 0xFF;
+        alphaDesc.AccelerationStructure =
+            m_staticAlphaBottomLevelAS->GetGPUVirtualAddress();
+    }
+
     const float cosine = std::cos(sphereRollRadians);
     const float sine = std::sin(sphereRollRadians);
-    D3D12_RAYTRACING_INSTANCE_DESC& sphereDesc = instanceDescs[1];
+    D3D12_RAYTRACING_INSTANCE_DESC& sphereDesc =
+        instanceDescs[staticInstanceCount];
     sphereDesc.Transform[0][0] = cosine;
     sphereDesc.Transform[0][1] = -sine;
     sphereDesc.Transform[0][3] = spherePositionX;
@@ -3508,7 +3644,7 @@ bool RayTracingManager::WriteInstanceDescriptors(
     sphereDesc.Transform[1][3] = m_dynamicSphereCenterY;
     sphereDesc.Transform[2][2] = 1.0f;
     sphereDesc.Transform[2][3] = m_dynamicSphereCenterZ;
-    sphereDesc.InstanceID = 1;
+    sphereDesc.InstanceID = staticInstanceCount;
     sphereDesc.InstanceMask =
         m_dynamicSphereVisible ? 0xFF : 0x00;
     sphereDesc.AccelerationStructure =
@@ -3629,7 +3765,8 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE |
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
     buildDesc.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-    buildDesc.Inputs.NumDescs = 2;
+    buildDesc.Inputs.NumDescs =
+        (m_hasStaticAlphaGeometry ? 2u : 1u) + 1u;
     buildDesc.Inputs.InstanceDescs =
         m_instanceDescBuffers[descriptorFrame]->GetGPUVirtualAddress();
     buildDesc.SourceAccelerationStructureData =

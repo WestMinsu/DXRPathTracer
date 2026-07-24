@@ -401,8 +401,14 @@ float3 TracePbrBrdfWithMixtureSampling(
     RadiancePayload bouncePayload;
     bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
     bouncePayload.primaryDirectColor = float3(0.0f, 0.0f, 0.0f);
+    // When the indirect AOVs are disabled, preserve the already evaluated
+    // BRDF*cos/pdf weight in an otherwise unused payload slot. This avoids
+    // evaluating GGX, Fresnel, and Smith a second time after TraceRay without
+    // keeping another continuation value live across the recursive call.
     bouncePayload.primaryDiffuseIndirectColor =
-        float3(0.0f, 0.0f, 0.0f);
+        g_enableAtrous == 0u
+        ? weightedBrdf
+        : float3(0.0f, 0.0f, 0.0f);
     bouncePayload.primarySpecularIndirectColor =
         float3(0.0f, 0.0f, 0.0f);
     bouncePayload.depth = nextDepth;
@@ -415,6 +421,13 @@ float3 TracePbrBrdfWithMixtureSampling(
     RecordRadianceRay(bouncePayload.depth);
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
     dynamicTouched |= bouncePayload.dynamicTouched;
+
+    if (g_enableAtrous == 0u)
+    {
+        return directLighting +
+            bouncePayload.primaryDiffuseIndirectColor *
+            bouncePayload.color * inverseSurvivalProbability;
+    }
 
     float3 diffuseContribution;
     float3 specularContribution;

@@ -54,7 +54,7 @@ struct SceneInstanceMetadata
     std::uint32_t vertexOffset = 0;
     std::uint32_t indexOffset = 0;
     std::uint32_t primitiveOffset = 0;
-    std::uint32_t reserved = 0;
+    std::uint32_t flags = 0;
 };
 
 static_assert(sizeof(SceneVertex) == 48);
