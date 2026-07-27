@@ -22,12 +22,16 @@
 
 namespace
 {
-    constexpr wchar_t c_rayGenShaderName[] = L"MyRaygenShader_RadianceRay";
-    constexpr wchar_t c_closestHitShaderName[] = L"MyClosestHitShader_RadianceRay";
-    constexpr wchar_t c_anyHitShaderName[] = L"MyAnyHitShader_AlphaMask";
-    constexpr wchar_t c_missShaderName[] = L"MyMissShader_RadianceRay";
     constexpr wchar_t c_shadowMissShaderName[] = L"MyMissShader_ShadowRay";
-    constexpr wchar_t c_hitGroupName[] = L"MyHitGroup_Triangle_RadianceRay";
+    constexpr wchar_t c_rayGenShaderName[] = L"MyRaygenShader_PathTrace";
+    constexpr wchar_t c_surfaceQueryClosestHitShaderName[] =
+        L"MyClosestHitShader_SurfaceQuery";
+    constexpr wchar_t c_alphaMaskAnyHitShaderName[] =
+        L"MyAnyHitShader_AlphaMask";
+    constexpr wchar_t c_surfaceQueryMissShaderName[] =
+        L"MyMissShader_SurfaceQuery";
+    constexpr wchar_t c_surfaceQueryHitGroupName[] =
+        L"MyHitGroup_Triangle_SurfaceQuery";
     constexpr wchar_t c_compiledShaderRelativePath[] = L"Shaders\\Raytracing.dxil";
     constexpr wchar_t c_compiledAtrousShaderRelativePath[] =
         L"Shaders\\AtrousDenoiser.dxil";
@@ -2478,16 +2482,16 @@ bool RayTracingManager::CreateRaytracingPipelineState()
     shaderExports[0].Name = c_rayGenShaderName;
     shaderExports[0].ExportToRename = nullptr;
     shaderExports[0].Flags = D3D12_EXPORT_FLAG_NONE;
-    shaderExports[1].Name = c_closestHitShaderName;
+    shaderExports[1].Name = c_surfaceQueryClosestHitShaderName;
     shaderExports[1].ExportToRename = nullptr;
     shaderExports[1].Flags = D3D12_EXPORT_FLAG_NONE;
-    shaderExports[2].Name = c_missShaderName;
+    shaderExports[2].Name = c_surfaceQueryMissShaderName;
     shaderExports[2].ExportToRename = nullptr;
     shaderExports[2].Flags = D3D12_EXPORT_FLAG_NONE;
     shaderExports[3].Name = c_shadowMissShaderName;
     shaderExports[3].ExportToRename = nullptr;
     shaderExports[3].Flags = D3D12_EXPORT_FLAG_NONE;
-    shaderExports[4].Name = c_anyHitShaderName;
+    shaderExports[4].Name = c_alphaMaskAnyHitShaderName;
     shaderExports[4].ExportToRename = nullptr;
     shaderExports[4].Flags = D3D12_EXPORT_FLAG_NONE;
 
@@ -2498,10 +2502,10 @@ bool RayTracingManager::CreateRaytracingPipelineState()
     dxilLibraryDesc.pExports = shaderExports;
 
     D3D12_HIT_GROUP_DESC hitGroupDesc = {};
-    hitGroupDesc.HitGroupExport = c_hitGroupName;
+    hitGroupDesc.HitGroupExport = c_surfaceQueryHitGroupName;
     hitGroupDesc.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
-    hitGroupDesc.ClosestHitShaderImport = c_closestHitShaderName;
-    hitGroupDesc.AnyHitShaderImport = c_anyHitShaderName;
+    hitGroupDesc.ClosestHitShaderImport = c_surfaceQueryClosestHitShaderName;
+    hitGroupDesc.AnyHitShaderImport = c_alphaMaskAnyHitShaderName;
 
     D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
     shaderConfig.MaxPayloadSizeInBytes = c_shaderPayloadSize;
@@ -2511,7 +2515,7 @@ bool RayTracingManager::CreateRaytracingPipelineState()
     globalRootSignature.pGlobalRootSignature = m_globalRootSignature.Get();
 
     D3D12_RAYTRACING_PIPELINE_CONFIG pipelineConfig = {};
-    pipelineConfig.MaxTraceRecursionDepth = c_maxRecursionDepth;
+    pipelineConfig.MaxTraceRecursionDepth = 1u;
 
     D3D12_STATE_SUBOBJECT subobjects[5] = {};
     subobjects[0].Type = D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY;
@@ -2547,7 +2551,7 @@ bool RayTracingManager::CreateShaderTables()
         L"RayGen shader table") &&
         CreateMissShaderTable() &&
         CreateShaderTable(
-            c_hitGroupName,
+        c_surfaceQueryHitGroupName,
             m_hitGroupShaderTable.ReleaseAndGetAddressOf(),
             &m_hitGroupShaderRecordSize,
             L"HitGroup shader table");
@@ -2679,7 +2683,7 @@ bool RayTracingManager::CreateMissShaderTable()
 
     const wchar_t* shaderNames[] =
     {
-        c_missShaderName,
+        c_surfaceQueryMissShaderName,
         c_shadowMissShaderName
     };
     m_missShaderRecordSize = AlignUp(

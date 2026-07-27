@@ -148,12 +148,9 @@ public:
 private:
     static constexpr DXGI_FORMAT c_outputFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     static constexpr DXGI_FORMAT c_accumulationFormat = DXGI_FORMAT_R32G32B32A32_FLOAT;
-    static constexpr UINT c_shaderPayloadSize = 19 * sizeof(float);
+    static constexpr UINT c_shaderPayloadSize = 16 * sizeof(float);
     static constexpr UINT c_shaderAttributeSize = 2 * sizeof(float);
     static constexpr UINT c_maxBounce = 8;
-    // At most one visibility ray is nested below a radiance vertex. The
-    // terminal radiance vertex exits before tracing NEE or another bounce.
-    static constexpr UINT c_maxRecursionDepth = c_maxBounce + 1;
     static constexpr UINT c_tlasFrameCount = 2;
     struct GeometryRange
     {

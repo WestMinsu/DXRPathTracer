@@ -9,17 +9,21 @@ struct Vertex
     float4 tangent;
 };
 
-struct RadiancePayload
+// Surface-query payload. The hit and miss shaders only return local surface
+// data; RayGen performs all transport integration without recursive radiance
+// rays.
+struct SurfaceQueryPayload
 {
-    float3 color;
-    float3 primaryDirectColor;
-    float3 primaryDiffuseIndirectColor;
-    float3 primarySpecularIndirectColor;
-    uint depth;
-    uint dynamicTouched;
-    float3 pathThroughput;
-    float previousBsdfPdf;
-    uint previousWasDelta;
+    float3 normal;
+    float hitT;
+    float3 baseColor;
+    float metallic;
+    float3 emission;
+    float roughness;
+    uint primitiveIndex;
+    uint dynamicInstance;
+    uint frontFace;
+    uint hit;
 };
 
 struct ShadowPayload
@@ -113,7 +117,6 @@ static const uint c_statisticsHitIndex = 10u;
 static const uint c_statisticsMissIndex = 11u;
 static const uint c_russianRouletteStartBounce = 3u;
 static const uint c_instanceFlagDynamic = 1u;
-static const uint c_primaryGuideRayDepth = 0xFFFFFFFFu;
 static const float c_rayTMin = 0.001f;
 static const float c_rayTMax = 1000.0f;
 static const float c_rayOriginBias = 0.001f;
@@ -826,86 +829,4 @@ bool SampleDirectLight(
         lightPdf);
 }
 
-float3 TraceLambertianBounce(
-    float3 normal,
-    float3 hitPosition,
-    float3 albedo,
-    uint depth,
-    uint primitiveIndex,
-    inout uint dynamicTouched,
-    float3 pathThroughput,
-    out float3 localDirectLighting)
-{
-    float3 directLighting = float3(0.0f, 0.0f, 0.0f);
-    uint directSeed =
-        CreateRandomSeed(depth, primitiveIndex) ^ 0xA511E9B3u;
-    float3 directLightDirection;
-    float3 radianceOverPdf;
-    float lightPdf;
-    if (SampleDirectLight(
-        normal,
-        hitPosition,
-        directSeed,
-        directLightDirection,
-        radianceOverPdf,
-        lightPdf))
-    {
-        float nDotL = saturate(dot(normal, directLightDirection));
-        float bsdfPdf = nDotL * c_invPi;
-        float misWeight = g_lightingMode == c_lightingModeMis
-            ? PowerHeuristic(lightPdf, bsdfPdf)
-            : 1.0f;
-        directLighting =
-            albedo * c_invPi * nDotL * radianceOverPdf * misWeight;
-    }
-    localDirectLighting = directLighting;
-
-    if (depth >= g_maxBounce)
-    {
-        return directLighting;
-    }
-
-    uint seed = CreateRandomSeed(depth, primitiveIndex);
-
-    float3 scatterDirection = RandomCosineHemisphereDirection(normal, seed);
-    uint nextDepth = depth + 1u;
-    float3 nextThroughput = pathThroughput * albedo;
-    float survivalProbability = 1.0f;
-    if (!SurvivesRussianRoulette(
-        nextThroughput,
-        nextDepth,
-        seed,
-        survivalProbability))
-    {
-        return directLighting;
-    }
-    float inverseSurvivalProbability = 1.0f / survivalProbability;
-
-    RayDesc bounceRay;
-    bounceRay.Origin = hitPosition + normal * c_rayOriginBias;
-    bounceRay.Direction = scatterDirection;
-    bounceRay.TMin = c_rayTMin;
-    bounceRay.TMax = c_rayTMax;
-
-    RadiancePayload bouncePayload;
-    bouncePayload.color = float3(0.0f, 0.0f, 0.0f);
-    bouncePayload.primaryDirectColor = float3(0.0f, 0.0f, 0.0f);
-    bouncePayload.primaryDiffuseIndirectColor =
-        float3(0.0f, 0.0f, 0.0f);
-    bouncePayload.primarySpecularIndirectColor =
-        float3(0.0f, 0.0f, 0.0f);
-    bouncePayload.depth = nextDepth;
-    bouncePayload.dynamicTouched = 0u;
-    bouncePayload.pathThroughput =
-        nextThroughput * inverseSurvivalProbability;
-    bouncePayload.previousBsdfPdf =
-        saturate(dot(normal, scatterDirection)) * c_invPi;
-    bouncePayload.previousWasDelta = 0u;
-
-    RecordRadianceRay(bouncePayload.depth);
-    TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, bounceRay, bouncePayload);
-    dynamicTouched |= bouncePayload.dynamicTouched;
-    return directLighting +
-        albedo * inverseSurvivalProbability * bouncePayload.color;
-}
 #endif

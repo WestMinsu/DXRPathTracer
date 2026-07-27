@@ -165,8 +165,317 @@ float3 EvaluateGpuBrdfValidationSample(uint2 launchIndex, uint2 launchDim)
     return weightedBrdf;
 }
 
-[shader("raygeneration")]
-void MyRaygenShader_RadianceRay()
+void ResetSurfaceQueryPayload(out SurfaceQueryPayload payload)
+{
+    payload.normal = float3(0.0f, 0.0f, 0.0f);
+    payload.hitT = 0.0f;
+    payload.baseColor = float3(0.0f, 0.0f, 0.0f);
+    payload.metallic = 0.0f;
+    payload.emission = float3(0.0f, 0.0f, 0.0f);
+    payload.roughness = 1.0f;
+    payload.primitiveIndex = 0u;
+    payload.dynamicInstance = 0u;
+    payload.frontFace = 0u;
+    payload.hit = 0u;
+}
+
+void TracePrimaryGuide(RayDesc ray)
+{
+    SurfaceQueryPayload payload;
+    ResetSurfaceQueryPayload(payload);
+    TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
+    if (payload.hit == 0u)
+        return;
+
+    uint2 launchIndex = DispatchRaysIndex().xy;
+    g_normalDepth[launchIndex] = float4(payload.normal, payload.hitT);
+    g_materialGuide[launchIndex] = float4(
+        payload.baseColor,
+        payload.roughness + (payload.dynamicInstance != 0u ? 2.0f : 0.0f));
+}
+
+void TracePath(
+    RayDesc ray,
+    out float3 sampleRadiance,
+    out float3 primaryDiffuseIndirectRadiance,
+    out float3 primarySpecularIndirectRadiance,
+    out uint dynamicTouched)
+{
+    sampleRadiance = float3(0.0f, 0.0f, 0.0f);
+    float3 primaryDirectRadiance = float3(0.0f, 0.0f, 0.0f);
+    primaryDiffuseIndirectRadiance = float3(0.0f, 0.0f, 0.0f);
+    primarySpecularIndirectRadiance = float3(0.0f, 0.0f, 0.0f);
+    dynamicTouched = 0u;
+
+    float3 pathThroughput = float3(1.0f, 1.0f, 1.0f);
+    float3 tailThroughput = float3(1.0f, 1.0f, 1.0f);
+    float3 tailRadiance = float3(0.0f, 0.0f, 0.0f);
+    float3 firstDiffuseWeight = float3(0.0f, 0.0f, 0.0f);
+    float3 firstSpecularWeight = float3(0.0f, 0.0f, 0.0f);
+    bool hasFirstPbrSplit = false;
+    float previousBsdfPdf = 0.0f;
+    uint previousWasDelta = 1u;
+
+    for (uint depth = 0u; depth <= g_maxBounce; ++depth)
+    {
+        SurfaceQueryPayload payload;
+        ResetSurfaceQueryPayload(payload);
+        RecordRadianceRay(depth);
+        TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
+
+        if (payload.hit == 0u)
+        {
+            RecordRadianceMiss();
+            float3 localRadiance = float3(0.0f, 0.0f, 0.0f);
+            if (g_showNormalColor == 0u &&
+                (g_sceneType != c_scenePbrGgx ||
+                 g_pbrDebugView == c_pbrDebugBeauty) &&
+                g_sceneType == c_scenePbrGgx &&
+                g_enableIbl != 0u)
+            {
+                float environmentWeight = 1.0f;
+                if (depth > 0u &&
+                    previousWasDelta == 0u &&
+                    g_lightingMode != c_lightingModeBsdf)
+                {
+                    float lightPdf = EvaluateEnvironmentLightPdf(ray.Direction);
+                    if (lightPdf > 0.0f)
+                    {
+                        if (g_lightingMode == c_lightingModeNee)
+                            environmentWeight = 0.0f;
+                        else if (g_lightingMode == c_lightingModeMis)
+                            environmentWeight = PowerHeuristic(
+                                previousBsdfPdf,
+                                lightPdf);
+                    }
+                }
+                localRadiance =
+                    SampleEnvironmentMap(ray.Direction) * environmentWeight;
+            }
+
+            sampleRadiance += pathThroughput * localRadiance;
+            if (depth == 0u)
+                primaryDirectRadiance = localRadiance;
+            else
+                tailRadiance += tailThroughput * localRadiance;
+            break;
+        }
+
+        RecordSurfaceHit();
+        dynamicTouched |= payload.dynamicInstance;
+        float3 normalColor = payload.normal * 0.5f + 0.5f;
+        if (g_showNormalColor != 0u)
+        {
+            sampleRadiance = normalColor;
+            break;
+        }
+        if (g_sceneType == c_scenePbrGgx &&
+            g_pbrDebugView != c_pbrDebugBeauty)
+        {
+            if (g_pbrDebugView == c_pbrDebugNormal)
+                sampleRadiance = normalColor;
+            else if (g_pbrDebugView == c_pbrDebugDepth)
+                sampleRadiance = DepthDebugColor(payload.hitT);
+            else if (g_pbrDebugView == c_pbrDebugMaterialId)
+                sampleRadiance = MaterialIdDebugColor(payload.primitiveIndex);
+            else if (g_pbrDebugView == c_pbrDebugAlbedo)
+                sampleRadiance = payload.baseColor;
+            else if (g_pbrDebugView == c_pbrDebugMetallic)
+                sampleRadiance = payload.metallic.xxx;
+            else if (g_pbrDebugView == c_pbrDebugRoughness)
+                sampleRadiance = payload.roughness.xxx;
+            break;
+        }
+
+        if (payload.frontFace != 0u && any(payload.emission > 0.0f))
+        {
+            float emissionWeight = 1.0f;
+            if (depth > 0u &&
+                previousWasDelta == 0u &&
+                g_lightingMode != c_lightingModeBsdf)
+            {
+                float lightPdf = EvaluateAreaLightPdf(
+                    payload.primitiveIndex,
+                    payload.hitT * payload.hitT,
+                    normalize(ray.Direction));
+                if (lightPdf > 0.0f)
+                {
+                    if (g_lightingMode == c_lightingModeNee)
+                        emissionWeight = 0.0f;
+                    else if (g_lightingMode == c_lightingModeMis)
+                        emissionWeight = PowerHeuristic(
+                            previousBsdfPdf,
+                            lightPdf);
+                }
+            }
+            float3 localRadiance = payload.emission * emissionWeight;
+            sampleRadiance += pathThroughput * localRadiance;
+            if (depth == 0u)
+                primaryDirectRadiance = localRadiance;
+            else
+                tailRadiance += tailThroughput * localRadiance;
+            break;
+        }
+
+        if (depth >= g_maxBounce)
+            break;
+
+        float3 hitPosition = ray.Origin + ray.Direction * payload.hitT;
+        PbrMaterial material;
+        material.baseColor = payload.baseColor;
+        material.metallic = payload.metallic;
+        material.roughness = payload.roughness;
+        material.emission = payload.emission;
+
+        float3 localDirectLighting = float3(0.0f, 0.0f, 0.0f);
+        uint directSeed =
+            CreateRandomSeed(depth, payload.primitiveIndex) ^ 0xA511E9B3u;
+        float3 directLightDirection;
+        float3 radianceOverPdf;
+        float lightPdf;
+        if (SampleDirectLight(
+            payload.normal,
+            hitPosition,
+            directSeed,
+            directLightDirection,
+            radianceOverPdf,
+            lightPdf))
+        {
+            if (g_sceneType == c_scenePbrGgx)
+            {
+                float3 viewDirection = normalize(-ray.Direction);
+                float bsdfPdf = PbrBrdfSamplingPdf(
+                    material,
+                    payload.normal,
+                    viewDirection,
+                    directLightDirection);
+                float misWeight = g_lightingMode == c_lightingModeMis
+                    ? PowerHeuristic(lightPdf, bsdfPdf)
+                    : 1.0f;
+                localDirectLighting = EvaluateBrdf(
+                    material,
+                    payload.normal,
+                    viewDirection,
+                    directLightDirection) * radianceOverPdf * misWeight;
+            }
+            else
+            {
+                float nDotL = saturate(
+                    dot(payload.normal, directLightDirection));
+                float bsdfPdf = nDotL * c_invPi;
+                float misWeight = g_lightingMode == c_lightingModeMis
+                    ? PowerHeuristic(lightPdf, bsdfPdf)
+                    : 1.0f;
+                localDirectLighting = payload.baseColor * c_invPi *
+                    nDotL * radianceOverPdf * misWeight;
+            }
+        }
+
+        sampleRadiance += pathThroughput * localDirectLighting;
+        if (depth == 0u)
+            primaryDirectRadiance = localDirectLighting;
+        else
+            tailRadiance += tailThroughput * localDirectLighting;
+
+        uint seed = CreateRandomSeed(depth, payload.primitiveIndex);
+        float3 sampleDirection;
+        float3 bounceWeight;
+        float samplePdf;
+        float3 diffuseContribution = float3(0.0f, 0.0f, 0.0f);
+        float3 specularContribution = float3(0.0f, 0.0f, 0.0f);
+        if (g_sceneType == c_scenePbrGgx)
+        {
+            float3 viewDirection = normalize(-ray.Direction);
+            if (!SamplePbrBrdfWithMixtureSampling(
+                material,
+                payload.normal,
+                viewDirection,
+                seed,
+                sampleDirection,
+                bounceWeight,
+                samplePdf))
+            {
+                break;
+            }
+            if (depth == 0u && g_enableAtrous != 0u)
+            {
+                EvaluateBrdfComponents(
+                    material,
+                    payload.normal,
+                    viewDirection,
+                    sampleDirection,
+                    diffuseContribution,
+                    specularContribution);
+            }
+        }
+        else
+        {
+            sampleDirection = RandomCosineHemisphereDirection(
+                payload.normal,
+                seed);
+            bounceWeight = payload.baseColor;
+            samplePdf = saturate(dot(payload.normal, sampleDirection)) * c_invPi;
+        }
+
+        uint nextDepth = depth + 1u;
+        float3 nextThroughput = pathThroughput * bounceWeight;
+        float survivalProbability = 1.0f;
+        if (!SurvivesRussianRoulette(
+            nextThroughput,
+            nextDepth,
+            seed,
+            survivalProbability))
+        {
+            break;
+        }
+        float inverseSurvivalProbability = 1.0f / survivalProbability;
+        float3 effectiveBounceWeight =
+            bounceWeight * inverseSurvivalProbability;
+        if (depth == 0u)
+        {
+            if (g_sceneType == c_scenePbrGgx && g_enableAtrous != 0u)
+            {
+                firstDiffuseWeight = diffuseContribution *
+                    (inverseSurvivalProbability / samplePdf);
+                firstSpecularWeight = specularContribution *
+                    (inverseSurvivalProbability / samplePdf);
+                hasFirstPbrSplit = true;
+            }
+            tailThroughput = float3(1.0f, 1.0f, 1.0f);
+        }
+        else
+        {
+            tailThroughput *= effectiveBounceWeight;
+        }
+
+        pathThroughput = nextThroughput * inverseSurvivalProbability;
+        previousBsdfPdf = samplePdf;
+        previousWasDelta = 0u;
+        ray.Origin = hitPosition + payload.normal * c_rayOriginBias;
+        ray.Direction = sampleDirection;
+        ray.TMin = c_rayTMin;
+        ray.TMax = c_rayTMax;
+    }
+
+    if (g_sceneType == c_scenePbrGgx)
+    {
+        if (hasFirstPbrSplit)
+        {
+            primaryDiffuseIndirectRadiance =
+                firstDiffuseWeight * tailRadiance;
+            primarySpecularIndirectRadiance =
+                firstSpecularWeight * tailRadiance;
+        }
+    }
+    else
+    {
+        primaryDiffuseIndirectRadiance = max(
+            sampleRadiance - primaryDirectRadiance,
+            0.0f);
+    }
+}
+
+void RunRaygen()
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
@@ -232,27 +541,12 @@ void MyRaygenShader_RadianceRay()
         ray.TMin = c_rayTMin;
         ray.TMax = c_rayTMax;
 
-        RadiancePayload payload;
-        payload.color = float3(0.0f, 0.0f, 0.0f);
-        payload.primaryDirectColor = float3(0.0f, 0.0f, 0.0f);
-        payload.primaryDiffuseIndirectColor =
-            float3(0.0f, 0.0f, 0.0f);
-        payload.primarySpecularIndirectColor =
-            float3(0.0f, 0.0f, 0.0f);
-        payload.depth = 0;
-        payload.dynamicTouched = 0u;
-        payload.pathThroughput = float3(1.0f, 1.0f, 1.0f);
-        payload.previousBsdfPdf = 0.0f;
-        payload.previousWasDelta = 1u;
-
-        RecordRadianceRay(0u);
-        TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
-        sampleRadiance = payload.color;
-        sampleDiffuseIndirectRadiance =
-            payload.primaryDiffuseIndirectColor;
-        sampleSpecularIndirectRadiance =
-            payload.primarySpecularIndirectColor;
-        dynamicTouched = payload.dynamicTouched;
+        TracePath(
+            ray,
+            sampleRadiance,
+            sampleDiffuseIndirectRadiance,
+            sampleSpecularIndirectRadiance,
+            dynamicTouched);
 
         if (updatePrimaryGuides)
         {
@@ -273,30 +567,7 @@ void MyRaygenShader_RadianceRay()
             guideRay.TMin = c_rayTMin;
             guideRay.TMax = c_rayTMax;
 
-            RadiancePayload guidePayload;
-            guidePayload.color = float3(0.0f, 0.0f, 0.0f);
-            guidePayload.primaryDirectColor =
-                float3(0.0f, 0.0f, 0.0f);
-            guidePayload.primaryDiffuseIndirectColor =
-                float3(0.0f, 0.0f, 0.0f);
-            guidePayload.primarySpecularIndirectColor =
-                float3(0.0f, 0.0f, 0.0f);
-            guidePayload.depth = c_primaryGuideRayDepth;
-            guidePayload.dynamicTouched = 0u;
-            guidePayload.pathThroughput =
-                float3(1.0f, 1.0f, 1.0f);
-            guidePayload.previousBsdfPdf = 0.0f;
-            guidePayload.previousWasDelta = 1u;
-
-            TraceRay(
-                g_scene,
-                RAY_FLAG_NONE,
-                0xFF,
-                0,
-                0,
-                0,
-                guideRay,
-                guidePayload);
+            TracePrimaryGuide(guideRay);
             primaryRayDirection = guideRay.Direction;
         }
     }
@@ -471,9 +742,21 @@ void MyRaygenShader_RadianceRay()
     g_output[launchIndex] = float4(ToneMapForDisplay(averageRadiance), 1.0f);
 }
 
+[shader("raygeneration")]
+void MyRaygenShader_PathTrace()
+{
+    RunRaygen();
+}
+
+[shader("miss")]
+void MyMissShader_ShadowRay(inout ShadowPayload payload)
+{
+    payload.occluded = 0u;
+}
+
 [shader("anyhit")]
 void MyAnyHitShader_AlphaMask(
-    inout RadiancePayload payload,
+    inout SurfaceQueryPayload payload,
     in BuiltInTriangleIntersectionAttributes attributes)
 {
     uint ignoredInstanceFlags;
@@ -483,9 +766,7 @@ void MyAnyHitShader_AlphaMask(
         hitGeometry.primitiveOffset + PrimitiveIndex();
     SceneMaterial material = GetSceneMaterial(globalPrimitiveIndex);
     if (material.alphaCutoff < 0.0f)
-    {
         return;
-    }
 
     uint indexOffset =
         hitGeometry.indexOffset + PrimitiveIndex() * 3u;
@@ -494,26 +775,17 @@ void MyAnyHitShader_AlphaMask(
     uint i2 = hitGeometry.vertexOffset + g_indices[indexOffset + 2u];
     float2 texCoord = InterpolateTexCoord(i0, i1, i2, attributes);
     if (!PassesSceneAlphaMask(globalPrimitiveIndex, texCoord))
-    {
         IgnoreHit();
-    }
 }
 
 [shader("closesthit")]
-void MyClosestHitShader_RadianceRay(
-    inout RadiancePayload payload,
+void MyClosestHitShader_SurfaceQuery(
+    inout SurfaceQueryPayload payload,
     in BuiltInTriangleIntersectionAttributes attributes)
 {
-    bool guideOnly = payload.depth == c_primaryGuideRayDepth;
-    if (!guideOnly)
-        RecordSurfaceHit();
     uint instanceFlags;
     HitGeometryMetadata hitGeometry =
         GetHitGeometryMetadata(instanceFlags);
-    bool dynamicInstance =
-        (instanceFlags & c_instanceFlagDynamic) != 0u;
-    if (!guideOnly && dynamicInstance)
-        payload.dynamicTouched = 1u;
     uint globalPrimitiveIndex =
         hitGeometry.primitiveOffset + PrimitiveIndex();
     uint indexOffset =
@@ -527,9 +799,7 @@ void MyClosestHitShader_RadianceRay(
     normal = normalize(mul(objectToWorld, normal));
     bool frontFace = dot(normal, WorldRayDirection()) < 0.0f;
     if (!frontFace)
-    {
         normal = -normal;
-    }
 
     float2 texCoord = InterpolateTexCoord(i0, i1, i2, attributes);
     float4 tangent = InterpolateTangent(i0, i1, i2, attributes);
@@ -543,209 +813,34 @@ void MyClosestHitShader_RadianceRay(
             normal);
     }
 
-    PbrMaterial surfaceMaterial;
+    PbrMaterial material;
     if (g_sceneType == c_scenePbrGgx)
     {
-        surfaceMaterial =
-            GetPbrMaterial(globalPrimitiveIndex, texCoord);
+        material = GetPbrMaterial(globalPrimitiveIndex, texCoord);
     }
     else
     {
-        surfaceMaterial.baseColor =
-            CornellSurfaceAlbedo(globalPrimitiveIndex);
-        surfaceMaterial.metallic = 0.0f;
-        surfaceMaterial.roughness = 1.0f;
-        surfaceMaterial.emission =
-            SurfaceEmission(globalPrimitiveIndex);
+        material.baseColor = CornellSurfaceAlbedo(globalPrimitiveIndex);
+        material.metallic = 0.0f;
+        material.roughness = 1.0f;
+        material.emission = SurfaceEmission(globalPrimitiveIndex);
     }
 
-    if (guideOnly)
-    {
-        g_normalDepth[DispatchRaysIndex().xy] =
-            float4(normal, RayTCurrent());
-        g_materialGuide[DispatchRaysIndex().xy] =
-            float4(
-                surfaceMaterial.baseColor,
-                surfaceMaterial.roughness +
-                    (dynamicInstance ? 2.0f : 0.0f));
-        payload.color = float3(0.0f, 0.0f, 0.0f);
-        return;
-    }
-
-    float3 normalColor = normal * 0.5f + 0.5f;
-    if (g_showNormalColor != 0)
-    {
-        payload.color = normalColor;
-        return;
-    }
-
-    if (g_sceneType == c_scenePbrGgx && g_pbrDebugView != c_pbrDebugBeauty)
-    {
-        if (g_pbrDebugView == c_pbrDebugNormal)
-        {
-            payload.color = normalColor;
-        }
-        else if (g_pbrDebugView == c_pbrDebugDepth)
-        {
-            payload.color = DepthDebugColor(RayTCurrent());
-        }
-        else if (g_pbrDebugView == c_pbrDebugMaterialId)
-        {
-            payload.color = MaterialIdDebugColor(globalPrimitiveIndex);
-        }
-        else
-        {
-            payload.color =
-                PbrMaterialDebugColor(globalPrimitiveIndex, texCoord);
-        }
-        return;
-    }
-
-    float3 emission = SurfaceEmission(globalPrimitiveIndex);
-    if (frontFace && any(emission > 0.0f))
-    {
-        float emissionWeight = 1.0f;
-        if (payload.depth > 0u &&
-            payload.previousWasDelta == 0u &&
-            g_lightingMode != c_lightingModeBsdf)
-        {
-            float hitDistance = RayTCurrent();
-            float lightPdf = EvaluateAreaLightPdf(
-                globalPrimitiveIndex,
-                hitDistance * hitDistance,
-                normalize(WorldRayDirection()));
-            if (lightPdf > 0.0f)
-            {
-                if (g_lightingMode == c_lightingModeNee)
-                {
-                    emissionWeight = 0.0f;
-                }
-                else if (g_lightingMode == c_lightingModeMis)
-                {
-                    emissionWeight = PowerHeuristic(
-                        payload.previousBsdfPdf,
-                        lightPdf);
-                }
-            }
-        }
-        payload.color = emission * emissionWeight;
-        if (payload.depth == 0u)
-            payload.primaryDirectColor = payload.color;
-        return;
-    }
-
-    // Preserve the renderer's existing max-bounce definition: a non-emissive
-    // vertex at the terminal depth must not launch either a bounce ray or an
-    // NEE visibility ray.
-    if (payload.depth >= g_maxBounce)
-    {
-        payload.color = float3(0.0f, 0.0f, 0.0f);
-        return;
-    }
-
-    float3 hitPosition =
-        WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-
-    if (g_sceneType == c_scenePbrGgx)
-    {
-        float3 localDiffuseIndirectLighting;
-        float3 localSpecularIndirectLighting;
-        float3 localDirectLighting;
-        payload.color = TracePbrBrdfWithMixtureSampling(
-            surfaceMaterial,
-            normal,
-            hitPosition,
-            payload.depth,
-            globalPrimitiveIndex,
-            payload.dynamicTouched,
-            payload.pathThroughput,
-            localDiffuseIndirectLighting,
-            localSpecularIndirectLighting,
-            localDirectLighting);
-        if (payload.depth == 0u)
-        {
-            payload.primaryDirectColor = localDirectLighting;
-            payload.primaryDiffuseIndirectColor =
-                localDiffuseIndirectLighting;
-            payload.primarySpecularIndirectColor =
-                localSpecularIndirectLighting;
-        }
-        return;
-    }
-
-    float3 localDirectLighting;
-    payload.color = TraceLambertianBounce(
-        normal,
-        hitPosition,
-        surfaceMaterial.baseColor,
-        payload.depth,
-        globalPrimitiveIndex,
-        payload.dynamicTouched,
-        payload.pathThroughput,
-        localDirectLighting);
-    if (payload.depth == 0u)
-    {
-        payload.primaryDirectColor = localDirectLighting;
-        payload.primaryDiffuseIndirectColor =
-            max(payload.color - localDirectLighting, 0.0f);
-        payload.primarySpecularIndirectColor =
-            float3(0.0f, 0.0f, 0.0f);
-    }
+    payload.normal = normal;
+    payload.hitT = RayTCurrent();
+    payload.baseColor = material.baseColor;
+    payload.metallic = material.metallic;
+    payload.emission = material.emission;
+    payload.roughness = material.roughness;
+    payload.primitiveIndex = globalPrimitiveIndex;
+    payload.dynamicInstance =
+        (instanceFlags & c_instanceFlagDynamic) != 0u ? 1u : 0u;
+    payload.frontFace = frontFace ? 1u : 0u;
+    payload.hit = 1u;
 }
 
 [shader("miss")]
-void MyMissShader_RadianceRay(inout RadiancePayload payload)
+void MyMissShader_SurfaceQuery(inout SurfaceQueryPayload payload)
 {
-    if (payload.depth == c_primaryGuideRayDepth)
-    {
-        payload.color = float3(0.0f, 0.0f, 0.0f);
-        return;
-    }
-
-    RecordRadianceMiss();
-    if (g_showNormalColor != 0 ||
-        (g_sceneType == c_scenePbrGgx && g_pbrDebugView != c_pbrDebugBeauty))
-    {
-        payload.color = float3(0.0f, 0.0f, 0.0f);
-        return;
-    }
-
-    if (g_sceneType != c_scenePbrGgx || g_enableIbl == 0u)
-    {
-        payload.color = float3(0.0f, 0.0f, 0.0f);
-        return;
-    }
-
-    float environmentWeight = 1.0f;
-    if (payload.depth > 0u &&
-        payload.previousWasDelta == 0u &&
-        g_lightingMode != c_lightingModeBsdf)
-    {
-        float lightPdf =
-            EvaluateEnvironmentLightPdf(WorldRayDirection());
-        if (lightPdf > 0.0f)
-        {
-            if (g_lightingMode == c_lightingModeNee)
-            {
-                environmentWeight = 0.0f;
-            }
-            else if (g_lightingMode == c_lightingModeMis)
-            {
-                environmentWeight = PowerHeuristic(
-                    payload.previousBsdfPdf,
-                    lightPdf);
-            }
-        }
-    }
-    payload.color =
-        SampleEnvironmentMap(WorldRayDirection()) *
-        environmentWeight;
-    if (payload.depth == 0u)
-        payload.primaryDirectColor = payload.color;
-}
-
-[shader("miss")]
-void MyMissShader_ShadowRay(inout ShadowPayload payload)
-{
-    payload.occluded = 0u;
+    payload.hit = 0u;
 }
