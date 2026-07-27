@@ -183,7 +183,8 @@ private:
     void UpdateCameraFromSceneBounds();
     bool BuildBottomLevelAccelerationStructure();
     bool BuildBottomLevelAccelerationStructure(
-        const GeometryRange& geometry,
+        const GeometryRange* geometries,
+        UINT geometryCount,
         const wchar_t* debugName,
         Microsoft::WRL::ComPtr<ID3D12Resource>& accelerationStructure,
         Microsoft::WRL::ComPtr<ID3D12Resource>& scratchBuffer);
@@ -340,18 +341,16 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_indexBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_sceneMaterialBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_primitiveMaterialIndexBuffer;
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_instanceMetadataBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_sceneMetadataBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_emissiveTriangleBuffer;
     UINT m_emissiveTriangleCount = 0;
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> m_materialTextures;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_bottomLevelAS;
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_staticAlphaBottomLevelAS;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_dynamicSphereBottomLevelAS;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_topLevelAS;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,
         c_tlasFrameCount> m_instanceDescBuffers;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_blasScratchBuffer;
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_staticAlphaBlasScratchBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_dynamicSphereBlasScratchBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_tlasScratchBuffer;
     FrameStatistics m_frameStatistics;

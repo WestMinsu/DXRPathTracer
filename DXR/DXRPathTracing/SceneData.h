@@ -48,20 +48,23 @@ struct SceneTexture
     std::vector<SceneTextureMip> mips;
 };
 
-// This layout is mirrored by SceneInstanceMetadata in RaytracingCommon.hlsli.
-struct SceneInstanceMetadata
+// This 16-byte record is mirrored by SceneMetadataEntry in
+// RaytracingCommon.hlsli. Instance headers use data0/data1 as geometry
+// metadata offset/flags; geometry records use data0/data1/data2 as the
+// vertex/index/primitive offsets.
+struct SceneMetadataEntry
 {
-    std::uint32_t vertexOffset = 0;
-    std::uint32_t indexOffset = 0;
-    std::uint32_t primitiveOffset = 0;
-    std::uint32_t flags = 0;
+    std::uint32_t data0 = 0;
+    std::uint32_t data1 = 0;
+    std::uint32_t data2 = 0;
+    std::uint32_t data3 = 0;
 };
 
 static_assert(sizeof(SceneVertex) == 48);
 static_assert(offsetof(SceneVertex, texCoord) == 24);
 static_assert(offsetof(SceneVertex, tangent) == 32);
 static_assert(sizeof(SceneMaterial) == 60);
-static_assert(sizeof(SceneInstanceMetadata) == 16);
+static_assert(sizeof(SceneMetadataEntry) == 16);
 static_assert(offsetof(SceneMaterial, metallic) == 12);
 static_assert(offsetof(SceneMaterial, roughness) == 16);
 static_assert(offsetof(SceneMaterial, emission) == 20);

@@ -419,7 +419,7 @@ float3 TracePbrBrdfWithMixtureSampling(
     bouncePayload.previousWasDelta = 0u;
 
     RecordRadianceRay(bouncePayload.depth);
-    TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
+    TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, bounceRay, bouncePayload);
     dynamicTouched |= bouncePayload.dynamicTouched;
 
     if (g_enableAtrous == 0u)

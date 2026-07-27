@@ -618,7 +618,7 @@ bool D3D12Renderer::CreateDevice()
     if (CreateDxrDevice(warpAdapter.Get()))
         return true;
 
-    ReportFailure(E_FAIL, L"D3D12 raytracing tier 1.0 is not supported on this system.");
+    ReportFailure(E_FAIL, L"D3D12 raytracing tier 1.1 is not supported on this system.");
     return false;
 }
 
@@ -636,7 +636,7 @@ bool D3D12Renderer::CreateDxrDevice(IDXGIAdapter* adapter)
 
     D3D12_FEATURE_DATA_D3D12_OPTIONS5 options5 = {};
     hr = dxrDevice->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS5, &options5, sizeof(options5));
-    if (FAILED(hr) || options5.RaytracingTier < D3D12_RAYTRACING_TIER_1_0)
+    if (FAILED(hr) || options5.RaytracingTier < D3D12_RAYTRACING_TIER_1_1)
         return false;
 
     m_device = dxrDevice;

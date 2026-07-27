@@ -246,7 +246,7 @@ void MyRaygenShader_RadianceRay()
         payload.previousWasDelta = 1u;
 
         RecordRadianceRay(0u);
-        TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, ray, payload);
+        TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
         sampleRadiance = payload.color;
         sampleDiffuseIndirectRadiance =
             payload.primaryDiffuseIndirectColor;
@@ -293,7 +293,7 @@ void MyRaygenShader_RadianceRay()
                 RAY_FLAG_NONE,
                 0xFF,
                 0,
-                1,
+                0,
                 0,
                 guideRay,
                 guidePayload);
@@ -476,10 +476,11 @@ void MyAnyHitShader_AlphaMask(
     inout RadiancePayload payload,
     in BuiltInTriangleIntersectionAttributes attributes)
 {
-    SceneInstanceMetadata instanceMetadata =
-        g_instanceMetadata[InstanceID()];
+    uint ignoredInstanceFlags;
+    HitGeometryMetadata hitGeometry =
+        GetHitGeometryMetadata(ignoredInstanceFlags);
     uint globalPrimitiveIndex =
-        instanceMetadata.primitiveOffset + PrimitiveIndex();
+        hitGeometry.primitiveOffset + PrimitiveIndex();
     SceneMaterial material = GetSceneMaterial(globalPrimitiveIndex);
     if (material.alphaCutoff < 0.0f)
     {
@@ -487,10 +488,10 @@ void MyAnyHitShader_AlphaMask(
     }
 
     uint indexOffset =
-        instanceMetadata.indexOffset + PrimitiveIndex() * 3u;
-    uint i0 = instanceMetadata.vertexOffset + g_indices[indexOffset + 0u];
-    uint i1 = instanceMetadata.vertexOffset + g_indices[indexOffset + 1u];
-    uint i2 = instanceMetadata.vertexOffset + g_indices[indexOffset + 2u];
+        hitGeometry.indexOffset + PrimitiveIndex() * 3u;
+    uint i0 = hitGeometry.vertexOffset + g_indices[indexOffset + 0u];
+    uint i1 = hitGeometry.vertexOffset + g_indices[indexOffset + 1u];
+    uint i2 = hitGeometry.vertexOffset + g_indices[indexOffset + 2u];
     float2 texCoord = InterpolateTexCoord(i0, i1, i2, attributes);
     if (!PassesSceneAlphaMask(globalPrimitiveIndex, texCoord))
     {
@@ -506,19 +507,20 @@ void MyClosestHitShader_RadianceRay(
     bool guideOnly = payload.depth == c_primaryGuideRayDepth;
     if (!guideOnly)
         RecordSurfaceHit();
-    SceneInstanceMetadata instanceMetadata =
-        g_instanceMetadata[InstanceID()];
+    uint instanceFlags;
+    HitGeometryMetadata hitGeometry =
+        GetHitGeometryMetadata(instanceFlags);
     bool dynamicInstance =
-        (instanceMetadata.flags & c_instanceFlagDynamic) != 0u;
+        (instanceFlags & c_instanceFlagDynamic) != 0u;
     if (!guideOnly && dynamicInstance)
         payload.dynamicTouched = 1u;
     uint globalPrimitiveIndex =
-        instanceMetadata.primitiveOffset + PrimitiveIndex();
+        hitGeometry.primitiveOffset + PrimitiveIndex();
     uint indexOffset =
-        instanceMetadata.indexOffset + PrimitiveIndex() * 3u;
-    uint i0 = instanceMetadata.vertexOffset + g_indices[indexOffset + 0u];
-    uint i1 = instanceMetadata.vertexOffset + g_indices[indexOffset + 1u];
-    uint i2 = instanceMetadata.vertexOffset + g_indices[indexOffset + 2u];
+        hitGeometry.indexOffset + PrimitiveIndex() * 3u;
+    uint i0 = hitGeometry.vertexOffset + g_indices[indexOffset + 0u];
+    uint i1 = hitGeometry.vertexOffset + g_indices[indexOffset + 1u];
+    uint i2 = hitGeometry.vertexOffset + g_indices[indexOffset + 2u];
 
     float3 normal = InterpolateNormal(i0, i1, i2, attributes);
     float3x3 objectToWorld = (float3x3)ObjectToWorld3x4();

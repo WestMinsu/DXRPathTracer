@@ -51,12 +51,19 @@ struct SceneMaterial
     float alphaCutoff;
 };
 
-struct SceneInstanceMetadata
+struct SceneMetadataEntry
+{
+    uint data0;
+    uint data1;
+    uint data2;
+    uint data3;
+};
+
+struct HitGeometryMetadata
 {
     uint vertexOffset;
     uint indexOffset;
     uint primitiveOffset;
-    uint flags;
 };
 
 // Mirrored by GpuEmissiveTriangle in RayTracingManager.cpp.
@@ -132,7 +139,7 @@ TextureCube<float4> g_environmentMap : register(t3);
 StructuredBuffer<SceneMaterial> g_sceneMaterials : register(t4);
 StructuredBuffer<uint> g_primitiveMaterialIndices : register(t5);
 Texture2D<float4> g_materialTextures[c_maxMaterialTextures] : register(t6);
-StructuredBuffer<SceneInstanceMetadata> g_instanceMetadata : register(t262);
+StructuredBuffer<SceneMetadataEntry> g_sceneMetadata : register(t262);
 StructuredBuffer<EmissiveTriangle> g_emissiveTriangles : register(t263);
 StructuredBuffer<EnvironmentAliasEntry>
     g_environmentDistribution : register(t264);
@@ -145,6 +152,22 @@ Texture2D<float2> g_previousDiffuseMoments : register(t270);
 Texture2D<float2> g_previousSpecularMoments : register(t271);
 SamplerState g_environmentSampler : register(s0);
 SamplerState g_materialSampler : register(s1);
+
+HitGeometryMetadata GetHitGeometryMetadata(out uint instanceFlags)
+{
+    SceneMetadataEntry instanceMetadata =
+        g_sceneMetadata[InstanceID()];
+    SceneMetadataEntry geometryMetadata =
+        g_sceneMetadata[
+            instanceMetadata.data0 + GeometryIndex()];
+    instanceFlags = instanceMetadata.data1;
+
+    HitGeometryMetadata result;
+    result.vertexOffset = geometryMetadata.data0;
+    result.indexOffset = geometryMetadata.data1;
+    result.primitiveOffset = geometryMetadata.data2;
+    return result;
+}
 
 cbuffer RenderSettings : register(b0)
 {
@@ -880,7 +903,7 @@ float3 TraceLambertianBounce(
     bouncePayload.previousWasDelta = 0u;
 
     RecordRadianceRay(bouncePayload.depth);
-    TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 1, 0, bounceRay, bouncePayload);
+    TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, bounceRay, bouncePayload);
     dynamicTouched |= bouncePayload.dynamicTouched;
     return directLighting +
         albedo * inverseSurvivalProbability * bouncePayload.color;

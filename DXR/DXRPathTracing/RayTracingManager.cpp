@@ -179,6 +179,9 @@ namespace
     };
     static_assert(sizeof(GpuEnvironmentAliasEntry) == 16);
 
+
+    constexpr std::uint32_t c_sceneMetadataFlagDynamic = 1u;
+
     float HalfToFloat(std::uint16_t value)
     {
         const bool negative = (value & 0x8000u) != 0u;
@@ -637,7 +640,7 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         !m_hitGroupShaderTable || !m_descriptorHeap || !m_topLevelAS || !m_accumulationTexture ||
         !m_environmentMap || !m_environmentDistributionBuffer ||
         !m_sceneMaterialBuffer || !m_primitiveMaterialIndexBuffer ||
-        !m_instanceMetadataBuffer || !m_emissiveTriangleBuffer ||
+        !m_sceneMetadataBuffer || !m_emissiveTriangleBuffer ||
         !m_diffuseIndirectAccumulationTexture ||
         !m_specularIndirectAccumulationTexture ||
         !m_diffuseLuminanceMomentsTexture ||
@@ -792,7 +795,7 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         m_statisticsBuffer->GetGPUVirtualAddress());
     commandList->SetComputeRootShaderResourceView(
         10,
-        m_instanceMetadataBuffer->GetGPUVirtualAddress());
+        m_sceneMetadataBuffer->GetGPUVirtualAddress());
     commandList->SetComputeRootShaderResourceView(
         11,
         m_emissiveTriangleBuffer->GetGPUVirtualAddress());
@@ -2633,14 +2636,7 @@ bool RayTracingManager::CreateAccelerationStructures()
         D3D12_RESOURCE_BARRIER_TYPE_UAV;
     blasBarriers[blasBarrierCount].UAV.pResource = m_bottomLevelAS.Get();
     ++blasBarrierCount;
-    if (m_hasStaticAlphaGeometry)
-    {
-        blasBarriers[blasBarrierCount].Type =
-            D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        blasBarriers[blasBarrierCount].UAV.pResource =
-            m_staticAlphaBottomLevelAS.Get();
-        ++blasBarrierCount;
-    }
+
     if (m_hasDynamicSphere)
     {
         blasBarriers[blasBarrierCount].Type =
@@ -2663,7 +2659,6 @@ bool RayTracingManager::CreateAccelerationStructures()
 
     const bool buildSucceeded = ExecuteBuildCommandListAndWait();
     m_blasScratchBuffer.Reset();
-    m_staticAlphaBlasScratchBuffer.Reset();
     m_dynamicSphereBlasScratchBuffer.Reset();
     if (!m_hasDynamicSphere)
         m_tlasScratchBuffer.Reset();
@@ -2863,9 +2858,9 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             scene = CreateCornellBoxSceneData();
     }
 
-    // Keep opaque and alpha-tested triangles in separate BLASes. A single
-    // non-opaque geometry would force Any-Hit processing on every Sponza
-    // triangle merely because a small subset uses glTF alpha MASK.
+    // Keep opaque and alpha-tested triangles in separate geometry descriptors
+    // inside one static BLAS. Opaque triangles then bypass Any-Hit while
+    // alpha-mask triangles retain their required Any-Hit test.
     std::vector<std::uint32_t> opaqueIndices;
     std::vector<std::uint32_t> alphaIndices;
     std::vector<std::uint32_t> opaqueMaterials;
@@ -3066,27 +3061,37 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     m_vertexCount = static_cast<UINT>(scene.vertices.size());
     m_indexCount = static_cast<UINT>(scene.indices.size());
 
-    std::vector<SceneInstanceMetadata> instanceMetadata(1);
-    if (m_hasStaticAlphaGeometry)
+    const UINT staticGeometryCount =
+        m_hasStaticAlphaGeometry ? 2u : 1u;
+    const UINT instanceCount = 1u + (m_hasDynamicSphere ? 1u : 0u);
+    const UINT staticGeometryMetadataOffset = instanceCount;
+    const UINT dynamicGeometryMetadataOffset =
+        staticGeometryMetadataOffset + staticGeometryCount;
+    std::vector<SceneMetadataEntry> sceneMetadata;
+    sceneMetadata.reserve(
+        instanceCount + staticGeometryCount +
+        (m_hasDynamicSphere ? 1u : 0u));
+    sceneMetadata.push_back({ staticGeometryMetadataOffset, 0u, 0u, 0u });
+    if (m_hasDynamicSphere)
+        sceneMetadata.push_back(
+            { dynamicGeometryMetadataOffset, c_sceneMetadataFlagDynamic, 0u, 0u });
+
+    auto appendGeometryMetadata = [&sceneMetadata](
+        const GeometryRange& geometry)
     {
-        instanceMetadata.push_back(
+        sceneMetadata.push_back(
             {
-                m_staticAlphaGeometry.vertexOffset,
-                m_staticAlphaGeometry.indexOffset,
-                m_staticAlphaGeometry.primitiveOffset,
+                geometry.vertexOffset,
+                geometry.indexOffset,
+                geometry.primitiveOffset,
                 0u
             });
-    }
+    };
+    appendGeometryMetadata(m_staticGeometry);
+    if (m_hasStaticAlphaGeometry)
+        appendGeometryMetadata(m_staticAlphaGeometry);
     if (m_hasDynamicSphere)
-    {
-        instanceMetadata.push_back(
-            {
-                m_dynamicSphereGeometry.vertexOffset,
-                m_dynamicSphereGeometry.indexOffset,
-                m_dynamicSphereGeometry.primitiveOffset,
-                1u
-            });
-    }
+        appendGeometryMetadata(m_dynamicSphereGeometry);
 
     const UINT staticIndexCount =
         m_staticGeometry.indexCount +
@@ -3195,10 +3200,10 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             L"Raytracing primitive material index buffer",
             m_primitiveMaterialIndexBuffer) ||
         !createStaticGpuBuffer(
-            instanceMetadata.data(),
-            sizeof(SceneInstanceMetadata) * instanceMetadata.size(),
-            L"Raytracing instance metadata buffer",
-            m_instanceMetadataBuffer) ||
+            sceneMetadata.data(),
+            sizeof(SceneMetadataEntry) * sceneMetadata.size(),
+            L"Raytracing scene metadata buffer",
+            m_sceneMetadataBuffer) ||
         !createStaticGpuBuffer(
             emissiveTriangles.data(),
             sizeof(GpuEmissiveTriangle) * emissiveTriangles.size(),
@@ -3473,8 +3478,13 @@ bool RayTracingManager::CreateMaterialTextures(const SceneData& scene)
 
 bool RayTracingManager::BuildBottomLevelAccelerationStructure()
 {
+    const std::array<GeometryRange, 2> staticGeometries =
+        { m_staticGeometry, m_staticAlphaGeometry };
+    const UINT staticGeometryCount =
+        m_hasStaticAlphaGeometry ? 2u : 1u;
     if (!BuildBottomLevelAccelerationStructure(
-        m_staticGeometry,
+        staticGeometries.data(),
+        staticGeometryCount,
         L"Static scene bottom level acceleration structure",
         m_bottomLevelAS,
         m_blasScratchBuffer))
@@ -3482,19 +3492,10 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure()
         return false;
     }
 
-    if (m_hasStaticAlphaGeometry &&
-        !BuildBottomLevelAccelerationStructure(
-            m_staticAlphaGeometry,
-            L"Static alpha-mask bottom level acceleration structure",
-            m_staticAlphaBottomLevelAS,
-            m_staticAlphaBlasScratchBuffer))
-    {
-        return false;
-    }
-
     if (m_hasDynamicSphere &&
         !BuildBottomLevelAccelerationStructure(
-            m_dynamicSphereGeometry,
+            &m_dynamicSphereGeometry,
+            1u,
             L"Rolling sphere bottom level acceleration structure",
             m_dynamicSphereBottomLevelAS,
             m_dynamicSphereBlasScratchBuffer))
@@ -3505,43 +3506,56 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure()
 }
 
 bool RayTracingManager::BuildBottomLevelAccelerationStructure(
-    const GeometryRange& geometry,
+    const GeometryRange* geometries,
+    UINT geometryCount,
     const wchar_t* debugName,
     Microsoft::WRL::ComPtr<ID3D12Resource>& accelerationStructure,
     Microsoft::WRL::ComPtr<ID3D12Resource>& scratchBuffer)
 {
-    if (geometry.vertexCount == 0 || geometry.indexCount == 0)
+    if (!geometries || geometryCount == 0)
     {
         ReportMessage(L"BLAS geometry range is empty.");
         return false;
     }
 
-    D3D12_RAYTRACING_GEOMETRY_DESC geometryDesc = {};
-    geometryDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
-    geometryDesc.Flags = geometry.containsAlphaMask
-        ? D3D12_RAYTRACING_GEOMETRY_FLAG_NONE
-        : D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
-    geometryDesc.Triangles.VertexBuffer.StartAddress =
-        m_vertexBuffer->GetGPUVirtualAddress() +
-        static_cast<UINT64>(geometry.vertexOffset) *
-        sizeof(SceneVertex);
-    geometryDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(SceneVertex);
-    geometryDesc.Triangles.VertexCount = geometry.vertexCount;
-    geometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
-    geometryDesc.Triangles.IndexBuffer =
-        m_indexBuffer->GetGPUVirtualAddress() +
-        static_cast<UINT64>(geometry.indexOffset) *
-        sizeof(std::uint32_t);
-    geometryDesc.Triangles.IndexCount = geometry.indexCount;
-    geometryDesc.Triangles.IndexFormat = DXGI_FORMAT_R32_UINT;
-    geometryDesc.Triangles.Transform3x4 = 0;
+    std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs(geometryCount);
+    for (UINT geometryIndex = 0; geometryIndex < geometryCount; ++geometryIndex)
+    {
+        const GeometryRange& geometry = geometries[geometryIndex];
+        if (geometry.vertexCount == 0 || geometry.indexCount == 0)
+        {
+            ReportMessage(L"BLAS geometry range is empty.");
+            return false;
+        }
+
+        D3D12_RAYTRACING_GEOMETRY_DESC& geometryDesc =
+            geometryDescs[geometryIndex];
+        geometryDesc.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+        geometryDesc.Flags = geometry.containsAlphaMask
+            ? D3D12_RAYTRACING_GEOMETRY_FLAG_NONE
+            : D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+        geometryDesc.Triangles.VertexBuffer.StartAddress =
+            m_vertexBuffer->GetGPUVirtualAddress() +
+            static_cast<UINT64>(geometry.vertexOffset) *
+            sizeof(SceneVertex);
+        geometryDesc.Triangles.VertexBuffer.StrideInBytes = sizeof(SceneVertex);
+        geometryDesc.Triangles.VertexCount = geometry.vertexCount;
+        geometryDesc.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+        geometryDesc.Triangles.IndexBuffer =
+            m_indexBuffer->GetGPUVirtualAddress() +
+            static_cast<UINT64>(geometry.indexOffset) *
+            sizeof(std::uint32_t);
+        geometryDesc.Triangles.IndexCount = geometry.indexCount;
+        geometryDesc.Triangles.IndexFormat = DXGI_FORMAT_R32_UINT;
+        geometryDesc.Triangles.Transform3x4 = 0;
+    }
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
     inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
     inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
     inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-    inputs.NumDescs = 1;
-    inputs.pGeometryDescs = &geometryDesc;
+    inputs.NumDescs = geometryCount;
+    inputs.pGeometryDescs = geometryDescs.data();
 
     D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO prebuildInfo = {};
     m_device->GetRaytracingAccelerationStructurePrebuildInfo(&inputs, &prebuildInfo);
@@ -3578,8 +3592,7 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure(
 
 bool RayTracingManager::BuildTopLevelAccelerationStructure()
 {
-    const UINT staticInstanceCount =
-        m_hasStaticAlphaGeometry ? 2u : 1u;
+    const UINT staticInstanceCount = 1u;
     const UINT instanceCount =
         staticInstanceCount + (m_hasDynamicSphere ? 1u : 0u);
     std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs(instanceCount);
@@ -3590,17 +3603,7 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
     instanceDescs[0].InstanceMask = 0xFF;
     instanceDescs[0].AccelerationStructure =
         m_bottomLevelAS->GetGPUVirtualAddress();
-    if (m_hasStaticAlphaGeometry)
-    {
-        D3D12_RAYTRACING_INSTANCE_DESC& alphaDesc = instanceDescs[1];
-        alphaDesc.Transform[0][0] = 1.0f;
-        alphaDesc.Transform[1][1] = 1.0f;
-        alphaDesc.Transform[2][2] = 1.0f;
-        alphaDesc.InstanceID = 1u;
-        alphaDesc.InstanceMask = 0xFF;
-        alphaDesc.AccelerationStructure =
-            m_staticAlphaBottomLevelAS->GetGPUVirtualAddress();
-    }
+
     if (m_hasDynamicSphere)
     {
         const float cosine = std::cos(m_dynamicSphereRollRadians);
@@ -3701,8 +3704,7 @@ bool RayTracingManager::WriteInstanceDescriptors(
     if (ReportFailure(hr, L"TLAS instance descriptor mapping failed."))
         return false;
 
-    const UINT staticInstanceCount =
-        m_hasStaticAlphaGeometry ? 2u : 1u;
+    const UINT staticInstanceCount = 1u;
     const UINT instanceCount = staticInstanceCount + 1u;
     std::memset(
         instanceDescs,
@@ -3716,17 +3718,7 @@ bool RayTracingManager::WriteInstanceDescriptors(
     instanceDescs[0].AccelerationStructure =
         m_bottomLevelAS->GetGPUVirtualAddress();
 
-    if (m_hasStaticAlphaGeometry)
-    {
-        D3D12_RAYTRACING_INSTANCE_DESC& alphaDesc = instanceDescs[1];
-        alphaDesc.Transform[0][0] = 1.0f;
-        alphaDesc.Transform[1][1] = 1.0f;
-        alphaDesc.Transform[2][2] = 1.0f;
-        alphaDesc.InstanceID = 1u;
-        alphaDesc.InstanceMask = 0xFF;
-        alphaDesc.AccelerationStructure =
-            m_staticAlphaBottomLevelAS->GetGPUVirtualAddress();
-    }
+
 
     const float cosine = std::cos(sphereRollRadians);
     const float sine = std::sin(sphereRollRadians);
@@ -3861,8 +3853,7 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE |
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
     buildDesc.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-    buildDesc.Inputs.NumDescs =
-        (m_hasStaticAlphaGeometry ? 2u : 1u) + 1u;
+    buildDesc.Inputs.NumDescs = 2u;
     buildDesc.Inputs.InstanceDescs =
         m_instanceDescBuffers[descriptorFrame]->GetGPUVirtualAddress();
     buildDesc.SourceAccelerationStructureData =
