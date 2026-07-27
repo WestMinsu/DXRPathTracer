@@ -41,14 +41,36 @@ bool TemporalSceneIsMoving()
         TemporalCameraIsMoving();
 }
 
-bool FindValidatedHistoryPixel(
-    float3 worldPosition,
-    float3 currentNormal,
-    float4 currentMaterial,
-    uint2 resolution,
-    out int2 historyPixel)
+struct TemporalHistorySample
 {
-    historyPixel = int2(0, 0);
+    float3 radianceAverage;
+    float3 diffuseAverage;
+    float3 specularAverage;
+    float2 diffuseMomentAverage;
+    float2 specularMomentAverage;
+    float sampleCount;
+};
+
+void ResetTemporalHistorySample(out TemporalHistorySample history)
+{
+    history.radianceAverage = float3(0.0f, 0.0f, 0.0f);
+    history.diffuseAverage = float3(0.0f, 0.0f, 0.0f);
+    history.specularAverage = float3(0.0f, 0.0f, 0.0f);
+    history.diffuseMomentAverage = float2(0.0f, 0.0f);
+    history.specularMomentAverage = float2(0.0f, 0.0f);
+    history.sampleCount = 0.0f;
+}
+
+bool ProjectToPreviousFrame(
+    float3 worldPosition,
+    float3 currentRayDirection,
+    bool currentHit,
+    uint2 resolution,
+    out float2 historyPosition,
+    out float expectedPreviousDepth)
+{
+    historyPosition = float2(0.0f, 0.0f);
+    expectedPreviousDepth = -1.0f;
     float3 previousForwardVector =
         g_previousCameraTarget - g_previousCameraPosition;
     float forwardLength = length(previousForwardVector);
@@ -63,12 +85,15 @@ bool FindValidatedHistoryPixel(
     float3 previousRight = previousRightVector / rightLength;
     float3 previousUp = cross(previousForward, previousRight);
 
-    float3 previousViewVector =
-        worldPosition - g_previousCameraPosition;
-    float previousViewDepth =
-        dot(previousViewVector, previousForward);
+    float3 previousViewVector = currentHit
+        ? worldPosition - g_previousCameraPosition
+        : currentRayDirection;
+    float previousViewDepth = dot(previousViewVector, previousForward);
     if (previousViewDepth <= c_rayTMin)
         return false;
+
+    if (currentHit)
+        expectedPreviousDepth = length(previousViewVector);
 
     float tanHalfFov = tan(c_verticalFovRadians * 0.5f);
     float aspectRatio = float(resolution.x) / float(resolution.y);
@@ -83,15 +108,36 @@ bool FindValidatedHistoryPixel(
     if (any(previousUv < 0.0f) || any(previousUv >= 1.0f))
         return false;
 
-    historyPixel = int2(previousUv * float2(resolution));
+    // Texture texel centers are at integer + 0.5 in UV-scaled coordinates.
+    historyPosition = previousUv * float2(resolution) - 0.5f;
+    return true;
+}
+
+bool IsValidHistoryTap(
+    int2 historyPixel,
+    bool currentHit,
+    float expectedPreviousDepth,
+    float3 currentNormal,
+    float4 currentMaterial,
+    uint2 resolution)
+{
+    if (any(historyPixel < int2(0, 0)) ||
+        any(historyPixel >= int2(resolution)))
+    {
+        return false;
+    }
+
     float4 previousNormalDepth =
         g_previousNormalDepth.Load(int3(historyPixel, 0));
     float4 previousMaterial =
         g_previousMaterialGuide.Load(int3(historyPixel, 0));
-    if (previousNormalDepth.w < 0.0f || previousMaterial.a < 0.0f)
+    bool previousHit =
+        previousNormalDepth.w >= 0.0f && previousMaterial.a >= 0.0f;
+    if (currentHit != previousHit)
         return false;
+    if (!currentHit)
+        return true;
 
-    float expectedPreviousDepth = length(previousViewVector);
     float depthTolerance = max(0.02f, expectedPreviousDepth * 0.02f);
     if (abs(previousNormalDepth.w - expectedPreviousDepth) > depthTolerance)
         return false;
@@ -117,6 +163,116 @@ bool FindValidatedHistoryPixel(
     {
         return false;
     }
+    return true;
+}
+
+bool GatherValidatedHistory(
+    float3 worldPosition,
+    float3 currentRayDirection,
+    float4 currentNormalDepth,
+    float4 currentMaterial,
+    uint2 resolution,
+    out TemporalHistorySample history)
+{
+    ResetTemporalHistorySample(history);
+    bool currentHit =
+        currentNormalDepth.w >= 0.0f && currentMaterial.a >= 0.0f;
+    float2 historyPosition;
+    float expectedPreviousDepth;
+    if (!ProjectToPreviousFrame(
+        worldPosition,
+        currentRayDirection,
+        currentHit,
+        resolution,
+        historyPosition,
+        expectedPreviousDepth))
+    {
+        return false;
+    }
+
+    int2 basePixel = int2(floor(historyPosition));
+    float2 fraction = frac(historyPosition);
+    int2 tapOffsets[4] =
+    {
+        int2(0, 0),
+        int2(1, 0),
+        int2(0, 1),
+        int2(1, 1)
+    };
+    float tapWeights[4] =
+    {
+        (1.0f - fraction.x) * (1.0f - fraction.y),
+        fraction.x * (1.0f - fraction.y),
+        (1.0f - fraction.x) * fraction.y,
+        fraction.x * fraction.y
+    };
+
+    float validWeight = 0.0f;
+    float weightedSampleCount = 0.0f;
+    [unroll]
+    for (uint tapIndex = 0u; tapIndex < 4u; ++tapIndex)
+    {
+        float tapWeight = tapWeights[tapIndex];
+        if (tapWeight <= 0.0f)
+            continue;
+
+        int2 historyPixel = basePixel + tapOffsets[tapIndex];
+        if (!IsValidHistoryTap(
+            historyPixel,
+            currentHit,
+            expectedPreviousDepth,
+            currentNormalDepth.xyz,
+            currentMaterial,
+            resolution))
+        {
+            continue;
+        }
+
+        float4 previousAccumulation =
+            g_previousAccumulation.Load(int3(historyPixel, 0));
+        if (previousAccumulation.a <= 0.0f)
+            continue;
+
+        float tapSampleCount = max(previousAccumulation.a, 1.0f);
+        history.radianceAverage += tapWeight *
+            previousAccumulation.rgb / tapSampleCount;
+        weightedSampleCount += tapWeight * tapSampleCount;
+
+        if (g_enableAtrous != 0u)
+        {
+            float4 previousDiffuse =
+                g_previousDiffuseIndirect.Load(int3(historyPixel, 0));
+            float4 previousSpecular =
+                g_previousSpecularIndirect.Load(int3(historyPixel, 0));
+            float diffuseSampleCount = max(abs(previousDiffuse.a), 1.0f);
+            float specularSampleCount = max(abs(previousSpecular.a), 1.0f);
+            history.diffuseAverage += tapWeight *
+                previousDiffuse.rgb / diffuseSampleCount;
+            history.specularAverage += tapWeight *
+                previousSpecular.rgb / specularSampleCount;
+            history.diffuseMomentAverage += tapWeight *
+                g_previousDiffuseMoments.Load(int3(historyPixel, 0)) /
+                diffuseSampleCount;
+            history.specularMomentAverage += tapWeight *
+                g_previousSpecularMoments.Load(int3(historyPixel, 0)) /
+                specularSampleCount;
+        }
+        validWeight += tapWeight;
+    }
+
+    // Avoid stretching a tiny surviving bilinear tap across a disocclusion.
+    if (validWeight < 0.10f)
+        return false;
+
+    float inverseValidWeight = 1.0f / validWeight;
+    history.radianceAverage *= inverseValidWeight;
+    history.diffuseAverage *= inverseValidWeight;
+    history.specularAverage *= inverseValidWeight;
+    history.diffuseMomentAverage *= inverseValidWeight;
+    history.specularMomentAverage *= inverseValidWeight;
+    history.sampleCount = max(
+        weightedSampleCount * inverseValidWeight,
+        1.0f);
     return true;
 }
 
@@ -606,6 +762,10 @@ void RunRaygen()
     {
         int2 historyPixel = int2(launchIndex);
         bool historyValid = true;
+        bool useBilinearHistory = false;
+        bool previousDynamicInvalidation = false;
+        TemporalHistorySample history;
+        ResetTemporalHistorySample(history);
         if (g_enableTemporalReprojection != 0u)
         {
             temporalHistoryAttempted = true;
@@ -613,16 +773,21 @@ void RunRaygen()
             if (TemporalCameraIsMoving())
             {
                 float4 currentNormalDepth = g_normalDepth[launchIndex];
-                historyValid =
+                bool currentHit =
                     currentNormalDepth.w >= 0.0f &&
-                    currentMaterial.a >= 0.0f &&
-                    FindValidatedHistoryPixel(
-                        g_cameraPosition +
-                            primaryRayDirection * currentNormalDepth.w,
-                        currentNormalDepth.xyz,
-                        currentMaterial,
-                        launchDim,
-                        historyPixel);
+                    currentMaterial.a >= 0.0f;
+                float3 worldPosition = currentHit
+                    ? g_cameraPosition +
+                        primaryRayDirection * currentNormalDepth.w
+                    : float3(0.0f, 0.0f, 0.0f);
+                useBilinearHistory = true;
+                historyValid = GatherValidatedHistory(
+                    worldPosition,
+                    primaryRayDirection,
+                    currentNormalDepth,
+                    currentMaterial,
+                    launchDim,
+                    history);
             }
             else if (g_dynamicObjectMoved != 0u)
             {
@@ -643,60 +808,94 @@ void RunRaygen()
             }
         }
 
-        float4 previousAccumulation =
-            g_enableTemporalReprojection != 0u
-            ? g_previousAccumulation.Load(int3(historyPixel, 0))
-            : g_accumulation[launchIndex];
-        bool previousDynamicInvalidation =
-            previousAccumulation.a < 0.0f;
+        if (historyValid && !useBilinearHistory)
+        {
+            float4 previousAccumulation =
+                g_enableTemporalReprojection != 0u
+                ? g_previousAccumulation.Load(int3(historyPixel, 0))
+                : g_accumulation[launchIndex];
+            previousDynamicInvalidation =
+                previousAccumulation.a < 0.0f;
+            float previousSampleCount =
+                max(abs(previousAccumulation.a), 1.0f);
+            history.radianceAverage =
+                previousAccumulation.rgb / previousSampleCount;
+            history.sampleCount = previousSampleCount;
+
+            if (g_enableAtrous != 0u)
+            {
+                float4 previousDiffuse;
+                float4 previousSpecular;
+                float2 previousDiffuseMoments;
+                float2 previousSpecularMoments;
+                if (g_enableTemporalReprojection != 0u)
+                {
+                    previousDiffuse =
+                        g_previousDiffuseIndirect.Load(
+                            int3(historyPixel, 0));
+                    previousSpecular =
+                        g_previousSpecularIndirect.Load(
+                            int3(historyPixel, 0));
+                    previousDiffuseMoments =
+                        g_previousDiffuseMoments.Load(
+                            int3(historyPixel, 0));
+                    previousSpecularMoments =
+                        g_previousSpecularMoments.Load(
+                            int3(historyPixel, 0));
+                }
+                else
+                {
+                    previousDiffuse =
+                        g_diffuseIndirectAccumulation[launchIndex];
+                    previousSpecular =
+                        g_specularIndirectAccumulation[launchIndex];
+                    previousDiffuseMoments =
+                        g_diffuseLuminanceMoments[launchIndex];
+                    previousSpecularMoments =
+                        g_specularLuminanceMoments[launchIndex];
+                }
+
+                float diffuseSampleCount =
+                    max(abs(previousDiffuse.a), 1.0f);
+                float specularSampleCount =
+                    max(abs(previousSpecular.a), 1.0f);
+                history.diffuseAverage =
+                    previousDiffuse.rgb / diffuseSampleCount;
+                history.specularAverage =
+                    previousSpecular.rgb / specularSampleCount;
+                history.diffuseMomentAverage =
+                    previousDiffuseMoments / diffuseSampleCount;
+                history.specularMomentAverage =
+                    previousSpecularMoments / specularSampleCount;
+            }
+        }
+
         if (historyValid &&
             !dynamicInvalidation &&
             !previousDynamicInvalidation)
         {
             temporalHistoryAccepted =
                 g_enableTemporalReprojection != 0u;
-            float previousSampleCount =
-                max(abs(previousAccumulation.a), 1.0f);
-            float retainedHistoryCount = previousSampleCount;
+            float retainedHistoryCount = history.sampleCount;
             if (g_enableTemporalReprojection != 0u &&
                 TemporalSceneIsMoving())
             {
                 retainedHistoryCount = min(
-                    previousSampleCount,
+                    history.sampleCount,
                     31.0f);
             }
-            float historyScale =
-                retainedHistoryCount / previousSampleCount;
             accumulatedColor +=
-                previousAccumulation.rgb * historyScale;
+                history.radianceAverage * retainedHistoryCount;
             if (g_enableAtrous != 0u)
             {
-                if (g_enableTemporalReprojection != 0u)
-                {
-                    accumulatedDiffuseIndirect +=
-                        g_previousDiffuseIndirect.Load(
-                            int3(historyPixel, 0)).rgb * historyScale;
-                    accumulatedSpecularIndirect +=
-                        g_previousSpecularIndirect.Load(
-                            int3(historyPixel, 0)).rgb * historyScale;
-                    accumulatedDiffuseMoments +=
-                        g_previousDiffuseMoments.Load(
-                            int3(historyPixel, 0)) * historyScale;
-                    accumulatedSpecularMoments +=
-                        g_previousSpecularMoments.Load(
-                            int3(historyPixel, 0)) * historyScale;
-                }
-                else
-                {
-                    accumulatedDiffuseIndirect +=
-                        g_diffuseIndirectAccumulation[launchIndex].rgb;
-                    accumulatedSpecularIndirect +=
-                        g_specularIndirectAccumulation[launchIndex].rgb;
-                    accumulatedDiffuseMoments +=
-                        g_diffuseLuminanceMoments[launchIndex];
-                    accumulatedSpecularMoments +=
-                        g_specularLuminanceMoments[launchIndex];
-                }
+                accumulatedDiffuseIndirect +=
+                    history.diffuseAverage * retainedHistoryCount;
+                accumulatedSpecularIndirect +=
+                    history.specularAverage * retainedHistoryCount;
+                accumulatedDiffuseMoments +=
+                    history.diffuseMomentAverage * retainedHistoryCount;
+                accumulatedSpecularMoments +=
+                    history.specularMomentAverage * retainedHistoryCount;
             }
             localSampleCount = retainedHistoryCount + 1.0f;
         }
