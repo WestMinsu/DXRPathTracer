@@ -109,6 +109,13 @@ SceneData CreateCornellBoxSceneData();
 SceneData CreateIndirectBounceStressSceneData();
 SceneData CreatePbrGgxSceneData();
 SceneData CreateRollingMetalSphereSceneData(float radius);
+SceneData CreateDynamicTransformTestRoomSceneData();
+SceneData CreateDynamicTransformTestSphereSceneData(
+    float radius,
+    std::uint32_t materialPreset);
+SceneData CreateDynamicTransformTestCubeSceneData(
+    float halfExtent,
+    std::uint32_t materialPreset);
 bool ComputeSceneBounds(const SceneData& scene, SceneBounds& bounds);
 bool FindWalkableSurfaceHeight(
     const SceneData& scene,

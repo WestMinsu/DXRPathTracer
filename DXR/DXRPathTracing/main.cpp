@@ -51,6 +51,7 @@ namespace
         bool collectRayStatistics = false;
         bool rayStatisticsSpecified = false;
         bool animateDynamicSphere = false;
+        bool animateDynamicCube = false;
         std::wstring benchmarkOutput;
         std::wstring cameraPathFilePath;
         std::wstring outputPrefix;
@@ -261,6 +262,12 @@ namespace
                 gOptions.animateDynamicSphere =
                     _wtoi(arguments[++index]) != 0;
             }
+            else if (argument == L"--animate-cube" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.animateDynamicCube =
+                    _wtoi(arguments[++index]) != 0;
+            }
             else if (argument == L"--scene" && index + 1 < argumentCount)
             {
                 gOptions.sponzaLite = false;
@@ -279,6 +286,12 @@ namespace
                 {
                     gOptions.sceneType =
                         RayTracingManager::c_sceneIndirectBounceStress;
+                }
+                else if (scene == L"dynamic-transform" ||
+                         scene == L"dynamic-test")
+                {
+                    gOptions.sceneType =
+                        RayTracingManager::c_sceneDynamicTransformTest;
                 }
                 else
                 {
@@ -528,6 +541,8 @@ namespace
             gOptions.atrousColorSigma);
         gRenderer.SetInitialDynamicSphereAnimationEnabled(
             gOptions.animateDynamicSphere);
+        gRenderer.SetInitialDynamicCubeAnimationEnabled(
+            gOptions.animateDynamicCube);
         gRenderer.SetComposeModelRoom(gOptions.composeModelRoom);
         gRenderer.SetSponzaLite(gOptions.sponzaLite);
         gRenderer.SetSceneManifestPath(gOptions.sceneManifestPath);

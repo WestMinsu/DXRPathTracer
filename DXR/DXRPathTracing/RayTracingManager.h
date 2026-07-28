@@ -44,6 +44,7 @@ public:
     static constexpr UINT c_scenePbrGgx = 1;
     static constexpr UINT c_scenePbrGpuValidation = 2;
     static constexpr UINT c_sceneIndirectBounceStress = 3;
+    static constexpr UINT c_sceneDynamicTransformTest = 4;
     static constexpr UINT c_lightingModeBsdf = 0;
     static constexpr UINT c_lightingModeNee = 1;
     static constexpr UINT c_lightingModeMis = 2;
@@ -118,12 +119,17 @@ public:
         return m_dynamicObjectAngularSpeed;
     }
     bool HasDynamicSphere() const { return m_hasDynamicSphere; }
+    bool HasDynamicCube() const { return m_hasDynamicCube; }
     bool IsDynamicSphereVisible() const
     {
         return m_dynamicSphereVisible;
     }
     void SetDynamicSphereVisible(bool visible);
     void SetDynamicSphereAnimationEnabled(bool enabled);
+    void SetDynamicCubeVisible(bool visible);
+    void SetDynamicCubeAnimationEnabled(bool enabled);
+    void SetDynamicTestSphereMaterialPreset(UINT preset);
+    void SetDynamicTestCubeMaterialPreset(UINT preset);
     void SetDynamicSphereDeterministicTimeline(bool enabled);
     void ResetDynamicSphereTimeline();
     void SetEnableStatistics(bool enabled) { m_enableStatistics = enabled; }
@@ -191,11 +197,9 @@ private:
     bool UpdateTopLevelAccelerationStructure(
         ID3D12GraphicsCommandList4* commandList);
     bool WriteInstanceDescriptors(
-        UINT frameIndex,
-        float spherePositionX,
-        float sphereRollRadians);
+        UINT frameIndex);
     bool WritePreviousInstanceTransforms(UINT frameIndex);
-    void UpdateDynamicSphereMotion();
+    void UpdateDynamicObjectMotion();
     bool ExecuteBuildCommandListAndWait();
     bool CreateUploadBuffer(const void* data,
         UINT64 sizeInBytes,
@@ -262,9 +266,13 @@ private:
     bool m_sponzaLite = false;
     bool m_autoFrameCamera = false;
     bool m_hasDynamicSphere = false;
+    bool m_hasDynamicCube = false;
     bool m_dynamicSphereVisible = true;
+    bool m_dynamicCubeVisible = true;
     bool m_dynamicSphereVisibilityDirty = false;
+    bool m_dynamicCubeVisibilityDirty = false;
     bool m_dynamicSphereAnimationEnabled = true;
+    bool m_dynamicCubeAnimationEnabled = true;
     bool m_dynamicSphereDeterministicTimeline = false;
     float m_dynamicSphereRadius = 0.0f;
     float m_dynamicSphereTrackCenterX = 0.0f;
@@ -273,6 +281,15 @@ private:
     float m_dynamicSphereMotionAmplitude = 0.0f;
     float m_dynamicSpherePositionX = 0.0f;
     float m_dynamicSphereRollRadians = 0.0f;
+    float m_dynamicCubeHalfExtent = 0.68f;
+    float m_dynamicCubeCenterX = 1.35f;
+    float m_dynamicCubeCenterY = -0.32f;
+    float m_dynamicCubeCenterZ = 1.90f;
+    float m_dynamicCubePositionX = 1.35f;
+    float m_dynamicCubePositionZ = 1.90f;
+    float m_dynamicCubeRotationY = 0.0f;
+    UINT m_dynamicTestSphereMaterialPreset = 0u;
+    UINT m_dynamicTestCubeMaterialPreset = 3u;
     double m_dynamicObjectLinearSpeed = 0.0;
     double m_dynamicObjectAngularSpeed = 0.0;
     bool m_dynamicObjectMovedThisFrame = false;
@@ -280,6 +297,7 @@ private:
     GeometryRange m_staticGeometry;
     GeometryRange m_staticAlphaGeometry;
     GeometryRange m_dynamicSphereGeometry;
+    GeometryRange m_dynamicCubeGeometry;
     bool m_hasStaticAlphaGeometry = false;
     std::array<float, 3> m_sceneBoundsMin = { 0.0f, 0.0f, 0.0f };
     std::array<float, 3> m_sceneBoundsMax = { 0.0f, 0.0f, 0.0f };
@@ -350,6 +368,7 @@ private:
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> m_materialTextures;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_bottomLevelAS;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_dynamicSphereBottomLevelAS;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_dynamicCubeBottomLevelAS;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_topLevelAS;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,
         c_tlasFrameCount> m_instanceDescBuffers;
@@ -359,6 +378,7 @@ private:
     std::vector<std::array<float, 12>> m_previousInstanceTransforms;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_blasScratchBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_dynamicSphereBlasScratchBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_dynamicCubeBlasScratchBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_tlasScratchBuffer;
     FrameStatistics m_frameStatistics;
 };

@@ -91,6 +91,41 @@ namespace
         };
     }
 
+    SceneMaterial MakeDynamicTestMaterial(std::uint32_t preset)
+    {
+        switch (preset % 4u)
+        {
+        case 1u:
+            return MakeMaterial(
+                MakeFloat3(0.72f, 0.055f, 0.035f),
+                0.0f,
+                0.72f,
+                MakeFloat3(0.0f, 0.0f, 0.0f),
+                c_pbrParameterModeFixedNoOverride);
+        case 2u:
+            return MakeMaterial(
+                MakeFloat3(0.56f, 0.60f, 0.64f),
+                1.0f,
+                0.48f,
+                MakeFloat3(0.0f, 0.0f, 0.0f),
+                c_pbrParameterModeFixedNoOverride);
+        case 3u:
+            return MakeMaterial(
+                MakeFloat3(0.035f, 0.11f, 0.72f),
+                0.0f,
+                0.12f,
+                MakeFloat3(0.0f, 0.0f, 0.0f),
+                c_pbrParameterModeFixedNoOverride);
+        default:
+            return MakeMaterial(
+                MakeFloat3(1.0f, 0.766f, 0.336f),
+                1.0f,
+                0.18f,
+                MakeFloat3(0.0f, 0.0f, 0.0f),
+                c_pbrParameterModeFixedNoOverride);
+        }
+    }
+
     Float3 RotateY(Float3 value, float cosY, float sinY)
     {
         return MakeFloat3(
@@ -918,5 +953,159 @@ SceneData CreateRollingMetalSphereSceneData(float radius)
             scene.primitiveMaterialIndices[primitiveIndex] = 1u;
     }
 
+    return scene;
+}
+
+SceneData CreateDynamicTransformTestRoomSceneData()
+{
+    SceneData scene;
+    constexpr float floorY = -1.0f;
+    constexpr float ceilingY = 2.8f;
+    constexpr float halfWidth = 4.0f;
+    constexpr float nearZ = -1.0f;
+    constexpr float farZ = 5.0f;
+    constexpr std::uint32_t floorMaterial = 0u;
+    constexpr std::uint32_t wallMaterial = 1u;
+    constexpr std::uint32_t leftPanelMaterial = 2u;
+    constexpr std::uint32_t rightPanelMaterial = 3u;
+    constexpr std::uint32_t lightMaterial = 4u;
+    scene.materials =
+    {
+        MakeMaterial(MakeFloat3(0.52f, 0.54f, 0.57f), 0.0f, 0.78f),
+        MakeMaterial(MakeFloat3(0.68f, 0.69f, 0.70f), 0.0f, 0.85f),
+        MakeMaterial(MakeFloat3(0.12f, 0.42f, 0.72f), 0.0f, 0.68f),
+        MakeMaterial(MakeFloat3(0.72f, 0.24f, 0.08f), 0.0f, 0.68f),
+        MakeMaterial(
+            MakeFloat3(0.0f, 0.0f, 0.0f),
+            0.0f,
+            1.0f,
+            MakeFloat3(24.0f, 22.0f, 19.0f),
+            c_pbrParameterModeFixedNoOverride)
+    };
+
+    AddQuad(
+        scene,
+        MakeFloat3(-halfWidth, floorY, nearZ),
+        MakeFloat3(-halfWidth, floorY, farZ),
+        MakeFloat3(halfWidth, floorY, farZ),
+        MakeFloat3(halfWidth, floorY, nearZ),
+        MakeFloat3(0.0f, 1.0f, 0.0f),
+        floorMaterial);
+    AddQuad(
+        scene,
+        MakeFloat3(-halfWidth, ceilingY, nearZ),
+        MakeFloat3(halfWidth, ceilingY, nearZ),
+        MakeFloat3(halfWidth, ceilingY, farZ),
+        MakeFloat3(-halfWidth, ceilingY, farZ),
+        MakeFloat3(0.0f, -1.0f, 0.0f),
+        wallMaterial);
+    AddQuad(
+        scene,
+        MakeFloat3(-halfWidth, floorY, farZ),
+        MakeFloat3(-halfWidth, ceilingY, farZ),
+        MakeFloat3(halfWidth, ceilingY, farZ),
+        MakeFloat3(halfWidth, floorY, farZ),
+        MakeFloat3(0.0f, 0.0f, -1.0f),
+        wallMaterial);
+    AddQuad(
+        scene,
+        MakeFloat3(-halfWidth, floorY, nearZ),
+        MakeFloat3(-halfWidth, ceilingY, nearZ),
+        MakeFloat3(-halfWidth, ceilingY, farZ),
+        MakeFloat3(-halfWidth, floorY, farZ),
+        MakeFloat3(1.0f, 0.0f, 0.0f),
+        wallMaterial);
+    AddQuad(
+        scene,
+        MakeFloat3(halfWidth, floorY, nearZ),
+        MakeFloat3(halfWidth, floorY, farZ),
+        MakeFloat3(halfWidth, ceilingY, farZ),
+        MakeFloat3(halfWidth, ceilingY, nearZ),
+        MakeFloat3(-1.0f, 0.0f, 0.0f),
+        wallMaterial);
+
+    // Contrasting panels make occlusion and newly revealed pixels obvious.
+    AddQuad(
+        scene,
+        MakeFloat3(-3.2f, -0.75f, farZ - 0.01f),
+        MakeFloat3(-3.2f, 1.65f, farZ - 0.01f),
+        MakeFloat3(-0.15f, 1.65f, farZ - 0.01f),
+        MakeFloat3(-0.15f, -0.75f, farZ - 0.01f),
+        MakeFloat3(0.0f, 0.0f, -1.0f),
+        leftPanelMaterial);
+    AddQuad(
+        scene,
+        MakeFloat3(0.15f, -0.75f, farZ - 0.01f),
+        MakeFloat3(0.15f, 1.65f, farZ - 0.01f),
+        MakeFloat3(3.2f, 1.65f, farZ - 0.01f),
+        MakeFloat3(3.2f, -0.75f, farZ - 0.01f),
+        MakeFloat3(0.0f, 0.0f, -1.0f),
+        rightPanelMaterial);
+
+    AddQuad(
+        scene,
+        MakeFloat3(-1.15f, ceilingY - 0.01f, 0.55f),
+        MakeFloat3(1.15f, ceilingY - 0.01f, 0.55f),
+        MakeFloat3(1.15f, ceilingY - 0.01f, 2.45f),
+        MakeFloat3(-1.15f, ceilingY - 0.01f, 2.45f),
+        MakeFloat3(0.0f, -1.0f, 0.0f),
+        lightMaterial);
+    return scene;
+}
+
+SceneData CreateDynamicTransformTestSphereSceneData(
+    float radius,
+    std::uint32_t materialPreset)
+{
+    SceneData scene;
+    const float safeRadius = (std::max)(radius, 0.001f);
+    scene.materials =
+    {
+        MakeDynamicTestMaterial(materialPreset),
+        MakeMaterial(
+            MakeFloat3(0.025f, 0.028f, 0.035f),
+            1.0f,
+            0.62f,
+            MakeFloat3(0.0f, 0.0f, 0.0f),
+            c_pbrParameterModeFixedNoOverride)
+    };
+    AddPbrSphere(
+        scene,
+        MakeFloat3(0.0f, 0.0f, 0.0f),
+        safeRadius,
+        0u);
+    for (std::size_t primitiveIndex = 0;
+         primitiveIndex < scene.primitiveMaterialIndices.size();
+         ++primitiveIndex)
+    {
+        const std::size_t indexOffset = primitiveIndex * 3u;
+        const SceneVertex& vertex0 =
+            scene.vertices[scene.indices[indexOffset + 0u]];
+        const SceneVertex& vertex1 =
+            scene.vertices[scene.indices[indexOffset + 1u]];
+        const SceneVertex& vertex2 =
+            scene.vertices[scene.indices[indexOffset + 2u]];
+        const float centroidX =
+            (vertex0.position[0] +
+             vertex1.position[0] +
+             vertex2.position[0]) / 3.0f;
+        if (std::abs(centroidX) <= safeRadius * 0.14f)
+            scene.primitiveMaterialIndices[primitiveIndex] = 1u;
+    }
+    return scene;
+}
+
+SceneData CreateDynamicTransformTestCubeSceneData(
+    float halfExtent,
+    std::uint32_t materialPreset)
+{
+    SceneData scene;
+    const float extent = (std::max)(halfExtent, 0.001f);
+    scene.materials = { MakeDynamicTestMaterial(materialPreset) };
+    AddAxisAlignedBox(
+        scene,
+        MakeFloat3(-extent, -extent, -extent),
+        MakeFloat3(extent, extent, extent),
+        0u);
     return scene;
 }

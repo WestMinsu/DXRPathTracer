@@ -104,6 +104,7 @@ static const uint c_sceneCornellBox = 0;
 static const uint c_scenePbrGgx = 1;
 static const uint c_scenePbrGpuValidation = 2;
 static const uint c_sceneIndirectBounceStress = 3;
+static const uint c_sceneDynamicTransformTest = 4;
 static const uint c_lightingModeBsdf = 0u;
 static const uint c_lightingModeNee = 1u;
 static const uint c_lightingModeMis = 2u;
@@ -225,6 +226,12 @@ cbuffer RenderSettings : register(b0)
 bool DynamicObjectReprojectionEnabled()
 {
     return g_enableDynamicObjectReprojection != 0u;
+}
+
+bool IsPbrRenderingScene()
+{
+    return g_sceneType == c_scenePbrGgx ||
+        g_sceneType == c_sceneDynamicTransformTest;
 }
 
 void RecordRadianceRay(uint depth)
@@ -421,7 +428,7 @@ void EmitterSelectionProbabilities(
         ? max(g_areaLightPower, 0.0f)
         : 0.0f;
     float environmentWeight =
-        g_sceneType == c_scenePbrGgx &&
+        IsPbrRenderingScene() &&
         g_enableIbl != 0u &&
         g_environmentTexelCount > 0u
         ? max(g_environmentPower * g_iblIntensity, 0.0f)

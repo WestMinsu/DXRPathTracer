@@ -89,6 +89,10 @@ public:
     {
         m_animateDynamicSphere = enabled;
     }
+    void SetInitialDynamicCubeAnimationEnabled(bool enabled)
+    {
+        m_animateDynamicCube = enabled;
+    }
     void SetCameraPathFilePath(const std::wstring& filePath)
     {
         m_cameraPathFilePath = filePath;
@@ -224,7 +228,11 @@ private:
     bool m_cameraPathAutoPlay = false;
     bool m_cameraPathRecordingActive = false;
     bool m_animateDynamicSphere = false;
+    bool m_animateDynamicCube = false;
     bool m_showDynamicSphere = true;
+    bool m_showDynamicCube = true;
+    int m_dynamicTestSphereMaterialPreset = 0;
+    int m_dynamicTestCubeMaterialPreset = 3;
     bool m_hasPreviousCameraPose = false;
     bool m_freeCameraInitialized = false;
     bool m_rightMouseDragging = false;

@@ -673,7 +673,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
 
     const bool isBeautyFrame =
         !m_showNormalColor &&
-        !(m_sceneType == c_scenePbrGgx &&
+        !((m_sceneType == c_scenePbrGgx ||
+           m_sceneType == c_sceneDynamicTransformTest) &&
           m_pbrDebugView != c_pbrDebugBeauty);
     const bool shouldAccumulate =
         m_enableAccumulation &&
@@ -791,11 +792,11 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         m_previousCameraPosition.begin(),
         m_previousCameraPosition.end(),
         renderSettings.previousCameraPosition);
+    renderSettings.temporalTransformPadding = 0u;
     std::copy(
         m_previousCameraTarget.begin(),
         m_previousCameraTarget.end(),
         renderSettings.previousCameraTarget);
-    renderSettings.temporalTransformPadding = 0u;
     renderSettings.enableTemporalReprojection =
         useTemporalHistory ? 1u : 0u;
     renderSettings.temporalDebugView = m_temporalDebugView;
@@ -1387,6 +1388,44 @@ void RayTracingManager::SetDynamicSphereVisible(bool visible)
     ResetAccumulation();
 }
 
+void RayTracingManager::SetDynamicCubeAnimationEnabled(bool enabled)
+{
+    if (m_dynamicCubeAnimationEnabled == enabled)
+        return;
+    m_dynamicCubeAnimationEnabled = enabled;
+}
+
+void RayTracingManager::SetDynamicCubeVisible(bool visible)
+{
+    if (m_dynamicCubeVisible == visible)
+        return;
+    m_dynamicCubeVisible = visible;
+    m_dynamicCubeVisibilityDirty = m_hasDynamicCube;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetDynamicTestSphereMaterialPreset(UINT preset)
+{
+    const UINT clampedPreset = preset % 4u;
+    if (m_dynamicTestSphereMaterialPreset == clampedPreset)
+        return;
+    m_dynamicTestSphereMaterialPreset = clampedPreset;
+    if (m_device && m_sceneType == c_sceneDynamicTransformTest)
+        CreateAccelerationStructures();
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetDynamicTestCubeMaterialPreset(UINT preset)
+{
+    const UINT clampedPreset = preset % 4u;
+    if (m_dynamicTestCubeMaterialPreset == clampedPreset)
+        return;
+    m_dynamicTestCubeMaterialPreset = clampedPreset;
+    if (m_device && m_sceneType == c_sceneDynamicTransformTest)
+        CreateAccelerationStructures();
+    ResetAccumulation();
+}
+
 void RayTracingManager::SetDynamicSphereDeterministicTimeline(bool enabled)
 {
     if (m_dynamicSphereDeterministicTimeline == enabled)
@@ -1425,7 +1464,7 @@ void RayTracingManager::SetExposure(float exposure)
 }
 void RayTracingManager::SetSceneType(UINT sceneType)
 {
-    const UINT clampedSceneType = sceneType <= c_sceneIndirectBounceStress
+    const UINT clampedSceneType = sceneType <= c_sceneDynamicTransformTest
         ? sceneType
         : c_sceneCornellBox;
     if (m_sceneType == clampedSceneType)
@@ -2555,7 +2594,6 @@ bool RayTracingManager::CreateRaytracingPipelineState()
     shaderExports[4].Name = c_alphaMaskAnyHitShaderName;
     shaderExports[4].ExportToRename = nullptr;
     shaderExports[4].Flags = D3D12_EXPORT_FLAG_NONE;
-
     D3D12_DXIL_LIBRARY_DESC dxilLibraryDesc = {};
     dxilLibraryDesc.DXILLibrary.pShaderBytecode = shaderBytes.data();
     dxilLibraryDesc.DXILLibrary.BytecodeLength = shaderBytes.size();
@@ -2711,6 +2749,14 @@ bool RayTracingManager::CreateAccelerationStructures()
             m_dynamicSphereBottomLevelAS.Get();
         ++blasBarrierCount;
     }
+    if (m_hasDynamicCube)
+    {
+        blasBarriers[blasBarrierCount].Type =
+            D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        blasBarriers[blasBarrierCount].UAV.pResource =
+            m_dynamicCubeBottomLevelAS.Get();
+        ++blasBarrierCount;
+    }
     m_buildCommandList->ResourceBarrier(
         blasBarrierCount,
         blasBarriers);
@@ -2726,7 +2772,8 @@ bool RayTracingManager::CreateAccelerationStructures()
     const bool buildSucceeded = ExecuteBuildCommandListAndWait();
     m_blasScratchBuffer.Reset();
     m_dynamicSphereBlasScratchBuffer.Reset();
-    if (!m_hasDynamicSphere)
+    m_dynamicCubeBlasScratchBuffer.Reset();
+    if (!m_hasDynamicSphere && !m_hasDynamicCube)
         m_tlasScratchBuffer.Reset();
     return buildSucceeded;
 }
@@ -2849,10 +2896,12 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     bool hasLoadReport = false;
     std::size_t areaLightCount = 0;
     m_hasDynamicSphere = false;
+    m_hasDynamicCube = false;
     m_dynamicSceneFrameIndex = 0;
     m_staticGeometry = {};
     m_staticAlphaGeometry = {};
     m_dynamicSphereGeometry = {};
+    m_dynamicCubeGeometry = {};
     m_hasStaticAlphaGeometry = false;
     const bool isPbrScene = m_sceneType == c_scenePbrGgx ||
         m_sceneType == c_scenePbrGpuValidation;
@@ -2920,6 +2969,8 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             scene = CreatePbrGgxSceneData();
         else if (m_sceneType == c_sceneIndirectBounceStress)
             scene = CreateIndirectBounceStressSceneData();
+        else if (m_sceneType == c_sceneDynamicTransformTest)
+            scene = CreateDynamicTransformTestRoomSceneData();
         else
             scene = CreateCornellBoxSceneData();
     }
@@ -3095,6 +3146,103 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         }
         m_hasDynamicSphere = true;
     }
+    else if (m_sceneType == c_sceneDynamicTransformTest)
+    {
+        m_dynamicSphereRadius = 0.68f;
+        m_dynamicSphereMotionAmplitude = 2.20f;
+        m_dynamicSphereTrackCenterX = 0.0f;
+        m_dynamicSphereCenterY = -1.0f + m_dynamicSphereRadius;
+        m_dynamicSphereCenterZ = 1.55f;
+        m_dynamicSpherePositionX =
+            m_dynamicSphereTrackCenterX - m_dynamicSphereMotionAmplitude;
+        m_dynamicSphereRollRadians = 0.0f;
+
+        SceneData sphere = CreateDynamicTransformTestSphereSceneData(
+            m_dynamicSphereRadius,
+            m_dynamicTestSphereMaterialPreset);
+        if (!sphere.IsValid())
+        {
+            ReportMessage(L"Dynamic test sphere data is invalid.");
+            return false;
+        }
+        m_dynamicSphereGeometry.vertexOffset =
+            static_cast<UINT>(scene.vertices.size());
+        m_dynamicSphereGeometry.vertexCount =
+            static_cast<UINT>(sphere.vertices.size());
+        m_dynamicSphereGeometry.indexOffset =
+            static_cast<UINT>(scene.indices.size());
+        m_dynamicSphereGeometry.indexCount =
+            static_cast<UINT>(sphere.indices.size());
+        m_dynamicSphereGeometry.primitiveOffset =
+            static_cast<UINT>(scene.primitiveMaterialIndices.size());
+        std::uint32_t materialOffset =
+            static_cast<std::uint32_t>(scene.materials.size());
+        scene.vertices.insert(
+            scene.vertices.end(),
+            sphere.vertices.begin(),
+            sphere.vertices.end());
+        scene.indices.insert(
+            scene.indices.end(),
+            sphere.indices.begin(),
+            sphere.indices.end());
+        scene.materials.insert(
+            scene.materials.end(),
+            sphere.materials.begin(),
+            sphere.materials.end());
+        for (std::uint32_t materialIndex :
+             sphere.primitiveMaterialIndices)
+        {
+            scene.primitiveMaterialIndices.push_back(
+                materialOffset + materialIndex);
+        }
+        m_hasDynamicSphere = true;
+
+        m_dynamicCubeHalfExtent = 0.68f;
+        m_dynamicCubeCenterX = 1.35f;
+        m_dynamicCubeCenterY = -1.0f + m_dynamicCubeHalfExtent;
+        m_dynamicCubeCenterZ = 1.90f;
+        m_dynamicCubePositionX = m_dynamicCubeCenterX;
+        m_dynamicCubePositionZ = m_dynamicCubeCenterZ;
+        m_dynamicCubeRotationY = 0.0f;
+        SceneData cube = CreateDynamicTransformTestCubeSceneData(
+            m_dynamicCubeHalfExtent,
+            m_dynamicTestCubeMaterialPreset);
+        if (!cube.IsValid())
+        {
+            ReportMessage(L"Dynamic test cube data is invalid.");
+            return false;
+        }
+        m_dynamicCubeGeometry.vertexOffset =
+            static_cast<UINT>(scene.vertices.size());
+        m_dynamicCubeGeometry.vertexCount =
+            static_cast<UINT>(cube.vertices.size());
+        m_dynamicCubeGeometry.indexOffset =
+            static_cast<UINT>(scene.indices.size());
+        m_dynamicCubeGeometry.indexCount =
+            static_cast<UINT>(cube.indices.size());
+        m_dynamicCubeGeometry.primitiveOffset =
+            static_cast<UINT>(scene.primitiveMaterialIndices.size());
+        materialOffset = static_cast<std::uint32_t>(scene.materials.size());
+        scene.vertices.insert(
+            scene.vertices.end(),
+            cube.vertices.begin(),
+            cube.vertices.end());
+        scene.indices.insert(
+            scene.indices.end(),
+            cube.indices.begin(),
+            cube.indices.end());
+        scene.materials.insert(
+            scene.materials.end(),
+            cube.materials.begin(),
+            cube.materials.end());
+        for (std::uint32_t materialIndex :
+             cube.primitiveMaterialIndices)
+        {
+            scene.primitiveMaterialIndices.push_back(
+                materialOffset + materialIndex);
+        }
+        m_hasDynamicCube = true;
+    }
 
     if (!scene.IsValid())
     {
@@ -3117,6 +3265,13 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         m_cameraPosition = { 0.0f, 0.10f, -4.25f };
         m_cameraTarget = { 1.45f, 0.05f, -0.70f };
     }
+    else if (m_sceneType == c_sceneDynamicTransformTest)
+    {
+        m_sceneBoundsMin = { -4.0f, -1.0f, -1.0f };
+        m_sceneBoundsMax = { 4.0f, 2.8f, 5.0f };
+        m_cameraPosition = { 0.0f, 0.25f, -5.80f };
+        m_cameraTarget = { 0.0f, 0.15f, 1.65f };
+    }
     else
     {
         m_cameraPosition = { 0.0f, 0.15f, -1.2f };
@@ -3128,18 +3283,37 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
 
     const UINT staticGeometryCount =
         m_hasStaticAlphaGeometry ? 2u : 1u;
-    const UINT instanceCount = 1u + (m_hasDynamicSphere ? 1u : 0u);
+    const UINT dynamicInstanceCount =
+        (m_hasDynamicSphere ? 1u : 0u) +
+        (m_hasDynamicCube ? 1u : 0u);
+    const UINT instanceCount = 1u + dynamicInstanceCount;
     const UINT staticGeometryMetadataOffset = instanceCount;
-    const UINT dynamicGeometryMetadataOffset =
+    UINT nextDynamicGeometryMetadataOffset =
         staticGeometryMetadataOffset + staticGeometryCount;
     std::vector<SceneMetadataEntry> sceneMetadata;
     sceneMetadata.reserve(
-        instanceCount + staticGeometryCount +
-        (m_hasDynamicSphere ? 1u : 0u));
+        instanceCount + staticGeometryCount + dynamicInstanceCount);
     sceneMetadata.push_back({ staticGeometryMetadataOffset, 0u, 0u, 0u });
     if (m_hasDynamicSphere)
+    {
         sceneMetadata.push_back(
-            { dynamicGeometryMetadataOffset, c_sceneMetadataFlagDynamic, 0u, 0u });
+            {
+                nextDynamicGeometryMetadataOffset++,
+                c_sceneMetadataFlagDynamic,
+                0u,
+                0u
+            });
+    }
+    if (m_hasDynamicCube)
+    {
+        sceneMetadata.push_back(
+            {
+                nextDynamicGeometryMetadataOffset++,
+                c_sceneMetadataFlagDynamic,
+                0u,
+                0u
+            });
+    }
 
     auto appendGeometryMetadata = [&sceneMetadata](
         const GeometryRange& geometry)
@@ -3157,6 +3331,8 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         appendGeometryMetadata(m_staticAlphaGeometry);
     if (m_hasDynamicSphere)
         appendGeometryMetadata(m_dynamicSphereGeometry);
+    if (m_hasDynamicCube)
+        appendGeometryMetadata(m_dynamicCubeGeometry);
 
     const UINT staticIndexCount =
         m_staticGeometry.indexCount +
@@ -3567,6 +3743,16 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure()
     {
         return false;
     }
+    if (m_hasDynamicCube &&
+        !BuildBottomLevelAccelerationStructure(
+            &m_dynamicCubeGeometry,
+            1u,
+            L"Dynamic test cube bottom level acceleration structure",
+            m_dynamicCubeBottomLevelAS,
+            m_dynamicCubeBlasScratchBuffer))
+    {
+        return false;
+    }
     return true;
 }
 
@@ -3659,7 +3845,9 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
 {
     const UINT staticInstanceCount = 1u;
     const UINT instanceCount =
-        staticInstanceCount + (m_hasDynamicSphere ? 1u : 0u);
+        staticInstanceCount +
+        (m_hasDynamicSphere ? 1u : 0u) +
+        (m_hasDynamicCube ? 1u : 0u);
     std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs(instanceCount);
     instanceDescs[0].Transform[0][0] = 1.0f;
     instanceDescs[0].Transform[1][1] = 1.0f;
@@ -3669,12 +3857,13 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
     instanceDescs[0].AccelerationStructure =
         m_bottomLevelAS->GetGPUVirtualAddress();
 
+    UINT nextInstanceIndex = staticInstanceCount;
     if (m_hasDynamicSphere)
     {
         const float cosine = std::cos(m_dynamicSphereRollRadians);
         const float sine = std::sin(m_dynamicSphereRollRadians);
         D3D12_RAYTRACING_INSTANCE_DESC& sphereDesc =
-            instanceDescs[staticInstanceCount];
+            instanceDescs[nextInstanceIndex];
         sphereDesc.Transform[0][0] = cosine;
         sphereDesc.Transform[0][1] = -sine;
         sphereDesc.Transform[0][3] = m_dynamicSpherePositionX;
@@ -3683,11 +3872,34 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
         sphereDesc.Transform[1][3] = m_dynamicSphereCenterY;
         sphereDesc.Transform[2][2] = 1.0f;
         sphereDesc.Transform[2][3] = m_dynamicSphereCenterZ;
-        sphereDesc.InstanceID = staticInstanceCount;
+        sphereDesc.InstanceID = nextInstanceIndex;
         sphereDesc.InstanceMask =
             m_dynamicSphereVisible ? 0xFF : 0x00;
         sphereDesc.AccelerationStructure =
             m_dynamicSphereBottomLevelAS->GetGPUVirtualAddress();
+        ++nextInstanceIndex;
+    }
+
+    if (m_hasDynamicCube)
+    {
+        const float cosine = std::cos(m_dynamicCubeRotationY);
+        const float sine = std::sin(m_dynamicCubeRotationY);
+        D3D12_RAYTRACING_INSTANCE_DESC& cubeDesc =
+            instanceDescs[nextInstanceIndex];
+        cubeDesc.Transform[0][0] = cosine;
+        cubeDesc.Transform[0][2] = sine;
+        cubeDesc.Transform[0][3] = m_dynamicCubePositionX;
+        cubeDesc.Transform[1][1] = 1.0f;
+        cubeDesc.Transform[1][3] = m_dynamicCubeCenterY;
+        cubeDesc.Transform[2][0] = -sine;
+        cubeDesc.Transform[2][2] = cosine;
+        cubeDesc.Transform[2][3] = m_dynamicCubePositionZ;
+        cubeDesc.InstanceID = nextInstanceIndex;
+        cubeDesc.InstanceMask =
+            m_dynamicCubeVisible ? 0xFF : 0x00;
+        cubeDesc.AccelerationStructure =
+            m_dynamicCubeBottomLevelAS->GetGPUVirtualAddress();
+        ++nextInstanceIndex;
     }
 
     m_currentInstanceTransforms.resize(instanceCount);
@@ -3728,7 +3940,7 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
     inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
     inputs.Flags =
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
-    if (m_hasDynamicSphere)
+    if (m_hasDynamicSphere || m_hasDynamicCube)
     {
         inputs.Flags |=
             D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
@@ -3766,13 +3978,11 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
 
     m_buildCommandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
     m_dynamicSphereVisibilityDirty = false;
+    m_dynamicCubeVisibilityDirty = false;
     return true;
 }
 
-bool RayTracingManager::WriteInstanceDescriptors(
-    UINT frameIndex,
-    float spherePositionX,
-    float sphereRollRadians)
+bool RayTracingManager::WriteInstanceDescriptors(UINT frameIndex)
 {
     if (frameIndex >= c_tlasFrameCount ||
         !m_instanceDescBuffers[frameIndex])
@@ -3790,7 +4000,10 @@ bool RayTracingManager::WriteInstanceDescriptors(
         return false;
 
     const UINT staticInstanceCount = 1u;
-    const UINT instanceCount = staticInstanceCount + 1u;
+    const UINT instanceCount =
+        staticInstanceCount +
+        (m_hasDynamicSphere ? 1u : 0u) +
+        (m_hasDynamicCube ? 1u : 0u);
     std::memset(
         instanceDescs,
         0,
@@ -3802,26 +4015,48 @@ bool RayTracingManager::WriteInstanceDescriptors(
     instanceDescs[0].InstanceMask = 0xFF;
     instanceDescs[0].AccelerationStructure =
         m_bottomLevelAS->GetGPUVirtualAddress();
-
-
-
-    const float cosine = std::cos(sphereRollRadians);
-    const float sine = std::sin(sphereRollRadians);
-    D3D12_RAYTRACING_INSTANCE_DESC& sphereDesc =
-        instanceDescs[staticInstanceCount];
-    sphereDesc.Transform[0][0] = cosine;
-    sphereDesc.Transform[0][1] = -sine;
-    sphereDesc.Transform[0][3] = spherePositionX;
-    sphereDesc.Transform[1][0] = sine;
-    sphereDesc.Transform[1][1] = cosine;
-    sphereDesc.Transform[1][3] = m_dynamicSphereCenterY;
-    sphereDesc.Transform[2][2] = 1.0f;
-    sphereDesc.Transform[2][3] = m_dynamicSphereCenterZ;
-    sphereDesc.InstanceID = staticInstanceCount;
-    sphereDesc.InstanceMask =
-        m_dynamicSphereVisible ? 0xFF : 0x00;
-    sphereDesc.AccelerationStructure =
-        m_dynamicSphereBottomLevelAS->GetGPUVirtualAddress();
+    UINT nextInstanceIndex = staticInstanceCount;
+    if (m_hasDynamicSphere)
+    {
+        const float cosine = std::cos(m_dynamicSphereRollRadians);
+        const float sine = std::sin(m_dynamicSphereRollRadians);
+        D3D12_RAYTRACING_INSTANCE_DESC& sphereDesc =
+            instanceDescs[nextInstanceIndex];
+        sphereDesc.Transform[0][0] = cosine;
+        sphereDesc.Transform[0][1] = -sine;
+        sphereDesc.Transform[0][3] = m_dynamicSpherePositionX;
+        sphereDesc.Transform[1][0] = sine;
+        sphereDesc.Transform[1][1] = cosine;
+        sphereDesc.Transform[1][3] = m_dynamicSphereCenterY;
+        sphereDesc.Transform[2][2] = 1.0f;
+        sphereDesc.Transform[2][3] = m_dynamicSphereCenterZ;
+        sphereDesc.InstanceID = nextInstanceIndex;
+        sphereDesc.InstanceMask =
+            m_dynamicSphereVisible ? 0xFF : 0x00;
+        sphereDesc.AccelerationStructure =
+            m_dynamicSphereBottomLevelAS->GetGPUVirtualAddress();
+        ++nextInstanceIndex;
+    }
+    if (m_hasDynamicCube)
+    {
+        const float cosine = std::cos(m_dynamicCubeRotationY);
+        const float sine = std::sin(m_dynamicCubeRotationY);
+        D3D12_RAYTRACING_INSTANCE_DESC& cubeDesc =
+            instanceDescs[nextInstanceIndex];
+        cubeDesc.Transform[0][0] = cosine;
+        cubeDesc.Transform[0][2] = sine;
+        cubeDesc.Transform[0][3] = m_dynamicCubePositionX;
+        cubeDesc.Transform[1][1] = 1.0f;
+        cubeDesc.Transform[1][3] = m_dynamicCubeCenterY;
+        cubeDesc.Transform[2][0] = -sine;
+        cubeDesc.Transform[2][2] = cosine;
+        cubeDesc.Transform[2][3] = m_dynamicCubePositionZ;
+        cubeDesc.InstanceID = nextInstanceIndex;
+        cubeDesc.InstanceMask =
+            m_dynamicCubeVisible ? 0xFF : 0x00;
+        cubeDesc.AccelerationStructure =
+            m_dynamicCubeBottomLevelAS->GetGPUVirtualAddress();
+    }
 
     m_currentInstanceTransforms.resize(instanceCount);
     for (UINT instanceIndex = 0;
@@ -3870,7 +4105,7 @@ bool RayTracingManager::WritePreviousInstanceTransforms(UINT frameIndex)
     return true;
 }
 
-void RayTracingManager::UpdateDynamicSphereMotion()
+void RayTracingManager::UpdateDynamicObjectMotion()
 {
     constexpr double framesPerSecond = 60.0;
     constexpr double motionStartSeconds = 20.0;
@@ -3880,56 +4115,84 @@ void RayTracingManager::UpdateDynamicSphereMotion()
 
     const double timeSeconds =
         static_cast<double>(m_dynamicSceneFrameIndex) / framesPerSecond;
-    double position =
-        static_cast<double>(m_dynamicSphereTrackCenterX) -
-        m_dynamicSphereMotionAmplitude;
-    double linearVelocity = 0.0;
-    if (m_dynamicSphereAnimationEnabled &&
-        m_dynamicSphereDeterministicTimeline &&
+    double phase = 0.0;
+    double phaseVelocity = 0.0;
+    if (m_dynamicSphereDeterministicTimeline &&
         timeSeconds >= motionStartSeconds &&
         timeSeconds <= motionStartSeconds + motionDurationSeconds)
     {
         const double normalizedTime =
             (timeSeconds - motionStartSeconds) /
             motionDurationSeconds;
-        const double phase = twoPi * normalizedTime;
-        position =
-            static_cast<double>(m_dynamicSphereTrackCenterX) -
-            static_cast<double>(m_dynamicSphereMotionAmplitude) *
-            std::cos(phase);
-        linearVelocity =
-            static_cast<double>(m_dynamicSphereMotionAmplitude) *
-            (twoPi / motionDurationSeconds) *
-            std::sin(phase);
+        phase = twoPi * normalizedTime;
+        phaseVelocity = twoPi / motionDurationSeconds;
     }
-    else if (m_dynamicSphereAnimationEnabled &&
-             !m_dynamicSphereDeterministicTimeline)
+    else if (!m_dynamicSphereDeterministicTimeline)
     {
         const double loopTime = std::fmod(timeSeconds, motionDurationSeconds);
-        const double phase = twoPi * loopTime / motionDurationSeconds;
-        position =
+        phase = twoPi * loopTime / motionDurationSeconds;
+        phaseVelocity = twoPi / motionDurationSeconds;
+    }
+
+    double maximumLinearSpeed = 0.0;
+    double maximumAngularSpeed = 0.0;
+    if (m_hasDynamicSphere &&
+        m_dynamicSphereVisible &&
+        m_dynamicSphereAnimationEnabled)
+    {
+        const double position =
             static_cast<double>(m_dynamicSphereTrackCenterX) -
             static_cast<double>(m_dynamicSphereMotionAmplitude) *
             std::cos(phase);
-        linearVelocity =
+        const double linearVelocity =
             static_cast<double>(m_dynamicSphereMotionAmplitude) *
-            (twoPi / motionDurationSeconds) *
+            phaseVelocity *
             std::sin(phase);
+        m_dynamicSpherePositionX = static_cast<float>(position);
+        const double traveledDistance =
+            position -
+            (static_cast<double>(m_dynamicSphereTrackCenterX) -
+             static_cast<double>(m_dynamicSphereMotionAmplitude));
+        m_dynamicSphereRollRadians = static_cast<float>(
+            -traveledDistance /
+            (std::max)(
+                static_cast<double>(m_dynamicSphereRadius),
+                0.000001));
+        maximumLinearSpeed = std::abs(linearVelocity);
+        maximumAngularSpeed =
+            maximumLinearSpeed /
+            (std::max)(
+                static_cast<double>(m_dynamicSphereRadius),
+                0.000001) *
+            radiansToDegrees;
     }
 
-    m_dynamicSpherePositionX = static_cast<float>(position);
-    const double traveledDistance =
-        position -
-        (static_cast<double>(m_dynamicSphereTrackCenterX) -
-         static_cast<double>(m_dynamicSphereMotionAmplitude));
-    m_dynamicSphereRollRadians = static_cast<float>(
-        -traveledDistance /
-        (std::max)(static_cast<double>(m_dynamicSphereRadius), 0.000001));
-    m_dynamicObjectLinearSpeed = std::abs(linearVelocity);
-    m_dynamicObjectAngularSpeed =
-        m_dynamicObjectLinearSpeed /
-        (std::max)(static_cast<double>(m_dynamicSphereRadius), 0.000001) *
-        radiansToDegrees;
+    if (m_hasDynamicCube &&
+        m_dynamicCubeVisible &&
+        m_dynamicCubeAnimationEnabled)
+    {
+        constexpr double cubeTravelX = 0.42;
+        constexpr double cubeTravelZ = 0.24;
+        m_dynamicCubePositionX = static_cast<float>(
+            static_cast<double>(m_dynamicCubeCenterX) +
+            cubeTravelX * std::sin(phase));
+        m_dynamicCubePositionZ = static_cast<float>(
+            static_cast<double>(m_dynamicCubeCenterZ) +
+            cubeTravelZ * (std::cos(phase) - 1.0));
+        m_dynamicCubeRotationY = static_cast<float>(phase);
+        const double cubeLinearSpeed = phaseVelocity * std::sqrt(
+            cubeTravelX * cubeTravelX *
+                std::cos(phase) * std::cos(phase) +
+            cubeTravelZ * cubeTravelZ *
+                std::sin(phase) * std::sin(phase));
+        maximumLinearSpeed =
+            (std::max)(maximumLinearSpeed, cubeLinearSpeed);
+        maximumAngularSpeed = (std::max)(
+            maximumAngularSpeed,
+            phaseVelocity * radiansToDegrees);
+    }
+    m_dynamicObjectLinearSpeed = maximumLinearSpeed;
+    m_dynamicObjectAngularSpeed = maximumAngularSpeed;
     ++m_dynamicSceneFrameIndex;
 }
 
@@ -3937,24 +4200,20 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
     ID3D12GraphicsCommandList4* commandList)
 {
     m_dynamicObjectMovedThisFrame = false;
-    if (!m_hasDynamicSphere)
+    if (!m_hasDynamicSphere && !m_hasDynamicCube)
         return true;
     if (!commandList || !m_topLevelAS || !m_tlasScratchBuffer)
         return false;
 
     const bool visibilityChanged =
-        m_dynamicSphereVisibilityDirty;
-    const float previousPosition = m_dynamicSpherePositionX;
-    const float previousRoll = m_dynamicSphereRollRadians;
-    if (m_dynamicSphereVisible)
-    {
-        UpdateDynamicSphereMotion();
-    }
-    else
-    {
-        m_dynamicObjectLinearSpeed = 0.0;
-        m_dynamicObjectAngularSpeed = 0.0;
-    }
+        m_dynamicSphereVisibilityDirty ||
+        m_dynamicCubeVisibilityDirty;
+    const float previousSpherePosition = m_dynamicSpherePositionX;
+    const float previousSphereRoll = m_dynamicSphereRollRadians;
+    const float previousCubePositionX = m_dynamicCubePositionX;
+    const float previousCubePositionZ = m_dynamicCubePositionZ;
+    const float previousCubeRotation = m_dynamicCubeRotationY;
+    UpdateDynamicObjectMotion();
     m_previousInstanceTransforms = m_currentInstanceTransforms;
 
     const UINT descriptorFrame =
@@ -3963,17 +4222,22 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
         return false;
 
     const bool transformChanged =
-        std::abs(previousPosition - m_dynamicSpherePositionX) > 1.0e-7f ||
-        std::abs(previousRoll - m_dynamicSphereRollRadians) > 1.0e-7f;
+        std::abs(
+            previousSpherePosition - m_dynamicSpherePositionX) > 1.0e-7f ||
+        std::abs(
+            previousSphereRoll - m_dynamicSphereRollRadians) > 1.0e-7f ||
+        std::abs(
+            previousCubePositionX - m_dynamicCubePositionX) > 1.0e-7f ||
+        std::abs(
+            previousCubePositionZ - m_dynamicCubePositionZ) > 1.0e-7f ||
+        std::abs(
+            previousCubeRotation - m_dynamicCubeRotationY) > 1.0e-7f;
     if (!visibilityChanged && !transformChanged)
     {
         return true;
     }
 
-    if (!WriteInstanceDescriptors(
-        descriptorFrame,
-        m_dynamicSpherePositionX,
-        m_dynamicSphereRollRadians))
+    if (!WriteInstanceDescriptors(descriptorFrame))
     {
         return false;
     }
@@ -3986,7 +4250,10 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE |
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
     buildDesc.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
-    buildDesc.Inputs.NumDescs = 2u;
+    buildDesc.Inputs.NumDescs =
+        1u +
+        (m_hasDynamicSphere ? 1u : 0u) +
+        (m_hasDynamicCube ? 1u : 0u);
     buildDesc.Inputs.InstanceDescs =
         m_instanceDescBuffers[descriptorFrame]->GetGPUVirtualAddress();
     buildDesc.SourceAccelerationStructureData =
@@ -4005,6 +4272,7 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
     barrier.UAV.pResource = m_topLevelAS.Get();
     commandList->ResourceBarrier(1, &barrier);
     m_dynamicSphereVisibilityDirty = false;
+    m_dynamicCubeVisibilityDirty = false;
     m_dynamicObjectMovedThisFrame = true;
     return true;
 }

@@ -18,14 +18,22 @@ float3 ToneMapForDisplay(float3 linearRadiance)
 
 float UnpackGuideRoughness(float packedRoughness)
 {
-    return packedRoughness >= 1.5f
-        ? packedRoughness - 2.0f
-        : packedRoughness;
+    if (packedRoughness < 1.5f)
+        return packedRoughness;
+    return packedRoughness -
+        floor(packedRoughness * 0.5f) * 2.0f;
 }
 
 bool IsDynamicGuide(float4 materialGuide)
 {
     return materialGuide.a >= 1.5f;
+}
+
+uint GetDynamicGuideInstance(float4 materialGuide)
+{
+    if (!IsDynamicGuide(materialGuide))
+        return 0u;
+    return uint(floor(materialGuide.a * 0.5f)) - 1u;
 }
 
 bool TemporalCameraIsMoving()
@@ -151,15 +159,19 @@ bool IsValidHistoryTap(
         return false;
     }
 
-    bool currentDynamic = IsDynamicGuide(currentMaterial);
-    bool previousDynamic = IsDynamicGuide(previousMaterial);
+    uint currentDynamicInstance =
+        GetDynamicGuideInstance(currentMaterial);
+    uint previousDynamicInstance =
+        GetDynamicGuideInstance(previousMaterial);
+    bool currentDynamic = currentDynamicInstance != 0u;
+    bool previousDynamic = previousDynamicInstance != 0u;
     if (g_dynamicObjectMoved != 0u &&
         !DynamicObjectReprojectionEnabled())
     {
         if (currentDynamic || previousDynamic)
             return false;
     }
-    else if (currentDynamic != previousDynamic)
+    else if (currentDynamicInstance != previousDynamicInstance)
     {
         return false;
     }
@@ -279,7 +291,8 @@ bool GatherValidatedHistory(
 bool IsLinearDebugView()
 {
     return g_showNormalColor != 0 ||
-        (g_sceneType == c_scenePbrGgx && g_pbrDebugView != c_pbrDebugBeauty);
+        (IsPbrRenderingScene() &&
+         g_pbrDebugView != c_pbrDebugBeauty);
 }
 
 float3 EvaluateGpuBrdfValidationSample(uint2 launchIndex, uint2 launchDim)
@@ -361,7 +374,10 @@ void TracePrimaryGuide(
     g_normalDepth[launchIndex] = float4(payload.normal, payload.hitT);
     g_materialGuide[launchIndex] = float4(
         payload.baseColor,
-        payload.roughness + (payload.dynamicInstance != 0u ? 2.0f : 0.0f));
+        payload.roughness +
+            (payload.dynamicInstance != 0u
+                ? float(payload.dynamicInstance + 1u) * 2.0f
+                : 0.0f));
 }
 
 void TracePath(
@@ -397,9 +413,9 @@ void TracePath(
             RecordRadianceMiss();
             float3 localRadiance = float3(0.0f, 0.0f, 0.0f);
             if (g_showNormalColor == 0u &&
-                (g_sceneType != c_scenePbrGgx ||
+                (!IsPbrRenderingScene() ||
                  g_pbrDebugView == c_pbrDebugBeauty) &&
-                g_sceneType == c_scenePbrGgx &&
+                IsPbrRenderingScene() &&
                 g_enableIbl != 0u)
             {
                 float environmentWeight = 1.0f;
@@ -435,7 +451,7 @@ void TracePath(
             sampleRadiance = normalColor;
             break;
         }
-        if (g_sceneType == c_scenePbrGgx &&
+        if (IsPbrRenderingScene() &&
             g_pbrDebugView != c_pbrDebugBeauty)
         {
             if (g_pbrDebugView == c_pbrDebugNormal)
@@ -512,7 +528,7 @@ void TracePath(
             lightPdf);
         if (directLightVisible)
         {
-            if (g_sceneType == c_scenePbrGgx)
+            if (IsPbrRenderingScene())
             {
                 float3 viewDirection = normalize(-ray.Direction);
                 float bsdfPdf = PbrBrdfSamplingPdf(
@@ -572,7 +588,7 @@ void TracePath(
         float samplePdf;
         float3 diffuseContribution = float3(0.0f, 0.0f, 0.0f);
         float3 specularContribution = float3(0.0f, 0.0f, 0.0f);
-        if (g_sceneType == c_scenePbrGgx)
+        if (IsPbrRenderingScene())
         {
             float3 viewDirection = normalize(-ray.Direction);
             if (!SamplePbrBrdfWithMixtureSampling(
@@ -622,7 +638,7 @@ void TracePath(
             bounceWeight * inverseSurvivalProbability;
         if (depth == 0u)
         {
-            if (g_sceneType == c_scenePbrGgx && g_enableAtrous != 0u)
+            if (IsPbrRenderingScene() && g_enableAtrous != 0u)
             {
                 firstDiffuseWeight = diffuseContribution *
                     (inverseSurvivalProbability / samplePdf);
@@ -646,7 +662,7 @@ void TracePath(
         ray.TMax = c_rayTMax;
     }
 
-    if (g_sceneType == c_scenePbrGgx)
+    if (IsPbrRenderingScene())
     {
         if (hasFirstPbrSplit)
         {
@@ -824,10 +840,7 @@ void RunRaygen()
         sampleSpecularLuminance,
         sampleSpecularLuminance * sampleSpecularLuminance);
     float localSampleCount = 1.0f;
-    bool pixelTemporalMotion =
-        TemporalCameraIsMoving() ||
-        (g_dynamicObjectMoved != 0u &&
-         primaryDynamicInstance != 0u);
+    bool cameraTemporalMotion = TemporalCameraIsMoving();
     if (g_sampleIndex > 0)
     {
         int2 historyPixel = int2(launchIndex);
@@ -897,7 +910,6 @@ void RunRaygen()
             history.radianceAverage =
                 previousAccumulation.rgb / previousSampleCount;
             history.sampleCount = previousSampleCount;
-
             if (g_enableAtrous != 0u)
             {
                 float4 previousDiffuse;
@@ -953,7 +965,7 @@ void RunRaygen()
             float retainedHistoryCount = history.sampleCount;
             if (g_enableTemporalReprojection != 0u)
             {
-                if (pixelTemporalMotion)
+                if (cameraTemporalMotion)
                 {
                     retainedHistoryCount = min(
                         retainedHistoryCount,
@@ -1000,7 +1012,8 @@ void RunRaygen()
     if (g_temporalDebugView == 1u)
     {
         float historyDisplayRange =
-            pixelTemporalMotion ? 31.0f : 255.0f;
+            cameraTemporalMotion ? 31.0f : 255.0f;
+        historyDisplayRange = max(historyDisplayRange, 1.0f);
         float normalizedHistory = saturate(
             (localSampleCount - 1.0f) / historyDisplayRange);
         g_output[launchIndex] = float4(
@@ -1035,9 +1048,7 @@ void MyMissShader_ShadowRay(inout ShadowPayload payload)
     payload.occluded = 0u;
 }
 
-[shader("anyhit")]
-void MyAnyHitShader_AlphaMask(
-    inout SurfaceQueryPayload payload,
+bool PassesCurrentAlphaMask(
     in BuiltInTriangleIntersectionAttributes attributes)
 {
     uint ignoredInstanceFlags;
@@ -1047,7 +1058,7 @@ void MyAnyHitShader_AlphaMask(
         hitGeometry.primitiveOffset + PrimitiveIndex();
     SceneMaterial material = GetSceneMaterial(globalPrimitiveIndex);
     if (material.alphaCutoff < 0.0f)
-        return;
+        return true;
 
     uint indexOffset =
         hitGeometry.indexOffset + PrimitiveIndex() * 3u;
@@ -1055,7 +1066,15 @@ void MyAnyHitShader_AlphaMask(
     uint i1 = hitGeometry.vertexOffset + g_indices[indexOffset + 1u];
     uint i2 = hitGeometry.vertexOffset + g_indices[indexOffset + 2u];
     float2 texCoord = InterpolateTexCoord(i0, i1, i2, attributes);
-    if (!PassesSceneAlphaMask(globalPrimitiveIndex, texCoord))
+    return PassesSceneAlphaMask(globalPrimitiveIndex, texCoord);
+}
+
+[shader("anyhit")]
+void MyAnyHitShader_AlphaMask(
+    inout SurfaceQueryPayload payload,
+    in BuiltInTriangleIntersectionAttributes attributes)
+{
+    if (!PassesCurrentAlphaMask(attributes))
         IgnoreHit();
 }
 
@@ -1087,7 +1106,7 @@ void MyClosestHitShader_SurfaceQuery(
     float2 texCoord = InterpolateTexCoord(i0, i1, i2, attributes);
     float4 tangent = InterpolateTangent(i0, i1, i2, attributes);
     tangent.xyz = normalize(mul(objectToWorld, tangent.xyz));
-    if (g_sceneType == c_scenePbrGgx)
+    if (IsPbrRenderingScene())
     {
         normal = ApplySceneNormalMap(
             globalPrimitiveIndex,
@@ -1097,7 +1116,7 @@ void MyClosestHitShader_SurfaceQuery(
     }
 
     PbrMaterial material;
-    if (g_sceneType == c_scenePbrGgx)
+    if (IsPbrRenderingScene())
     {
         material = GetPbrMaterial(globalPrimitiveIndex, texCoord);
     }
@@ -1117,7 +1136,9 @@ void MyClosestHitShader_SurfaceQuery(
     payload.roughness = material.roughness;
     payload.primitiveIndex = globalPrimitiveIndex;
     payload.dynamicInstance =
-        (instanceFlags & c_instanceFlagDynamic) != 0u ? 1u : 0u;
+        (instanceFlags & c_instanceFlagDynamic) != 0u
+            ? InstanceID()
+            : 0u;
     if (motionGuideQuery)
     {
         float3 previousWorldPosition =

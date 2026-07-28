@@ -278,6 +278,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     m_rayTracingManager->SetAtrousColorSigma(m_atrousColorSigma);
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
         m_animateDynamicSphere);
+    m_rayTracingManager->SetDynamicCubeAnimationEnabled(
+        m_animateDynamicCube);
     m_rayTracingManager->SetEnableStatistics(m_collectRayStatistics);
     if (!m_rayTracingManager->Initialize(m_hWnd, m_device.Get(), m_width, m_height))
         return false;
@@ -322,6 +324,8 @@ void D3D12Renderer::Render()
     BuildImGuiFrame();
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
         m_animateDynamicSphere);
+    m_rayTracingManager->SetDynamicCubeAnimationEnabled(
+        m_animateDynamicCube);
     m_rayTracingManager->SetShowNormalColor(m_showNormalColor);
     m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
     m_rayTracingManager->SetSamplesPerPixel(
@@ -1497,7 +1501,8 @@ void D3D12Renderer::BuildImGuiFrame()
         "Cornell Box",
         "PBR",
         "PBR GPU Validation",
-        "Indirect Bounce Stress"
+        "Indirect Bounce Stress",
+        "Dynamic Transform Test"
     };
     if (ImGui::Combo("Scene", &m_sceneType, sceneNames, _countof(sceneNames)) && m_rayTracingManager)
     {
@@ -1614,7 +1619,8 @@ void D3D12Renderer::BuildImGuiFrame()
     if (m_enableTemporalReprojection)
     {
         if (m_rayTracingManager &&
-            m_rayTracingManager->HasDynamicSphere())
+            (m_rayTracingManager->HasDynamicSphere() ||
+             m_rayTracingManager->HasDynamicCube()))
         {
             ImGui::Checkbox(
                 "Dynamic Object Reprojection",
@@ -1644,7 +1650,7 @@ void D3D12Renderer::BuildImGuiFrame()
             ImGui::TextDisabled("History: green = accepted, red = rejected, blue = unavailable.");
         }
         ImGui::TextDisabled(
-            "Temporal history: 256 still, 32 while moving.");
+            "Temporal history: up to 256 frames for valid pixels.");
         ImGui::TextDisabled(
             "Static reference views keep accumulating when progressive mode is enabled.");
     }
@@ -1678,7 +1684,109 @@ void D3D12Renderer::BuildImGuiFrame()
         ? m_rayTracingManager->GetAccumulatedSampleCount()
         : 0u;
     ImGui::Text("Samples: %u", accumulatedSamples);
-    if (m_rayTracingManager && m_rayTracingManager->HasDynamicSphere())
+    if (m_rayTracingManager &&
+        m_sceneType == static_cast<int>(
+            RayTracingManager::c_sceneDynamicTransformTest))
+    {
+        ImGui::SeparatorText("Dynamic transform test");
+        const char* pbrDebugNames[] =
+        {
+            "Beauty",
+            "Albedo",
+            "Metallic",
+            "Roughness",
+            "Depth",
+            "Material ID",
+            "Normal"
+        };
+        if (ImGui::Combo(
+            "Test PBR Debug",
+            &m_pbrDebugView,
+            pbrDebugNames,
+            _countof(pbrDebugNames)))
+        {
+            m_rayTracingManager->SetPbrDebugView(
+                static_cast<UINT>(m_pbrDebugView));
+        }
+        const char* materialPresetNames[] =
+        {
+            "Polished gold metal",
+            "Rough red dielectric",
+            "Rough steel metal",
+            "Glossy blue dielectric"
+        };
+        if (ImGui::Combo(
+            "Sphere material",
+            &m_dynamicTestSphereMaterialPreset,
+            materialPresetNames,
+            _countof(materialPresetNames)))
+        {
+            m_rayTracingManager->SetDynamicTestSphereMaterialPreset(
+                static_cast<UINT>(m_dynamicTestSphereMaterialPreset));
+        }
+        if (ImGui::Combo(
+            "Cube material",
+            &m_dynamicTestCubeMaterialPreset,
+            materialPresetNames,
+            _countof(materialPresetNames)))
+        {
+            m_rayTracingManager->SetDynamicTestCubeMaterialPreset(
+                static_cast<UINT>(m_dynamicTestCubeMaterialPreset));
+        }
+        bool testIblChanged = false;
+        testIblChanged |= ImGui::Checkbox(
+            "Enable test IBL",
+            &m_enableIbl);
+        testIblChanged |= ImGui::SliderFloat(
+            "Test IBL Intensity",
+            &m_iblIntensity,
+            0.0f,
+            4.0f,
+            "%.2f");
+        if (testIblChanged)
+        {
+            m_rayTracingManager->SetIblSettings(
+                m_enableIbl,
+                m_iblIntensity);
+        }
+        if (ImGui::Checkbox(
+            "Show test sphere",
+            &m_showDynamicSphere))
+        {
+            m_rayTracingManager->SetDynamicSphereVisible(
+                m_showDynamicSphere);
+        }
+        if (m_showDynamicSphere &&
+            ImGui::Checkbox(
+                "Animate test sphere",
+                &m_animateDynamicSphere))
+        {
+            m_rayTracingManager->SetDynamicSphereAnimationEnabled(
+                m_animateDynamicSphere);
+            m_rayTracingManager->ResetDynamicSphereTimeline();
+        }
+        if (ImGui::Checkbox(
+            "Show test cube",
+            &m_showDynamicCube))
+        {
+            m_rayTracingManager->SetDynamicCubeVisible(
+                m_showDynamicCube);
+        }
+        if (m_showDynamicCube &&
+            ImGui::Checkbox(
+                "Animate test cube",
+                &m_animateDynamicCube))
+        {
+            m_rayTracingManager->SetDynamicCubeAnimationEnabled(
+                m_animateDynamicCube);
+            m_rayTracingManager->ResetDynamicSphereTimeline();
+        }
+        ImGui::TextDisabled(
+            "Sphere: translation + rolling. Cube: rotation + short orbit.");
+        ImGui::TextDisabled(
+            "Use one object at a time, then both, to isolate history errors.");
+    }
+    else if (m_rayTracingManager && m_rayTracingManager->HasDynamicSphere())
     {
         if (ImGui::Checkbox(
             "Show metal sphere",
@@ -2039,7 +2147,7 @@ void D3D12Renderer::ConfigureAutomatedCapture(
     m_captureOutputPrefix = outputPrefix;
     const UINT clampedMaxBounce = maxBounce < 1u ? 1u : (maxBounce > 8u ? 8u : maxBounce);
     m_maxBounce = static_cast<int>(clampedMaxBounce);
-    m_sceneType = sceneType <= RayTracingManager::c_sceneIndirectBounceStress
+    m_sceneType = sceneType <= RayTracingManager::c_sceneDynamicTransformTest
         ? static_cast<int>(sceneType)
         : static_cast<int>(RayTracingManager::c_sceneCornellBox);
     m_pbrMetallic = pbrMetallic;
