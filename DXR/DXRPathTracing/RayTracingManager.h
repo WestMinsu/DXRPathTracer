@@ -63,6 +63,7 @@ public:
     void DispatchRays(ID3D12GraphicsCommandList4* commandList);
     void SetShowNormalColor(bool showNormalColor);
     void SetMaxBounce(UINT maxBounce);
+    void SetSamplesPerPixel(UINT samplesPerPixel);
     void SetRussianRouletteEnabled(bool enabled);
     void SetLightingMode(UINT lightingMode);
     void SetTemporalReprojectionEnabled(bool enabled);
@@ -238,6 +239,7 @@ private:
     UINT m_temporalDebugView = c_temporalDebugNone;
     UINT m_atrousIterationCount = 2;
     float m_atrousColorSigma = 4.0f;
+    UINT m_samplesPerPixel = 1;
     UINT m_lightingMode = c_lightingModeBsdf;
     UINT m_maxBounce = 3;
     UINT m_sceneType = c_sceneCornellBox;

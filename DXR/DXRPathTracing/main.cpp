@@ -23,6 +23,7 @@ namespace
         UINT height = 1080;
         UINT captureSamples = 0;
         UINT maxBounce = 8;
+        UINT samplesPerPixel = 1;
         UINT sceneType = RayTracingManager::c_scenePbrGgx;
         UINT pbrDebugView = RayTracingManager::c_pbrDebugBeauty;
         float pbrMetallic = 1.0f;
@@ -176,6 +177,11 @@ namespace
             else if (argument == L"--max-bounce" && index + 1 < argumentCount)
             {
                 gOptions.maxBounce = static_cast<UINT>(_wtoi(arguments[++index]));
+            }
+            else if (argument == L"--spp" && index + 1 < argumentCount)
+            {
+                gOptions.samplesPerPixel = static_cast<UINT>(
+                    _wtoi(arguments[++index]));
             }
             else if (argument == L"--russian-roulette" &&
                      index + 1 < argumentCount)
@@ -507,6 +513,7 @@ namespace
         gRenderer.SetSceneFilePath(gOptions.sceneFilePath);
         gRenderer.SetInitialSceneType(gOptions.sceneType);
         gRenderer.SetInitialMaxBounce(gOptions.maxBounce);
+        gRenderer.SetInitialSamplesPerPixel(gOptions.samplesPerPixel);
         gRenderer.SetInitialRussianRouletteEnabled(
             gOptions.enableRussianRoulette);
         gRenderer.SetInitialLightingMode(gOptions.lightingMode);

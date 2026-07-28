@@ -303,7 +303,10 @@ float3 EvaluateGpuBrdfValidationSample(uint2 launchIndex, uint2 launchDim)
         0.0f,
         nDotV);
 
-    uint seed = CreateRandomSeed(0u, 0xA511E9B3u + caseIndex * 0x9E3779B9u);
+    uint seed = CreateRandomSeed(
+        0u,
+        0xA511E9B3u + caseIndex * 0x9E3779B9u,
+        0u);
     float3 sampleDirection;
     float3 weightedBrdf;
     float samplePdf;
@@ -352,6 +355,7 @@ void TracePrimaryGuide(RayDesc ray)
 
 void TracePath(
     RayDesc ray,
+    uint subSampleIndex,
     out float3 sampleRadiance,
     out float3 primaryDiffuseDenoisingRadiance,
     out float3 primarySpecularDenoisingRadiance,
@@ -485,7 +489,10 @@ void TracePath(
         float3 localDirectDiffuseLighting = float3(0.0f, 0.0f, 0.0f);
         float3 localDirectSpecularLighting = float3(0.0f, 0.0f, 0.0f);
         uint directSeed =
-            CreateRandomSeed(depth, payload.primitiveIndex) ^ 0xA511E9B3u;
+            CreateRandomSeed(
+                depth,
+                payload.primitiveIndex,
+                subSampleIndex) ^ 0xA511E9B3u;
         float3 directLightDirection;
         float3 radianceOverPdf;
         float lightPdf;
@@ -548,7 +555,10 @@ void TracePath(
         else
             tailRadiance += tailThroughput * localDirectLighting;
 
-        uint seed = CreateRandomSeed(depth, payload.primitiveIndex);
+        uint seed = CreateRandomSeed(
+            depth,
+            payload.primitiveIndex,
+            subSampleIndex);
         float3 sampleDirection;
         float3 bounceWeight;
         float samplePdf;
@@ -677,6 +687,7 @@ void RunRaygen()
     float3 primaryRayDirection = float3(0.0f, 0.0f, 0.0f);
     bool temporalHistoryAttempted = false;
     bool temporalHistoryAccepted = false;
+    uint samplesPerPixel = clamp(g_samplesPerPixel, 1u, 8u);
 
     if (g_sceneType == c_scenePbrGpuValidation)
     {
@@ -686,39 +697,69 @@ void RunRaygen()
     }
     else
     {
-        float2 pixelOffset = float2(0.5f, 0.5f);
-        if (g_enableAccumulation != 0u ||
-            g_enableTemporalReprojection != 0u)
-        {
-            uint cameraSeed = CreateRandomSeed(0u, 0x9E3779B9u);
-            pixelOffset = float2(RandomFloat01(cameraSeed), RandomFloat01(cameraSeed));
-        }
-
-        float2 uv = (float2(launchIndex) + pixelOffset) / float2(launchDim);
         float aspectRatio = float(launchDim.x) / float(launchDim.y);
         float tanHalfFov = tan(c_verticalFovRadians * 0.5f);
-        float2 screenPosition = float2(
-            (uv.x * 2.0f - 1.0f) * aspectRatio * tanHalfFov,
-            (1.0f - uv.y * 2.0f) * tanHalfFov);
-
         float3 cameraForward = normalize(g_cameraTarget - g_cameraPosition);
         float3 cameraRight = normalize(cross(c_cameraUp, cameraForward));
         float3 cameraUp = cross(cameraForward, cameraRight);
 
-        RayDesc ray;
-        ray.Origin = g_cameraPosition;
-        ray.Direction = normalize(
-            cameraForward + cameraRight * screenPosition.x + cameraUp * screenPosition.y);
-        primaryRayDirection = ray.Direction;
-        ray.TMin = c_rayTMin;
-        ray.TMax = c_rayTMax;
+        for (uint subSampleIndex = 0u;
+             subSampleIndex < samplesPerPixel;
+             ++subSampleIndex)
+        {
+            float2 pixelOffset = float2(0.5f, 0.5f);
+            if (g_enableAccumulation != 0u ||
+                g_enableTemporalReprojection != 0u ||
+                samplesPerPixel > 1u)
+            {
+                uint cameraSeed = CreateRandomSeed(
+                    0u,
+                    0x9E3779B9u,
+                    subSampleIndex);
+                pixelOffset = float2(
+                    RandomFloat01(cameraSeed),
+                    RandomFloat01(cameraSeed));
+            }
 
-        TracePath(
-            ray,
-            sampleRadiance,
-            sampleDiffuseDenoisingRadiance,
-            sampleSpecularDenoisingRadiance,
-            dynamicTouched);
+            float2 uv =
+                (float2(launchIndex) + pixelOffset) / float2(launchDim);
+            float2 screenPosition = float2(
+                (uv.x * 2.0f - 1.0f) * aspectRatio * tanHalfFov,
+                (1.0f - uv.y * 2.0f) * tanHalfFov);
+
+            RayDesc ray;
+            ray.Origin = g_cameraPosition;
+            ray.Direction = normalize(
+                cameraForward +
+                cameraRight * screenPosition.x +
+                cameraUp * screenPosition.y);
+            primaryRayDirection = ray.Direction;
+            ray.TMin = c_rayTMin;
+            ray.TMax = c_rayTMax;
+
+            float3 subSampleRadiance;
+            float3 subSampleDiffuseRadiance;
+            float3 subSampleSpecularRadiance;
+            uint subSampleDynamicTouched;
+            TracePath(
+                ray,
+                subSampleIndex,
+                subSampleRadiance,
+                subSampleDiffuseRadiance,
+                subSampleSpecularRadiance,
+                subSampleDynamicTouched);
+            sampleRadiance += subSampleRadiance;
+            sampleDiffuseDenoisingRadiance +=
+                subSampleDiffuseRadiance;
+            sampleSpecularDenoisingRadiance +=
+                subSampleSpecularRadiance;
+            dynamicTouched |= subSampleDynamicTouched;
+        }
+
+        float inverseSamplesPerPixel = 1.0f / float(samplesPerPixel);
+        sampleRadiance *= inverseSamplesPerPixel;
+        sampleDiffuseDenoisingRadiance *= inverseSamplesPerPixel;
+        sampleSpecularDenoisingRadiance *= inverseSamplesPerPixel;
 
         if (updatePrimaryGuides)
         {

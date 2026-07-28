@@ -136,7 +136,8 @@ namespace
         float areaLightPower;
         float environmentPower;
         UINT enableAtrous;
-        UINT temporalPadding0[2];
+        UINT samplesPerPixel;
+        UINT temporalPadding0;
         float previousCameraPosition[3];
         UINT temporalPadding1;
         float previousCameraTarget[3];
@@ -778,6 +779,7 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     renderSettings.areaLightPower = m_areaLightPower;
     renderSettings.environmentPower = m_environmentPower;
     renderSettings.enableAtrous = useAtrousFilter ? 1u : 0u;
+    renderSettings.samplesPerPixel = m_samplesPerPixel;
     std::copy(
         m_previousCameraPosition.begin(),
         m_previousCameraPosition.end(),
@@ -911,7 +913,7 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
 
     if (shouldAccumulate)
     {
-        ++m_accumulatedSampleCount;
+        m_accumulatedSampleCount += m_samplesPerPixel;
     }
     if (useTemporalHistory)
     {
@@ -1204,6 +1206,17 @@ void RayTracingManager::SetMaxBounce(UINT maxBounce)
         return;
 
     m_maxBounce = clampedMaxBounce;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetSamplesPerPixel(UINT samplesPerPixel)
+{
+    const UINT clampedSamplesPerPixel =
+        samplesPerPixel < 1u ? 1u : (samplesPerPixel > 8u ? 8u : samplesPerPixel);
+    if (m_samplesPerPixel == clampedSamplesPerPixel)
+        return;
+
+    m_samplesPerPixel = clampedSamplesPerPixel;
     ResetAccumulation();
 }
 

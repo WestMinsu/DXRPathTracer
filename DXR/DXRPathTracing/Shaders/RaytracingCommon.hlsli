@@ -202,7 +202,8 @@ cbuffer RenderSettings : register(b0)
     float g_areaLightPower;
     float g_environmentPower;
     uint g_enableAtrous;
-    uint2 g_temporalPadding0;
+    uint g_samplesPerPixel;
+    uint g_temporalPadding0;
     float3 g_previousCameraPosition;
     uint g_temporalPadding1;
     float3 g_previousCameraTarget;
@@ -249,13 +250,21 @@ void RecordRadianceMiss()
     }
 }
 
-uint CreateRandomSeed(uint depth, uint primitiveIndex)
+uint CreateRandomSeed(
+    uint depth,
+    uint primitiveIndex,
+    uint subSampleIndex)
 {
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
     uint seed = launchIndex.x + launchIndex.y * launchDim.x;
     uint sequenceIndex = g_enableAccumulation != 0 ? g_sampleIndex : g_frameIndex;
-    seed = seed * 1973u + sequenceIndex * 9277u + depth * 26699u + primitiveIndex * 911u + 1u;
+    seed = seed * 1973u +
+        sequenceIndex * 9277u +
+        subSampleIndex * 104729u +
+        depth * 26699u +
+        primitiveIndex * 911u +
+        1u;
     seed ^= g_validationSeed * 0x85EBCA6Bu;
     seed ^= seed >> 16;
     seed *= 2246822519u;

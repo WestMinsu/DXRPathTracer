@@ -43,6 +43,12 @@ public:
         m_maxBounce = static_cast<int>(
             maxBounce < 1u ? 1u : (maxBounce > 8u ? 8u : maxBounce));
     }
+    void SetInitialSamplesPerPixel(UINT samplesPerPixel)
+    {
+        m_samplesPerPixel = static_cast<int>(
+            samplesPerPixel < 1u ? 1u :
+            (samplesPerPixel > 8u ? 8u : samplesPerPixel));
+    }
     void SetInitialRussianRouletteEnabled(bool enabled)
     {
         m_enableRussianRoulette = enabled;
@@ -238,6 +244,7 @@ private:
     bool m_saveCurrentRequested = false;
     int m_captureTargetSamples = 256;
     int m_maxBounce = 8;
+    int m_samplesPerPixel = 1;
     int m_sceneType = 0;
     int m_pbrDebugView = 0;
     float m_pbrMetallic = 1.0f;

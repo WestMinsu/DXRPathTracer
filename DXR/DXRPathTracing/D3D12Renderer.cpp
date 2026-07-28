@@ -322,6 +322,8 @@ void D3D12Renderer::Render()
         m_animateDynamicSphere);
     m_rayTracingManager->SetShowNormalColor(m_showNormalColor);
     m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
+    m_rayTracingManager->SetSamplesPerPixel(
+        static_cast<UINT>(m_samplesPerPixel));
     m_rayTracingManager->SetRussianRouletteEnabled(
         m_enableRussianRoulette);
     m_rayTracingManager->SetLightingMode(
@@ -1573,6 +1575,7 @@ void D3D12Renderer::BuildImGuiFrame()
         "Progressive accumulation (reference)",
         &m_enableAccumulation);
     ImGui::SliderInt("Max Bounce", &m_maxBounce, 1, 8);
+    ImGui::SliderInt("Samples Per Pixel / Frame", &m_samplesPerPixel, 1, 8);
     const char* lightingModeNames[] =
     {
         "BSDF Only",
