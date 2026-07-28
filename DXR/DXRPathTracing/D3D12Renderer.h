@@ -233,6 +233,7 @@ private:
     bool m_enableAccumulation = true;
     bool m_enableRussianRoulette = false;
     bool m_enableTemporalReprojection = false;
+    bool m_enableDynamicObjectReprojection = true;
     bool m_enableAtrous = false;
     int m_temporalDebugView = static_cast<int>(
         RayTracingManager::c_temporalDebugNone);

@@ -67,6 +67,7 @@ public:
     void SetRussianRouletteEnabled(bool enabled);
     void SetLightingMode(UINT lightingMode);
     void SetTemporalReprojectionEnabled(bool enabled);
+    void SetDynamicObjectReprojectionEnabled(bool enabled);
     void SetTemporalDebugView(UINT debugView);
     void SetAtrousEnabled(bool enabled);
     void SetAtrousIterationCount(UINT iterationCount)
@@ -235,6 +236,7 @@ private:
     bool m_enableAccumulation = true;
     bool m_enableRussianRoulette = false;
     bool m_enableTemporalReprojection = false;
+    bool m_enableDynamicObjectReprojection = true;
     bool m_enableAtrous = false;
     UINT m_temporalDebugView = c_temporalDebugNone;
     UINT m_atrousIterationCount = 2;
@@ -270,6 +272,8 @@ private:
     float m_dynamicSphereMotionAmplitude = 0.0f;
     float m_dynamicSpherePositionX = 0.0f;
     float m_dynamicSphereRollRadians = 0.0f;
+    float m_previousDynamicSpherePositionX = 0.0f;
+    float m_previousDynamicSphereRollRadians = 0.0f;
     double m_dynamicObjectLinearSpeed = 0.0;
     double m_dynamicObjectAngularSpeed = 0.0;
     bool m_dynamicObjectMovedThisFrame = false;

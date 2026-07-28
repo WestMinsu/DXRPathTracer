@@ -157,9 +157,15 @@ bool IsValidHistoryTap(
         return false;
     }
 
+    bool currentDynamic = IsDynamicGuide(currentMaterial);
+    bool previousDynamic = IsDynamicGuide(previousMaterial);
     if (g_dynamicObjectMoved != 0u &&
-        (IsDynamicGuide(currentMaterial) ||
-         IsDynamicGuide(previousMaterial)))
+        g_enableDynamicObjectReprojection == 0u)
+    {
+        if (currentDynamic || previousDynamic)
+            return false;
+    }
+    else if (currentDynamic != previousDynamic)
     {
         return false;
     }
@@ -338,14 +344,25 @@ void ResetSurfaceQueryPayload(out SurfaceQueryPayload payload)
     payload.hit = 0u;
 }
 
-void TracePrimaryGuide(RayDesc ray)
+void TracePrimaryGuide(
+    RayDesc ray,
+    out float3 previousWorldPosition,
+    out uint dynamicInstance)
 {
+    previousWorldPosition = ray.Origin;
+    dynamicInstance = 0u;
     SurfaceQueryPayload payload;
     ResetSurfaceQueryPayload(payload);
+    // The guide query does not consume emission. Mark it before TraceRay so
+    // closest-hit can return the previous rigid-body position in that slot
+    // without increasing the payload carried by every radiance bounce.
+    payload.hit = g_enableDynamicObjectReprojection != 0u ? 2u : 0u;
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
     if (payload.hit == 0u)
         return;
 
+    previousWorldPosition = payload.emission;
+    dynamicInstance = payload.dynamicInstance;
     uint2 launchIndex = DispatchRaysIndex().xy;
     g_normalDepth[launchIndex] = float4(payload.normal, payload.hitT);
     g_materialGuide[launchIndex] = float4(
@@ -359,12 +376,12 @@ void TracePath(
     out float3 sampleRadiance,
     out float3 primaryDiffuseDenoisingRadiance,
     out float3 primarySpecularDenoisingRadiance,
-    out uint dynamicTouched)
+    out uint secondaryDynamicTouched)
 {
     sampleRadiance = float3(0.0f, 0.0f, 0.0f);
     primaryDiffuseDenoisingRadiance = float3(0.0f, 0.0f, 0.0f);
     primarySpecularDenoisingRadiance = float3(0.0f, 0.0f, 0.0f);
-    dynamicTouched = 0u;
+    secondaryDynamicTouched = 0u;
 
     float3 pathThroughput = float3(1.0f, 1.0f, 1.0f);
     float3 tailThroughput = float3(1.0f, 1.0f, 1.0f);
@@ -420,7 +437,8 @@ void TracePath(
         }
 
         RecordSurfaceHit();
-        dynamicTouched |= payload.dynamicInstance;
+        if (depth > 0u)
+            secondaryDynamicTouched |= payload.dynamicInstance;
         float3 normalColor = payload.normal * 0.5f + 0.5f;
         if (g_showNormalColor != 0u)
         {
@@ -683,7 +701,10 @@ void RunRaygen()
         float3(0.0f, 0.0f, 0.0f);
     float3 sampleSpecularDenoisingRadiance =
         float3(0.0f, 0.0f, 0.0f);
-    uint dynamicTouched = 0u;
+    uint secondaryDynamicTouched = 0u;
+    float3 previousPrimaryWorldPosition =
+        float3(0.0f, 0.0f, 0.0f);
+    uint primaryDynamicInstance = 0u;
     float3 primaryRayDirection = float3(0.0f, 0.0f, 0.0f);
     bool temporalHistoryAttempted = false;
     bool temporalHistoryAccepted = false;
@@ -740,20 +761,21 @@ void RunRaygen()
             float3 subSampleRadiance;
             float3 subSampleDiffuseRadiance;
             float3 subSampleSpecularRadiance;
-            uint subSampleDynamicTouched;
+            uint subSampleSecondaryDynamicTouched;
             TracePath(
                 ray,
                 subSampleIndex,
                 subSampleRadiance,
                 subSampleDiffuseRadiance,
                 subSampleSpecularRadiance,
-                subSampleDynamicTouched);
+                subSampleSecondaryDynamicTouched);
             sampleRadiance += subSampleRadiance;
             sampleDiffuseDenoisingRadiance +=
                 subSampleDiffuseRadiance;
             sampleSpecularDenoisingRadiance +=
                 subSampleSpecularRadiance;
-            dynamicTouched |= subSampleDynamicTouched;
+            secondaryDynamicTouched |=
+                subSampleSecondaryDynamicTouched;
         }
 
         float inverseSamplesPerPixel = 1.0f / float(samplesPerPixel);
@@ -780,7 +802,10 @@ void RunRaygen()
             guideRay.TMin = c_rayTMin;
             guideRay.TMax = c_rayTMax;
 
-            TracePrimaryGuide(guideRay);
+            TracePrimaryGuide(
+                guideRay,
+                previousPrimaryWorldPosition,
+                primaryDynamicInstance);
             primaryRayDirection = guideRay.Direction;
         }
     }
@@ -816,7 +841,7 @@ void RunRaygen()
     float localSampleCount = 1.0f;
     bool dynamicInvalidation =
         g_dynamicObjectMoved != 0u &&
-        dynamicTouched != 0u;
+        secondaryDynamicTouched != 0u;
     if (g_sampleIndex > 0)
     {
         int2 historyPixel = int2(launchIndex);
@@ -829,19 +854,28 @@ void RunRaygen()
         {
             temporalHistoryAttempted = true;
             float4 currentMaterial = g_materialGuide[launchIndex];
-            if (TemporalCameraIsMoving())
+            if (TemporalCameraIsMoving() ||
+                (g_dynamicObjectMoved != 0u &&
+                 g_enableDynamicObjectReprojection != 0u))
             {
                 float4 currentNormalDepth = g_normalDepth[launchIndex];
                 bool currentHit =
                     currentNormalDepth.w >= 0.0f &&
                     currentMaterial.a >= 0.0f;
-                float3 worldPosition = currentHit
+                float3 currentWorldPosition = currentHit
                     ? g_cameraPosition +
                         primaryRayDirection * currentNormalDepth.w
                     : float3(0.0f, 0.0f, 0.0f);
+                bool currentDynamic =
+                    currentHit &&
+                    primaryDynamicInstance != 0u &&
+                    IsDynamicGuide(currentMaterial);
+                float3 reprojectionWorldPosition = currentDynamic
+                    ? previousPrimaryWorldPosition
+                    : currentWorldPosition;
                 useBilinearHistory = true;
                 historyValid = GatherValidatedHistory(
-                    worldPosition,
+                    reprojectionWorldPosition,
                     primaryRayDirection,
                     currentNormalDepth,
                     currentMaterial,
@@ -1053,6 +1087,7 @@ void MyClosestHitShader_SurfaceQuery(
     inout SurfaceQueryPayload payload,
     in BuiltInTriangleIntersectionAttributes attributes)
 {
+    bool motionGuideQuery = payload.hit == 2u;
     uint instanceFlags;
     HitGeometryMetadata hitGeometry =
         GetHitGeometryMetadata(instanceFlags);
@@ -1065,7 +1100,8 @@ void MyClosestHitShader_SurfaceQuery(
     uint i2 = hitGeometry.vertexOffset + g_indices[indexOffset + 2u];
 
     float3 normal = InterpolateNormal(i0, i1, i2, attributes);
-    float3x3 objectToWorld = (float3x3)ObjectToWorld3x4();
+    float3x4 objectToWorldTransform = ObjectToWorld3x4();
+    float3x3 objectToWorld = (float3x3)objectToWorldTransform;
     normal = normalize(mul(objectToWorld, normal));
     bool frontFace = dot(normal, WorldRayDirection()) < 0.0f;
     if (!frontFace)
@@ -1105,6 +1141,29 @@ void MyClosestHitShader_SurfaceQuery(
     payload.primitiveIndex = globalPrimitiveIndex;
     payload.dynamicInstance =
         (instanceFlags & c_instanceFlagDynamic) != 0u ? 1u : 0u;
+    if (motionGuideQuery)
+    {
+        float3 previousWorldPosition =
+            WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+        if (payload.dynamicInstance != 0u)
+        {
+            // The current demo has one rigid dynamic sphere. Its center Y/Z
+            // stay fixed while X translation and Z-axis rolling change.
+            float3 objectPosition =
+                ObjectRayOrigin() + ObjectRayDirection() * RayTCurrent();
+            float previousCosine = cos(g_previousDynamicRollRadians);
+            float previousSine = sin(g_previousDynamicRollRadians);
+            previousWorldPosition = float3(
+                previousCosine * objectPosition.x -
+                    previousSine * objectPosition.y +
+                    g_previousDynamicPositionX,
+                previousSine * objectPosition.x +
+                    previousCosine * objectPosition.y +
+                    objectToWorldTransform[1][3],
+                objectPosition.z + objectToWorldTransform[2][3]);
+        }
+        payload.emission = previousWorldPosition;
+    }
     payload.frontFace = frontFace ? 1u : 0u;
     payload.hit = 1u;
 }

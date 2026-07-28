@@ -270,6 +270,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         static_cast<UINT>(m_lightingMode));
     m_rayTracingManager->SetTemporalReprojectionEnabled(
         m_enableTemporalReprojection);
+    m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
+        m_enableDynamicObjectReprojection);
     m_rayTracingManager->SetAtrousEnabled(m_enableAtrous);
     m_rayTracingManager->SetAtrousIterationCount(
         static_cast<UINT>(m_atrousIterations));
@@ -330,6 +332,8 @@ void D3D12Renderer::Render()
         static_cast<UINT>(m_lightingMode));
     m_rayTracingManager->SetTemporalReprojectionEnabled(
         m_enableTemporalReprojection);
+    m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
+        m_enableDynamicObjectReprojection);
     m_rayTracingManager->SetTemporalDebugView(
         m_enableTemporalReprojection
         ? static_cast<UINT>(m_temporalDebugView)
@@ -1609,6 +1613,15 @@ void D3D12Renderer::BuildImGuiFrame()
         &m_enableTemporalReprojection);
     if (m_enableTemporalReprojection)
     {
+        if (m_rayTracingManager &&
+            m_rayTracingManager->HasDynamicSphere())
+        {
+            ImGui::Checkbox(
+                "Dynamic Object Reprojection",
+                &m_enableDynamicObjectReprojection);
+            ImGui::TextDisabled(
+                "OFF: reject moving-object history, ON: reproject its previous transform.");
+        }
         const char* temporalDebugNames[] =
         {
             "None",

@@ -203,12 +203,13 @@ cbuffer RenderSettings : register(b0)
     float g_environmentPower;
     uint g_enableAtrous;
     uint g_samplesPerPixel;
-    uint g_temporalPadding0;
+    float g_previousDynamicPositionX;
     float3 g_previousCameraPosition;
-    uint g_temporalPadding1;
+    float g_previousDynamicRollRadians;
     float3 g_previousCameraTarget;
     uint g_enableTemporalReprojection;
     uint g_temporalDebugView;
+    uint g_enableDynamicObjectReprojection;
 };
 
 void RecordRadianceRay(uint depth)

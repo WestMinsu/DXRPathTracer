@@ -137,14 +137,15 @@ namespace
         float environmentPower;
         UINT enableAtrous;
         UINT samplesPerPixel;
-        UINT temporalPadding0;
+        float previousDynamicPositionX;
         float previousCameraPosition[3];
-        UINT temporalPadding1;
+        float previousDynamicRollRadians;
         float previousCameraTarget[3];
         UINT enableTemporalReprojection;
         UINT temporalDebugView;
+        UINT enableDynamicObjectReprojection;
     };
-    static_assert(sizeof(RenderSettingsConstants) == 41 * sizeof(std::uint32_t));
+    static_assert(sizeof(RenderSettingsConstants) == 42 * sizeof(std::uint32_t));
 
     struct AtrousSettingsConstants
     {
@@ -780,6 +781,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     renderSettings.environmentPower = m_environmentPower;
     renderSettings.enableAtrous = useAtrousFilter ? 1u : 0u;
     renderSettings.samplesPerPixel = m_samplesPerPixel;
+    renderSettings.previousDynamicPositionX =
+        m_previousDynamicSpherePositionX;
     std::copy(
         m_previousCameraPosition.begin(),
         m_previousCameraPosition.end(),
@@ -788,10 +791,14 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         m_previousCameraTarget.begin(),
         m_previousCameraTarget.end(),
         renderSettings.previousCameraTarget);
+    renderSettings.previousDynamicRollRadians =
+        m_previousDynamicSphereRollRadians;
     renderSettings.enableTemporalReprojection =
         useTemporalHistory ? 1u : 0u;
     renderSettings.temporalDebugView = m_temporalDebugView;
-    commandList->SetComputeRoot32BitConstants(4, 41, &renderSettings, 0);
+    renderSettings.enableDynamicObjectReprojection =
+        m_enableDynamicObjectReprojection ? 1u : 0u;
+    commandList->SetComputeRoot32BitConstants(4, 42, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
     commandList->SetComputeRootDescriptorTable(5, environmentHandle);
@@ -1244,6 +1251,15 @@ void RayTracingManager::SetTemporalReprojectionEnabled(bool enabled)
         return;
 
     m_enableTemporalReprojection = enabled;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetDynamicObjectReprojectionEnabled(bool enabled)
+{
+    if (m_enableDynamicObjectReprojection == enabled)
+        return;
+
+    m_enableDynamicObjectReprojection = enabled;
     ResetAccumulation();
 }
 
@@ -2316,7 +2332,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
     rootParameters[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[4].Constants.ShaderRegister = 0;
     rootParameters[4].Constants.RegisterSpace = 0;
-    rootParameters[4].Constants.Num32BitValues = 41;
+    rootParameters[4].Constants.Num32BitValues = 42;
     rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     rootParameters[5].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -3015,6 +3031,8 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             m_dynamicSphereTrackCenterX -
             m_dynamicSphereMotionAmplitude;
         m_dynamicSphereRollRadians = 0.0f;
+        m_previousDynamicSpherePositionX = m_dynamicSpherePositionX;
+        m_previousDynamicSphereRollRadians = m_dynamicSphereRollRadians;
 
         SceneData sphere =
             CreateRollingMetalSphereSceneData(m_dynamicSphereRadius);
@@ -3854,6 +3872,8 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
         m_dynamicObjectLinearSpeed = 0.0;
         m_dynamicObjectAngularSpeed = 0.0;
     }
+    m_previousDynamicSpherePositionX = previousPosition;
+    m_previousDynamicSphereRollRadians = previousRoll;
     const bool transformChanged =
         std::abs(previousPosition - m_dynamicSpherePositionX) > 1.0e-7f ||
         std::abs(previousRoll - m_dynamicSphereRollRadians) > 1.0e-7f;
