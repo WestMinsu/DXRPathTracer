@@ -212,6 +212,11 @@ cbuffer RenderSettings : register(b0)
     uint g_enableDynamicObjectReprojection;
 };
 
+bool DynamicObjectReprojectionEnabled()
+{
+    return g_enableDynamicObjectReprojection != 0u;
+}
+
 void RecordRadianceRay(uint depth)
 {
     if (g_enableStatistics != 0)

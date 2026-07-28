@@ -35,12 +35,6 @@ bool TemporalCameraIsMoving()
         length(g_cameraTarget - g_previousCameraTarget) > 1.0e-5f;
 }
 
-bool TemporalSceneIsMoving()
-{
-    return g_dynamicObjectMoved != 0u ||
-        TemporalCameraIsMoving();
-}
-
 struct TemporalHistorySample
 {
     float3 radianceAverage;
@@ -160,7 +154,7 @@ bool IsValidHistoryTap(
     bool currentDynamic = IsDynamicGuide(currentMaterial);
     bool previousDynamic = IsDynamicGuide(previousMaterial);
     if (g_dynamicObjectMoved != 0u &&
-        g_enableDynamicObjectReprojection == 0u)
+        !DynamicObjectReprojectionEnabled())
     {
         if (currentDynamic || previousDynamic)
             return false;
@@ -356,7 +350,7 @@ void TracePrimaryGuide(
     // The guide query does not consume emission. Mark it before TraceRay so
     // closest-hit can return the previous rigid-body position in that slot
     // without increasing the payload carried by every radiance bounce.
-    payload.hit = g_enableDynamicObjectReprojection != 0u ? 2u : 0u;
+    payload.hit = DynamicObjectReprojectionEnabled() ? 2u : 0u;
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
     if (payload.hit == 0u)
         return;
@@ -375,13 +369,11 @@ void TracePath(
     uint subSampleIndex,
     out float3 sampleRadiance,
     out float3 primaryDiffuseDenoisingRadiance,
-    out float3 primarySpecularDenoisingRadiance,
-    out uint secondaryDynamicTouched)
+    out float3 primarySpecularDenoisingRadiance)
 {
     sampleRadiance = float3(0.0f, 0.0f, 0.0f);
     primaryDiffuseDenoisingRadiance = float3(0.0f, 0.0f, 0.0f);
     primarySpecularDenoisingRadiance = float3(0.0f, 0.0f, 0.0f);
-    secondaryDynamicTouched = 0u;
 
     float3 pathThroughput = float3(1.0f, 1.0f, 1.0f);
     float3 tailThroughput = float3(1.0f, 1.0f, 1.0f);
@@ -437,8 +429,6 @@ void TracePath(
         }
 
         RecordSurfaceHit();
-        if (depth > 0u)
-            secondaryDynamicTouched |= payload.dynamicInstance;
         float3 normalColor = payload.normal * 0.5f + 0.5f;
         if (g_showNormalColor != 0u)
         {
@@ -503,7 +493,6 @@ void TracePath(
         material.metallic = payload.metallic;
         material.roughness = payload.roughness;
         material.emission = payload.emission;
-
         float3 localDirectDiffuseLighting = float3(0.0f, 0.0f, 0.0f);
         float3 localDirectSpecularLighting = float3(0.0f, 0.0f, 0.0f);
         uint directSeed =
@@ -514,13 +503,14 @@ void TracePath(
         float3 directLightDirection;
         float3 radianceOverPdf;
         float lightPdf;
-        if (SampleDirectLight(
+        bool directLightVisible = SampleDirectLight(
             payload.normal,
             hitPosition,
             directSeed,
             directLightDirection,
             radianceOverPdf,
-            lightPdf))
+            lightPdf);
+        if (directLightVisible)
         {
             if (g_sceneType == c_scenePbrGgx)
             {
@@ -701,7 +691,6 @@ void RunRaygen()
         float3(0.0f, 0.0f, 0.0f);
     float3 sampleSpecularDenoisingRadiance =
         float3(0.0f, 0.0f, 0.0f);
-    uint secondaryDynamicTouched = 0u;
     float3 previousPrimaryWorldPosition =
         float3(0.0f, 0.0f, 0.0f);
     uint primaryDynamicInstance = 0u;
@@ -761,21 +750,17 @@ void RunRaygen()
             float3 subSampleRadiance;
             float3 subSampleDiffuseRadiance;
             float3 subSampleSpecularRadiance;
-            uint subSampleSecondaryDynamicTouched;
             TracePath(
                 ray,
                 subSampleIndex,
                 subSampleRadiance,
                 subSampleDiffuseRadiance,
-                subSampleSpecularRadiance,
-                subSampleSecondaryDynamicTouched);
+                subSampleSpecularRadiance);
             sampleRadiance += subSampleRadiance;
             sampleDiffuseDenoisingRadiance +=
                 subSampleDiffuseRadiance;
             sampleSpecularDenoisingRadiance +=
                 subSampleSpecularRadiance;
-            secondaryDynamicTouched |=
-                subSampleSecondaryDynamicTouched;
         }
 
         float inverseSamplesPerPixel = 1.0f / float(samplesPerPixel);
@@ -839,15 +824,15 @@ void RunRaygen()
         sampleSpecularLuminance,
         sampleSpecularLuminance * sampleSpecularLuminance);
     float localSampleCount = 1.0f;
-    bool dynamicInvalidation =
-        g_dynamicObjectMoved != 0u &&
-        secondaryDynamicTouched != 0u;
+    bool pixelTemporalMotion =
+        TemporalCameraIsMoving() ||
+        (g_dynamicObjectMoved != 0u &&
+         primaryDynamicInstance != 0u);
     if (g_sampleIndex > 0)
     {
         int2 historyPixel = int2(launchIndex);
         bool historyValid = true;
         bool useBilinearHistory = false;
-        bool previousDynamicInvalidation = false;
         TemporalHistorySample history;
         ResetTemporalHistorySample(history);
         if (g_enableTemporalReprojection != 0u)
@@ -856,7 +841,7 @@ void RunRaygen()
             float4 currentMaterial = g_materialGuide[launchIndex];
             if (TemporalCameraIsMoving() ||
                 (g_dynamicObjectMoved != 0u &&
-                 g_enableDynamicObjectReprojection != 0u))
+                 DynamicObjectReprojectionEnabled()))
             {
                 float4 currentNormalDepth = g_normalDepth[launchIndex];
                 bool currentHit =
@@ -907,8 +892,6 @@ void RunRaygen()
                 g_enableTemporalReprojection != 0u
                 ? g_previousAccumulation.Load(int3(historyPixel, 0))
                 : g_accumulation[launchIndex];
-            previousDynamicInvalidation =
-                previousAccumulation.a < 0.0f;
             float previousSampleCount =
                 max(abs(previousAccumulation.a), 1.0f);
             history.radianceAverage =
@@ -963,25 +946,24 @@ void RunRaygen()
             }
         }
 
-        if (historyValid &&
-            !dynamicInvalidation &&
-            !previousDynamicInvalidation)
+        if (historyValid)
         {
             temporalHistoryAccepted =
                 g_enableTemporalReprojection != 0u;
             float retainedHistoryCount = history.sampleCount;
             if (g_enableTemporalReprojection != 0u)
             {
-                if (TemporalSceneIsMoving())
+                if (pixelTemporalMotion)
                 {
                     retainedHistoryCount = min(
-                        history.sampleCount,
+                        retainedHistoryCount,
                         31.0f);
                 }
-                else if (g_enableAccumulation == 0u)
+                else if (g_enableAccumulation == 0u ||
+                         g_dynamicObjectMoved != 0u)
                 {
                     retainedHistoryCount = min(
-                        history.sampleCount,
+                        retainedHistoryCount,
                         255.0f);
                 }
             }
@@ -1002,17 +984,14 @@ void RunRaygen()
         }
     }
 
-    float signedSampleCount = dynamicInvalidation
-        ? -localSampleCount
-        : localSampleCount;
     g_accumulation[launchIndex] =
-        float4(accumulatedColor, signedSampleCount);
+        float4(accumulatedColor, localSampleCount);
     if (g_enableAtrous != 0u)
     {
         g_diffuseIndirectAccumulation[launchIndex] =
-            float4(accumulatedDiffuseRadiance, signedSampleCount);
+            float4(accumulatedDiffuseRadiance, localSampleCount);
         g_specularIndirectAccumulation[launchIndex] =
-            float4(accumulatedSpecularRadiance, signedSampleCount);
+            float4(accumulatedSpecularRadiance, localSampleCount);
         g_diffuseLuminanceMoments[launchIndex] =
             accumulatedDiffuseMoments;
         g_specularLuminanceMoments[launchIndex] =
@@ -1021,9 +1000,7 @@ void RunRaygen()
     if (g_temporalDebugView == 1u)
     {
         float historyDisplayRange =
-            g_enableAccumulation == 0u && !TemporalSceneIsMoving()
-            ? 255.0f
-            : 31.0f;
+            pixelTemporalMotion ? 31.0f : 255.0f;
         float normalizedHistory = saturate(
             (localSampleCount - 1.0f) / historyDisplayRange);
         g_output[launchIndex] = float4(

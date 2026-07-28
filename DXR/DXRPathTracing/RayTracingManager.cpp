@@ -2543,7 +2543,8 @@ bool RayTracingManager::CreateRaytracingPipelineState()
     D3D12_HIT_GROUP_DESC hitGroupDesc = {};
     hitGroupDesc.HitGroupExport = c_surfaceQueryHitGroupName;
     hitGroupDesc.Type = D3D12_HIT_GROUP_TYPE_TRIANGLES;
-    hitGroupDesc.ClosestHitShaderImport = c_surfaceQueryClosestHitShaderName;
+    hitGroupDesc.ClosestHitShaderImport =
+        c_surfaceQueryClosestHitShaderName;
     hitGroupDesc.AnyHitShaderImport = c_alphaMaskAnyHitShaderName;
 
     D3D12_RAYTRACING_SHADER_CONFIG shaderConfig = {};
@@ -2590,7 +2591,7 @@ bool RayTracingManager::CreateShaderTables()
         L"RayGen shader table") &&
         CreateMissShaderTable() &&
         CreateShaderTable(
-        c_surfaceQueryHitGroupName,
+            c_surfaceQueryHitGroupName,
             m_hitGroupShaderTable.ReleaseAndGetAddressOf(),
             &m_hitGroupShaderRecordSize,
             L"HitGroup shader table");
