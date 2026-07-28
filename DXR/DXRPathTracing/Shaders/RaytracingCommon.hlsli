@@ -130,6 +130,8 @@ RWTexture2D<float4> g_output : register(u0);
 RWTexture2D<float4> g_accumulation : register(u1);
 RWTexture2D<float4> g_normalDepth : register(u3);
 RWTexture2D<float4> g_materialGuide : register(u4);
+// These legacy-named resources store the complete primary-surface lobe
+// radiance (direct + indirect) used by the denoiser.
 RWTexture2D<float4> g_diffuseIndirectAccumulation : register(u5);
 RWTexture2D<float4> g_specularIndirectAccumulation : register(u6);
 RWTexture2D<float2> g_diffuseLuminanceMoments : register(u7);

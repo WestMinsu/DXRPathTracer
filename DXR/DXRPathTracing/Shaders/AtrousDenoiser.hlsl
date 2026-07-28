@@ -125,6 +125,9 @@ float3 ReconstructRadiance(float3 filteredSpecular, int2 pixel)
 {
     float3 totalRadiance =
         LoadAverageRadiance(g_totalAccumulation, pixel);
+    // The legacy-named accumulation textures contain complete primary-surface
+    // diffuse/specular radiance. Their residual is only camera-visible
+    // emission/environment and remains unfiltered.
     float3 originalDiffuse =
         LoadAverageRadiance(
             g_diffuseIndirectAccumulation,
@@ -133,13 +136,13 @@ float3 ReconstructRadiance(float3 filteredSpecular, int2 pixel)
         LoadAverageRadiance(
             g_specularIndirectAccumulation,
             pixel);
-    float3 unfilteredDirect =
+    float3 unfilteredResidual =
         max(
             totalRadiance - originalDiffuse - originalSpecular,
             0.0f);
     float3 filteredDiffuse =
         max(g_filteredDiffuse.Load(int3(pixel, 0)).rgb, 0.0f);
-    return unfilteredDirect +
+    return unfilteredResidual +
         filteredDiffuse +
         max(filteredSpecular, 0.0f);
 }

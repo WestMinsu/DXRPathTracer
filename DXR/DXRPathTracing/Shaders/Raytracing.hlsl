@@ -353,14 +353,13 @@ void TracePrimaryGuide(RayDesc ray)
 void TracePath(
     RayDesc ray,
     out float3 sampleRadiance,
-    out float3 primaryDiffuseIndirectRadiance,
-    out float3 primarySpecularIndirectRadiance,
+    out float3 primaryDiffuseDenoisingRadiance,
+    out float3 primarySpecularDenoisingRadiance,
     out uint dynamicTouched)
 {
     sampleRadiance = float3(0.0f, 0.0f, 0.0f);
-    float3 primaryDirectRadiance = float3(0.0f, 0.0f, 0.0f);
-    primaryDiffuseIndirectRadiance = float3(0.0f, 0.0f, 0.0f);
-    primarySpecularIndirectRadiance = float3(0.0f, 0.0f, 0.0f);
+    primaryDiffuseDenoisingRadiance = float3(0.0f, 0.0f, 0.0f);
+    primarySpecularDenoisingRadiance = float3(0.0f, 0.0f, 0.0f);
     dynamicTouched = 0u;
 
     float3 pathThroughput = float3(1.0f, 1.0f, 1.0f);
@@ -369,6 +368,7 @@ void TracePath(
     float3 firstDiffuseWeight = float3(0.0f, 0.0f, 0.0f);
     float3 firstSpecularWeight = float3(0.0f, 0.0f, 0.0f);
     bool hasFirstPbrSplit = false;
+    bool primarySurfaceHit = false;
     float previousBsdfPdf = 0.0f;
     uint previousWasDelta = 1u;
 
@@ -410,9 +410,7 @@ void TracePath(
             }
 
             sampleRadiance += pathThroughput * localRadiance;
-            if (depth == 0u)
-                primaryDirectRadiance = localRadiance;
-            else
+            if (depth > 0u)
                 tailRadiance += tailThroughput * localRadiance;
             break;
         }
@@ -466,12 +464,13 @@ void TracePath(
             }
             float3 localRadiance = payload.emission * emissionWeight;
             sampleRadiance += pathThroughput * localRadiance;
-            if (depth == 0u)
-                primaryDirectRadiance = localRadiance;
-            else
+            if (depth > 0u)
                 tailRadiance += tailThroughput * localRadiance;
             break;
         }
+
+        if (depth == 0u)
+            primarySurfaceHit = true;
 
         if (depth >= g_maxBounce)
             break;
@@ -483,7 +482,8 @@ void TracePath(
         material.roughness = payload.roughness;
         material.emission = payload.emission;
 
-        float3 localDirectLighting = float3(0.0f, 0.0f, 0.0f);
+        float3 localDirectDiffuseLighting = float3(0.0f, 0.0f, 0.0f);
+        float3 localDirectSpecularLighting = float3(0.0f, 0.0f, 0.0f);
         uint directSeed =
             CreateRandomSeed(depth, payload.primitiveIndex) ^ 0xA511E9B3u;
         float3 directLightDirection;
@@ -508,11 +508,19 @@ void TracePath(
                 float misWeight = g_lightingMode == c_lightingModeMis
                     ? PowerHeuristic(lightPdf, bsdfPdf)
                     : 1.0f;
-                localDirectLighting = EvaluateBrdf(
+                float3 diffuseBrdf;
+                float3 specularBrdf;
+                EvaluateBrdfComponents(
                     material,
                     payload.normal,
                     viewDirection,
-                    directLightDirection) * radianceOverPdf * misWeight;
+                    directLightDirection,
+                    diffuseBrdf,
+                    specularBrdf);
+                localDirectDiffuseLighting =
+                    diffuseBrdf * radianceOverPdf * misWeight;
+                localDirectSpecularLighting =
+                    specularBrdf * radianceOverPdf * misWeight;
             }
             else
             {
@@ -522,14 +530,21 @@ void TracePath(
                 float misWeight = g_lightingMode == c_lightingModeMis
                     ? PowerHeuristic(lightPdf, bsdfPdf)
                     : 1.0f;
-                localDirectLighting = payload.baseColor * c_invPi *
+                localDirectDiffuseLighting = payload.baseColor * c_invPi *
                     nDotL * radianceOverPdf * misWeight;
             }
         }
 
+        float3 localDirectLighting =
+            localDirectDiffuseLighting + localDirectSpecularLighting;
         sampleRadiance += pathThroughput * localDirectLighting;
         if (depth == 0u)
-            primaryDirectRadiance = localDirectLighting;
+        {
+            primaryDiffuseDenoisingRadiance +=
+                localDirectDiffuseLighting;
+            primarySpecularDenoisingRadiance +=
+                localDirectSpecularLighting;
+        }
         else
             tailRadiance += tailThroughput * localDirectLighting;
 
@@ -617,17 +632,18 @@ void TracePath(
     {
         if (hasFirstPbrSplit)
         {
-            primaryDiffuseIndirectRadiance =
+            primaryDiffuseDenoisingRadiance +=
                 firstDiffuseWeight * tailRadiance;
-            primarySpecularIndirectRadiance =
+            primarySpecularDenoisingRadiance +=
                 firstSpecularWeight * tailRadiance;
         }
     }
-    else
+    else if (primarySurfaceHit)
     {
-        primaryDiffuseIndirectRadiance = max(
-            sampleRadiance - primaryDirectRadiance,
-            0.0f);
+        // Lambert scenes have a single diffuse lobe. Keep visible emitters and
+        // the environment in the unfiltered residual, but filter all lighting
+        // received at a primary surface, including direct lighting.
+        primaryDiffuseDenoisingRadiance = max(sampleRadiance, 0.0f);
     }
 }
 
@@ -636,7 +652,6 @@ void RunRaygen()
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
     bool guidesEnabled =
-        g_enableAccumulation != 0u &&
         (g_enableAtrous != 0u ||
          g_enableTemporalReprojection != 0u);
     bool updatePrimaryGuides =
@@ -654,9 +669,9 @@ void RunRaygen()
             float4(0.0f, 0.0f, 0.0f, -1.0f);
     }
     float3 sampleRadiance = float3(0.0f, 0.0f, 0.0f);
-    float3 sampleDiffuseIndirectRadiance =
+    float3 sampleDiffuseDenoisingRadiance =
         float3(0.0f, 0.0f, 0.0f);
-    float3 sampleSpecularIndirectRadiance =
+    float3 sampleSpecularDenoisingRadiance =
         float3(0.0f, 0.0f, 0.0f);
     uint dynamicTouched = 0u;
     float3 primaryRayDirection = float3(0.0f, 0.0f, 0.0f);
@@ -672,7 +687,8 @@ void RunRaygen()
     else
     {
         float2 pixelOffset = float2(0.5f, 0.5f);
-        if (g_enableAccumulation != 0)
+        if (g_enableAccumulation != 0u ||
+            g_enableTemporalReprojection != 0u)
         {
             uint cameraSeed = CreateRandomSeed(0u, 0x9E3779B9u);
             pixelOffset = float2(RandomFloat01(cameraSeed), RandomFloat01(cameraSeed));
@@ -700,8 +716,8 @@ void RunRaygen()
         TracePath(
             ray,
             sampleRadiance,
-            sampleDiffuseIndirectRadiance,
-            sampleSpecularIndirectRadiance,
+            sampleDiffuseDenoisingRadiance,
+            sampleSpecularDenoisingRadiance,
             dynamicTouched);
 
         if (updatePrimaryGuides)
@@ -728,7 +744,9 @@ void RunRaygen()
         }
     }
 
-    if (g_enableAccumulation == 0)
+    if (g_enableAccumulation == 0u &&
+        g_enableTemporalReprojection == 0u &&
+        g_enableAtrous == 0u)
     {
         float3 displayColor = IsLinearDebugView()
             ? saturate(sampleRadiance)
@@ -738,15 +756,15 @@ void RunRaygen()
     }
 
     float3 accumulatedColor = sampleRadiance;
-    float3 accumulatedDiffuseIndirect =
-        sampleDiffuseIndirectRadiance;
-    float3 accumulatedSpecularIndirect =
-        sampleSpecularIndirectRadiance;
+    float3 accumulatedDiffuseRadiance =
+        sampleDiffuseDenoisingRadiance;
+    float3 accumulatedSpecularRadiance =
+        sampleSpecularDenoisingRadiance;
     float sampleDiffuseLuminance = dot(
-        sampleDiffuseIndirectRadiance,
+        sampleDiffuseDenoisingRadiance,
         float3(0.2126f, 0.7152f, 0.0722f));
     float sampleSpecularLuminance = dot(
-        sampleSpecularIndirectRadiance,
+        sampleSpecularDenoisingRadiance,
         float3(0.2126f, 0.7152f, 0.0722f));
     float2 accumulatedDiffuseMoments = float2(
         sampleDiffuseLuminance,
@@ -877,20 +895,28 @@ void RunRaygen()
             temporalHistoryAccepted =
                 g_enableTemporalReprojection != 0u;
             float retainedHistoryCount = history.sampleCount;
-            if (g_enableTemporalReprojection != 0u &&
-                TemporalSceneIsMoving())
+            if (g_enableTemporalReprojection != 0u)
             {
-                retainedHistoryCount = min(
-                    history.sampleCount,
-                    31.0f);
+                if (TemporalSceneIsMoving())
+                {
+                    retainedHistoryCount = min(
+                        history.sampleCount,
+                        31.0f);
+                }
+                else if (g_enableAccumulation == 0u)
+                {
+                    retainedHistoryCount = min(
+                        history.sampleCount,
+                        255.0f);
+                }
             }
             accumulatedColor +=
                 history.radianceAverage * retainedHistoryCount;
             if (g_enableAtrous != 0u)
             {
-                accumulatedDiffuseIndirect +=
+                accumulatedDiffuseRadiance +=
                     history.diffuseAverage * retainedHistoryCount;
-                accumulatedSpecularIndirect +=
+                accumulatedSpecularRadiance +=
                     history.specularAverage * retainedHistoryCount;
                 accumulatedDiffuseMoments +=
                     history.diffuseMomentAverage * retainedHistoryCount;
@@ -909,9 +935,9 @@ void RunRaygen()
     if (g_enableAtrous != 0u)
     {
         g_diffuseIndirectAccumulation[launchIndex] =
-            float4(accumulatedDiffuseIndirect, signedSampleCount);
+            float4(accumulatedDiffuseRadiance, signedSampleCount);
         g_specularIndirectAccumulation[launchIndex] =
-            float4(accumulatedSpecularIndirect, signedSampleCount);
+            float4(accumulatedSpecularRadiance, signedSampleCount);
         g_diffuseLuminanceMoments[launchIndex] =
             accumulatedDiffuseMoments;
         g_specularLuminanceMoments[launchIndex] =
@@ -919,8 +945,12 @@ void RunRaygen()
     }
     if (g_temporalDebugView == 1u)
     {
+        float historyDisplayRange =
+            g_enableAccumulation == 0u && !TemporalSceneIsMoving()
+            ? 255.0f
+            : 31.0f;
         float normalizedHistory = saturate(
-            (localSampleCount - 1.0f) / 31.0f);
+            (localSampleCount - 1.0f) / historyDisplayRange);
         g_output[launchIndex] = float4(
             normalizedHistory.xxx,
             1.0f);

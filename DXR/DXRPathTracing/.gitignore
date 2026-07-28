@@ -3,6 +3,12 @@ x64/
 *.user
 imgui.ini
 
+# Local RTXPT interactive launch helpers.
+RTXPT_INTERACTIVE.md
+Tools/Run-RtxptInteractive.ps1
+Tools/Run-RtxptCornell.cmd
+Tools/Run-RtxptPbr.cmd
+
 # Local capture/reference outputs
 Captures/
 BenchmarkOutput/

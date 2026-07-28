@@ -225,6 +225,7 @@ private:
     UINT m_hitGroupShaderRecordSize = 0;
     UINT m_frameIndex = 0;
     UINT m_accumulatedSampleCount = 0;
+    UINT m_temporalHistoryFrameCount = 0;
     UINT m_vertexCount = 0;
     UINT m_indexCount = 0;
     UINT64 m_buildFenceValue = 0;

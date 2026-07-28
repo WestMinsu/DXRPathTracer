@@ -553,7 +553,7 @@ def write_additions_gltf(
                 ],
             },
             {
-                "name": "sixteen_area_lights",
+                "name": "area_lights",
                 "primitives": [
                     {
                         "attributes": {
@@ -652,8 +652,8 @@ def main() -> None:
 
     light_document = json.loads(LIGHT_CONFIG.read_text(encoding="utf-8"))
     lights = light_document["lights"]
-    if len(lights) != 16:
-        raise RuntimeError("Sponza-lite requires exactly 16 area lights.")
+    if len(lights) != 12:
+        raise RuntimeError("Sponza-lite requires exactly 12 area lights.")
     sphere = write_additions_gltf(
         RTXPT / "validation_additions.gltf",
         lights,

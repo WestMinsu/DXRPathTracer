@@ -1569,7 +1569,9 @@ void D3D12Renderer::BuildImGuiFrame()
     }
     ImGui::SliderFloat("Exposure (EV)", &m_exposure, -8.0f, 8.0f, "%.2f");
     ImGui::Checkbox("Show normal color", &m_showNormalColor);
-    ImGui::Checkbox("Accumulate samples", &m_enableAccumulation);
+    ImGui::Checkbox(
+        "Progressive accumulation (reference)",
+        &m_enableAccumulation);
     ImGui::SliderInt("Max Bounce", &m_maxBounce, 1, 8);
     const char* lightingModeNames[] =
     {
@@ -1626,7 +1628,9 @@ void D3D12Renderer::BuildImGuiFrame()
             ImGui::TextDisabled("History: green = accepted, red = rejected, blue = unavailable.");
         }
         ImGui::TextDisabled(
-            "Motion history is capped at 32 frames; still views keep accumulating.");
+            "Temporal history: 256 still, 32 while moving.");
+        ImGui::TextDisabled(
+            "Static reference views keep accumulating when progressive mode is enabled.");
     }
 
     ImGui::Checkbox("A-Trous Filter", &m_enableAtrous);

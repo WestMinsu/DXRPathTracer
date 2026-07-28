@@ -665,13 +665,17 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     if (!UpdateTopLevelAccelerationStructure(commandList))
         return;
 
-    const bool shouldAccumulate =
-        m_enableAccumulation &&
+    const bool isBeautyFrame =
         !m_showNormalColor &&
         !(m_sceneType == c_scenePbrGgx &&
           m_pbrDebugView != c_pbrDebugBeauty);
+    const bool shouldAccumulate =
+        m_enableAccumulation &&
+        isBeautyFrame;
     const bool useTemporalHistory =
-        shouldAccumulate && m_enableTemporalReprojection;
+        isBeautyFrame && m_enableTemporalReprojection;
+    const bool useAtrousFilter =
+        isBeautyFrame && m_enableAtrous;
 
     WriteTemporalHistoryDescriptors();
     ID3D12Resource* previousHistoryResources[c_temporalHistorySrvCount] =
@@ -741,7 +745,9 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     renderSettings.showNormalColor = m_showNormalColor ? 1u : 0u;
     renderSettings.frameIndex = m_frameIndex++;
     renderSettings.maxBounce = m_maxBounce;
-    renderSettings.sampleIndex = shouldAccumulate ? m_accumulatedSampleCount : 0u;
+    renderSettings.sampleIndex = shouldAccumulate
+        ? m_accumulatedSampleCount
+        : (useTemporalHistory ? m_temporalHistoryFrameCount : 0u);
     renderSettings.enableAccumulation = shouldAccumulate ? 1u : 0u;
     renderSettings.sceneType = m_sceneType;
     renderSettings.pbrDebugView = m_pbrDebugView;
@@ -771,7 +777,7 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     renderSettings.environmentTexelCount = m_environmentTexelCount;
     renderSettings.areaLightPower = m_areaLightPower;
     renderSettings.environmentPower = m_environmentPower;
-    renderSettings.enableAtrous = m_enableAtrous ? 1u : 0u;
+    renderSettings.enableAtrous = useAtrousFilter ? 1u : 0u;
     std::copy(
         m_previousCameraPosition.begin(),
         m_previousCameraPosition.end(),
@@ -859,8 +865,7 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         commandList->ResourceBarrier(1, &statisticsToCopy);
     }
 
-    if (m_enableAtrous &&
-        shouldAccumulate &&
+    if (useAtrousFilter &&
         m_temporalDebugView == c_temporalDebugNone)
         DispatchAtrousFilter(commandList);
 
@@ -907,6 +912,10 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     if (shouldAccumulate)
     {
         ++m_accumulatedSampleCount;
+    }
+    if (useTemporalHistory)
+    {
+        ++m_temporalHistoryFrameCount;
     }
 }
 
@@ -1152,6 +1161,7 @@ void RayTracingManager::DispatchAtrousFilter(
 void RayTracingManager::ResetAccumulation()
 {
     m_accumulatedSampleCount = 0;
+    m_temporalHistoryFrameCount = 0;
     m_previousCameraPosition = m_cameraPosition;
     m_previousCameraTarget = m_cameraTarget;
 }
