@@ -92,6 +92,14 @@ struct EnvironmentAliasEntry
     uint padding;
 };
 
+// Three object-to-world rows, mirrored by std::array<float, 12> on the CPU.
+struct InstanceTransform
+{
+    float4 row0;
+    float4 row1;
+    float4 row2;
+};
+
 static const uint c_sceneCornellBox = 0;
 static const uint c_scenePbrGgx = 1;
 static const uint c_scenePbrGpuValidation = 2;
@@ -155,6 +163,8 @@ Texture2D<float4> g_previousDiffuseIndirect : register(t268);
 Texture2D<float4> g_previousSpecularIndirect : register(t269);
 Texture2D<float2> g_previousDiffuseMoments : register(t270);
 Texture2D<float2> g_previousSpecularMoments : register(t271);
+StructuredBuffer<InstanceTransform>
+    g_previousInstanceTransforms : register(t272);
 SamplerState g_environmentSampler : register(s0);
 SamplerState g_materialSampler : register(s1);
 
@@ -203,9 +213,9 @@ cbuffer RenderSettings : register(b0)
     float g_environmentPower;
     uint g_enableAtrous;
     uint g_samplesPerPixel;
-    float g_previousDynamicPositionX;
+    uint g_previousInstanceTransformCount;
     float3 g_previousCameraPosition;
-    float g_previousDynamicRollRadians;
+    uint g_temporalTransformPadding;
     float3 g_previousCameraTarget;
     uint g_enableTemporalReprojection;
     uint g_temporalDebugView;

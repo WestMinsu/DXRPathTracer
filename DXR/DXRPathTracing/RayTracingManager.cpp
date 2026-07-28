@@ -81,9 +81,13 @@ namespace
         c_temporalPreviousSpecularSrvIndex + 1;
     constexpr UINT c_temporalPreviousSpecularMomentsSrvIndex =
         c_temporalPreviousDiffuseMomentsSrvIndex + 1;
-    constexpr UINT c_temporalHistorySrvCount = 7;
-    constexpr UINT c_descriptorCount =
+    constexpr UINT c_previousInstanceTransformsSrvIndex =
         c_temporalPreviousSpecularMomentsSrvIndex + 1;
+    constexpr UINT c_temporalHistorySrvCount = 7;
+    constexpr UINT c_temporalDescriptorSrvCount =
+        c_temporalHistorySrvCount + 1;
+    constexpr UINT c_descriptorCount =
+        c_previousInstanceTransformsSrvIndex + 1;
     constexpr UINT c_atrousFilterChannelDiffuse = 0;
     constexpr UINT c_atrousFilterChannelSpecular = 1;
     constexpr UINT c_statisticsShadowRayIndex =
@@ -137,9 +141,9 @@ namespace
         float environmentPower;
         UINT enableAtrous;
         UINT samplesPerPixel;
-        float previousDynamicPositionX;
+        UINT previousInstanceTransformCount;
         float previousCameraPosition[3];
-        float previousDynamicRollRadians;
+        UINT temporalTransformPadding;
         float previousCameraTarget[3];
         UINT enableTemporalReprojection;
         UINT temporalDebugView;
@@ -781,8 +785,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     renderSettings.environmentPower = m_environmentPower;
     renderSettings.enableAtrous = useAtrousFilter ? 1u : 0u;
     renderSettings.samplesPerPixel = m_samplesPerPixel;
-    renderSettings.previousDynamicPositionX =
-        m_previousDynamicSpherePositionX;
+    renderSettings.previousInstanceTransformCount =
+        static_cast<UINT>(m_previousInstanceTransforms.size());
     std::copy(
         m_previousCameraPosition.begin(),
         m_previousCameraPosition.end(),
@@ -791,8 +795,7 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         m_previousCameraTarget.begin(),
         m_previousCameraTarget.end(),
         renderSettings.previousCameraTarget);
-    renderSettings.previousDynamicRollRadians =
-        m_previousDynamicSphereRollRadians;
+    renderSettings.temporalTransformPadding = 0u;
     renderSettings.enableTemporalReprojection =
         useTemporalHistory ? 1u : 0u;
     renderSettings.temporalDebugView = m_temporalDebugView;
@@ -1955,6 +1958,25 @@ void RayTracingManager::WriteTemporalHistoryDescriptors()
     m_device->CreateShaderResourceView(
         m_previousSpecularLuminanceMomentsTexture.Get(), &momentsSrvDesc,
         descriptorHandle(c_temporalPreviousSpecularMomentsSrvIndex));
+
+    const UINT transformFrame =
+        static_cast<UINT>(m_frameIndex % c_tlasFrameCount);
+    D3D12_SHADER_RESOURCE_VIEW_DESC transformSrvDesc = {};
+    transformSrvDesc.Shader4ComponentMapping =
+        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    transformSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
+    transformSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    transformSrvDesc.Buffer.FirstElement = 0;
+    transformSrvDesc.Buffer.NumElements = (std::max)(
+        1u,
+        static_cast<UINT>(m_previousInstanceTransforms.size()));
+    transformSrvDesc.Buffer.StructureByteStride =
+        sizeof(std::array<float, 12>);
+    transformSrvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+    m_device->CreateShaderResourceView(
+        m_previousInstanceTransformBuffers[transformFrame].Get(),
+        &transformSrvDesc,
+        descriptorHandle(c_previousInstanceTransformsSrvIndex));
 }
 
 bool RayTracingManager::CreateStatisticsResources()
@@ -2301,7 +2323,7 @@ bool RayTracingManager::CreateGlobalRootSignature()
 
     D3D12_DESCRIPTOR_RANGE temporalHistoryRange = {};
     temporalHistoryRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    temporalHistoryRange.NumDescriptors = c_temporalHistorySrvCount;
+    temporalHistoryRange.NumDescriptors = c_temporalDescriptorSrvCount;
     temporalHistoryRange.BaseShaderRegister = 265;
     temporalHistoryRange.RegisterSpace = 0;
     temporalHistoryRange.OffsetInDescriptorsFromTableStart =
@@ -3032,9 +3054,6 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             m_dynamicSphereTrackCenterX -
             m_dynamicSphereMotionAmplitude;
         m_dynamicSphereRollRadians = 0.0f;
-        m_previousDynamicSpherePositionX = m_dynamicSpherePositionX;
-        m_previousDynamicSphereRollRadians = m_dynamicSphereRollRadians;
-
         SceneData sphere =
             CreateRollingMetalSphereSceneData(m_dynamicSphereRadius);
         if (!sphere.IsValid())
@@ -3671,6 +3690,18 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
             m_dynamicSphereBottomLevelAS->GetGPUVirtualAddress();
     }
 
+    m_currentInstanceTransforms.resize(instanceCount);
+    for (UINT instanceIndex = 0;
+         instanceIndex < instanceCount;
+         ++instanceIndex)
+    {
+        std::memcpy(
+            m_currentInstanceTransforms[instanceIndex].data(),
+            instanceDescs[instanceIndex].Transform,
+            sizeof(instanceDescs[instanceIndex].Transform));
+    }
+    m_previousInstanceTransforms = m_currentInstanceTransforms;
+
     for (UINT frameIndex = 0;
          frameIndex < c_tlasFrameCount;
          ++frameIndex)
@@ -3680,6 +3711,14 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
             sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * instanceCount,
             L"TLAS instance descriptor",
             m_instanceDescBuffers[frameIndex]))
+        {
+            return false;
+        }
+        if (!CreateUploadBuffer(
+            m_previousInstanceTransforms.data(),
+            sizeof(std::array<float, 12>) * instanceCount,
+            L"Previous instance transforms",
+            m_previousInstanceTransformBuffers[frameIndex]))
         {
             return false;
         }
@@ -3784,7 +3823,50 @@ bool RayTracingManager::WriteInstanceDescriptors(
     sphereDesc.AccelerationStructure =
         m_dynamicSphereBottomLevelAS->GetGPUVirtualAddress();
 
+    m_currentInstanceTransforms.resize(instanceCount);
+    for (UINT instanceIndex = 0;
+         instanceIndex < instanceCount;
+         ++instanceIndex)
+    {
+        std::memcpy(
+            m_currentInstanceTransforms[instanceIndex].data(),
+            instanceDescs[instanceIndex].Transform,
+            sizeof(instanceDescs[instanceIndex].Transform));
+    }
+
     m_instanceDescBuffers[frameIndex]->Unmap(0, nullptr);
+    return true;
+}
+
+bool RayTracingManager::WritePreviousInstanceTransforms(UINT frameIndex)
+{
+    if (frameIndex >= c_tlasFrameCount ||
+        !m_previousInstanceTransformBuffers[frameIndex] ||
+        m_previousInstanceTransforms.empty())
+    {
+        return false;
+    }
+
+    void* mappedData = nullptr;
+    const D3D12_RANGE readRange = { 0, 0 };
+    HRESULT hr = m_previousInstanceTransformBuffers[frameIndex]->Map(
+        0,
+        &readRange,
+        &mappedData);
+    if (ReportFailure(hr, L"Previous instance transform mapping failed."))
+        return false;
+
+    const SIZE_T transformBytes =
+        sizeof(std::array<float, 12>) *
+        m_previousInstanceTransforms.size();
+    std::memcpy(
+        mappedData,
+        m_previousInstanceTransforms.data(),
+        transformBytes);
+    const D3D12_RANGE writtenRange = { 0, transformBytes };
+    m_previousInstanceTransformBuffers[frameIndex]->Unmap(
+        0,
+        &writtenRange);
     return true;
 }
 
@@ -3873,8 +3955,13 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
         m_dynamicObjectLinearSpeed = 0.0;
         m_dynamicObjectAngularSpeed = 0.0;
     }
-    m_previousDynamicSpherePositionX = previousPosition;
-    m_previousDynamicSphereRollRadians = previousRoll;
+    m_previousInstanceTransforms = m_currentInstanceTransforms;
+
+    const UINT descriptorFrame =
+        static_cast<UINT>(m_frameIndex % c_tlasFrameCount);
+    if (!WritePreviousInstanceTransforms(descriptorFrame))
+        return false;
+
     const bool transformChanged =
         std::abs(previousPosition - m_dynamicSpherePositionX) > 1.0e-7f ||
         std::abs(previousRoll - m_dynamicSphereRollRadians) > 1.0e-7f;
@@ -3883,8 +3970,6 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
         return true;
     }
 
-    const UINT descriptorFrame =
-        static_cast<UINT>(m_frameIndex % c_tlasFrameCount);
     if (!WriteInstanceDescriptors(
         descriptorFrame,
         m_dynamicSpherePositionX,

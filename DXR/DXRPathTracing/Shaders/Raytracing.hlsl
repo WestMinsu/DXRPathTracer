@@ -1122,22 +1122,20 @@ void MyClosestHitShader_SurfaceQuery(
     {
         float3 previousWorldPosition =
             WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-        if (payload.dynamicInstance != 0u)
+        uint instanceIndex = InstanceID();
+        if (instanceIndex < g_previousInstanceTransformCount)
         {
-            // The current demo has one rigid dynamic sphere. Its center Y/Z
-            // stay fixed while X translation and Z-axis rolling change.
             float3 objectPosition =
                 ObjectRayOrigin() + ObjectRayDirection() * RayTCurrent();
-            float previousCosine = cos(g_previousDynamicRollRadians);
-            float previousSine = sin(g_previousDynamicRollRadians);
+            InstanceTransform previousTransform =
+                g_previousInstanceTransforms[instanceIndex];
             previousWorldPosition = float3(
-                previousCosine * objectPosition.x -
-                    previousSine * objectPosition.y +
-                    g_previousDynamicPositionX,
-                previousSine * objectPosition.x +
-                    previousCosine * objectPosition.y +
-                    objectToWorldTransform[1][3],
-                objectPosition.z + objectToWorldTransform[2][3]);
+                dot(previousTransform.row0.xyz, objectPosition) +
+                    previousTransform.row0.w,
+                dot(previousTransform.row1.xyz, objectPosition) +
+                    previousTransform.row1.w,
+                dot(previousTransform.row2.xyz, objectPosition) +
+                    previousTransform.row2.w);
         }
         payload.emission = previousWorldPosition;
     }

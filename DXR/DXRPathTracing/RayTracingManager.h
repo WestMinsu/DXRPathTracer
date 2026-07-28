@@ -194,6 +194,7 @@ private:
         UINT frameIndex,
         float spherePositionX,
         float sphereRollRadians);
+    bool WritePreviousInstanceTransforms(UINT frameIndex);
     void UpdateDynamicSphereMotion();
     bool ExecuteBuildCommandListAndWait();
     bool CreateUploadBuffer(const void* data,
@@ -272,8 +273,6 @@ private:
     float m_dynamicSphereMotionAmplitude = 0.0f;
     float m_dynamicSpherePositionX = 0.0f;
     float m_dynamicSphereRollRadians = 0.0f;
-    float m_previousDynamicSpherePositionX = 0.0f;
-    float m_previousDynamicSphereRollRadians = 0.0f;
     double m_dynamicObjectLinearSpeed = 0.0;
     double m_dynamicObjectAngularSpeed = 0.0;
     bool m_dynamicObjectMovedThisFrame = false;
@@ -354,6 +353,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_topLevelAS;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,
         c_tlasFrameCount> m_instanceDescBuffers;
+    std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,
+        c_tlasFrameCount> m_previousInstanceTransformBuffers;
+    std::vector<std::array<float, 12>> m_currentInstanceTransforms;
+    std::vector<std::array<float, 12>> m_previousInstanceTransforms;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_blasScratchBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_dynamicSphereBlasScratchBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_tlasScratchBuffer;
