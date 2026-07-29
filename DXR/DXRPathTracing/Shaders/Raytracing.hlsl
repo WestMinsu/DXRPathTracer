@@ -282,9 +282,11 @@ bool GatherValidatedHistory(
     history.specularAverage *= inverseValidWeight;
     history.diffuseMomentAverage *= inverseValidWeight;
     history.specularMomentAverage *= inverseValidWeight;
-    history.sampleCount = max(
-        weightedSampleCount * inverseValidWeight,
-        1.0f);
+    // Keep the radiance unbiased by renormalizing the surviving taps, but do
+    // not promote a small surviving bilinear footprint back to full temporal
+    // confidence. At a disocclusion edge, one weak valid tap must contribute
+    // proportionally less history instead of inheriting its entire count.
+    history.sampleCount = max(weightedSampleCount, 1.0f);
     return true;
 }
 
