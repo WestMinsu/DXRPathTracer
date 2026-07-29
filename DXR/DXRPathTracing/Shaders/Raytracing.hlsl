@@ -43,6 +43,18 @@ bool TemporalCameraIsMoving()
         length(g_cameraTarget - g_previousCameraTarget) > 1.0e-5f;
 }
 
+static const uint c_historyAccepted = 0u;
+static const uint c_historyRejectedProjection = 1u;
+static const uint c_historyRejectedOutsideScreen = 2u;
+static const uint c_historyRejectedHitMiss = 3u;
+static const uint c_historyRejectedInstance = 4u;
+static const uint c_historyRejectedHitDistance = 5u;
+static const uint c_historyRejectedNormal = 6u;
+static const uint c_historyRejectedMaterial = 7u;
+static const uint c_historyRejectedNoSamples = 8u;
+static const uint c_historyRejectedCoverage = 9u;
+static const uint c_historyNotAttempted = 10u;
+
 struct TemporalHistorySample
 {
     float3 radianceAverage;
@@ -69,10 +81,12 @@ bool ProjectToPreviousFrame(
     bool currentHit,
     uint2 resolution,
     out float2 historyPosition,
-    out float expectedPreviousDepth)
+    out float expectedPreviousDepth,
+    out uint rejectionReason)
 {
     historyPosition = float2(0.0f, 0.0f);
     expectedPreviousDepth = -1.0f;
+    rejectionReason = c_historyRejectedProjection;
     float3 previousForwardVector =
         g_previousCameraTarget - g_previousCameraPosition;
     float forwardLength = length(previousForwardVector);
@@ -107,15 +121,54 @@ bool ProjectToPreviousFrame(
     float2 previousUv = float2(
         screenPosition.x * 0.5f + 0.5f,
         0.5f - screenPosition.y * 0.5f);
-    if (any(previousUv < 0.0f) || any(previousUv >= 1.0f))
-        return false;
-
-    // Texture texel centers are at integer + 0.5 in UV-scaled coordinates.
+    // Keep the projected position available for the motion-vector debug view
+    // even when the previous location lies outside the image.
     historyPosition = previousUv * float2(resolution) - 0.5f;
+    if (any(previousUv < 0.0f) || any(previousUv >= 1.0f))
+    {
+        rejectionReason = c_historyRejectedOutsideScreen;
+        return false;
+    }
+
+    rejectionReason = c_historyAccepted;
     return true;
 }
 
-bool IsValidHistoryTap(
+bool PreviousCameraRayDirection(
+    int2 pixel,
+    uint2 resolution,
+    out float3 rayDirection)
+{
+    rayDirection = float3(0.0f, 0.0f, 0.0f);
+    float3 previousForwardVector =
+        g_previousCameraTarget - g_previousCameraPosition;
+    float forwardLength = length(previousForwardVector);
+    if (forwardLength <= 1.0e-5f)
+        return false;
+
+    float3 previousForward = previousForwardVector / forwardLength;
+    float3 previousRightVector = cross(c_cameraUp, previousForward);
+    float rightLength = length(previousRightVector);
+    if (rightLength <= 1.0e-5f)
+        return false;
+    float3 previousRight = previousRightVector / rightLength;
+    float3 previousUp = cross(previousForward, previousRight);
+
+    float2 uv =
+        (float2(pixel) + 0.5f) / float2(resolution);
+    float aspectRatio = float(resolution.x) / float(resolution.y);
+    float tanHalfFov = tan(c_verticalFovRadians * 0.5f);
+    float2 screenPosition = float2(
+        (uv.x * 2.0f - 1.0f) * aspectRatio * tanHalfFov,
+        (1.0f - uv.y * 2.0f) * tanHalfFov);
+    rayDirection = normalize(
+        previousForward +
+        previousRight * screenPosition.x +
+        previousUp * screenPosition.y);
+    return true;
+}
+
+uint ValidateHistoryTap(
     int2 historyPixel,
     bool currentHit,
     float expectedPreviousDepth,
@@ -126,7 +179,7 @@ bool IsValidHistoryTap(
     if (any(historyPixel < int2(0, 0)) ||
         any(historyPixel >= int2(resolution)))
     {
-        return false;
+        return c_historyRejectedOutsideScreen;
     }
 
     float4 previousNormalDepth =
@@ -136,28 +189,9 @@ bool IsValidHistoryTap(
     bool previousHit =
         previousNormalDepth.w >= 0.0f && previousMaterial.a >= 0.0f;
     if (currentHit != previousHit)
-        return false;
+        return c_historyRejectedHitMiss;
     if (!currentHit)
-        return true;
-
-    float depthTolerance = max(0.02f, expectedPreviousDepth * 0.02f);
-    if (abs(previousNormalDepth.w - expectedPreviousDepth) > depthTolerance)
-        return false;
-
-    float normalAgreement = dot(
-        normalize(currentNormal),
-        normalize(previousNormalDepth.xyz));
-    if (normalAgreement < 0.90f)
-        return false;
-
-    if (length(currentMaterial.rgb - previousMaterial.rgb) > 0.15f)
-        return false;
-    if (abs(
-        UnpackGuideRoughness(currentMaterial.a) -
-        UnpackGuideRoughness(previousMaterial.a)) > 0.15f)
-    {
-        return false;
-    }
+        return c_historyAccepted;
 
     uint currentDynamicInstance =
         GetDynamicGuideInstance(currentMaterial);
@@ -169,13 +203,32 @@ bool IsValidHistoryTap(
         !DynamicObjectReprojectionEnabled())
     {
         if (currentDynamic || previousDynamic)
-            return false;
+            return c_historyRejectedInstance;
     }
     else if (currentDynamicInstance != previousDynamicInstance)
     {
-        return false;
+        return c_historyRejectedInstance;
     }
-    return true;
+
+    float depthTolerance = max(0.02f, expectedPreviousDepth * 0.02f);
+    if (abs(previousNormalDepth.w - expectedPreviousDepth) > depthTolerance)
+        return c_historyRejectedHitDistance;
+
+    float normalAgreement = dot(
+        normalize(currentNormal),
+        normalize(previousNormalDepth.xyz));
+    if (normalAgreement < 0.90f)
+        return c_historyRejectedNormal;
+
+    if (length(currentMaterial.rgb - previousMaterial.rgb) > 0.15f)
+        return c_historyRejectedMaterial;
+    if (abs(
+        UnpackGuideRoughness(currentMaterial.a) -
+        UnpackGuideRoughness(previousMaterial.a)) > 0.15f)
+    {
+        return c_historyRejectedMaterial;
+    }
+    return c_historyAccepted;
 }
 
 bool GatherValidatedHistory(
@@ -183,24 +236,37 @@ bool GatherValidatedHistory(
     float3 currentRayDirection,
     float4 currentNormalHitDistance,
     float4 currentMaterial,
+    uint2 currentPixel,
     uint2 resolution,
-    out TemporalHistorySample history)
+    out TemporalHistorySample history,
+    out float2 motionVectorPixels,
+    out uint rejectionReason,
+    out float relativeSurfaceError)
 {
     ResetTemporalHistorySample(history);
+    motionVectorPixels = float2(0.0f, 0.0f);
+    rejectionReason = c_historyRejectedProjection;
+    relativeSurfaceError = -1.0f;
     bool currentHit =
         currentNormalHitDistance.w >= 0.0f && currentMaterial.a >= 0.0f;
     float2 historyPosition;
     float expectedPreviousDepth;
+    uint projectionReason;
     if (!ProjectToPreviousFrame(
         worldPosition,
         currentRayDirection,
         currentHit,
         resolution,
         historyPosition,
-        expectedPreviousDepth))
+        expectedPreviousDepth,
+        projectionReason))
     {
+        motionVectorPixels =
+            historyPosition - float2(currentPixel);
+        rejectionReason = projectionReason;
         return false;
     }
+    motionVectorPixels = historyPosition - float2(currentPixel);
 
     int2 basePixel = int2(floor(historyPosition));
     float2 fraction = frac(historyPosition);
@@ -221,6 +287,9 @@ bool GatherValidatedHistory(
 
     float validWeight = 0.0f;
     float weightedSampleCount = 0.0f;
+    float surfaceErrorSum = 0.0f;
+    float surfaceErrorWeight = 0.0f;
+    rejectionReason = c_historyRejectedOutsideScreen;
     [unroll]
     for (uint tapIndex = 0u; tapIndex < 4u; ++tapIndex)
     {
@@ -229,21 +298,60 @@ bool GatherValidatedHistory(
             continue;
 
         int2 historyPixel = basePixel + tapOffsets[tapIndex];
-        if (!IsValidHistoryTap(
+        uint tapRejectionReason = ValidateHistoryTap(
             historyPixel,
             currentHit,
             expectedPreviousDepth,
             currentNormalHitDistance.xyz,
             currentMaterial,
-            resolution))
+            resolution);
+
+        if (g_temporalDebugView == 5u &&
+            currentHit &&
+            all(historyPixel >= int2(0, 0)) &&
+            all(historyPixel < int2(resolution)))
         {
+            float4 previousNormalDepth =
+                g_previousNormalDepth.Load(int3(historyPixel, 0));
+            float4 previousMaterial =
+                g_previousMaterialGuide.Load(int3(historyPixel, 0));
+            if (previousNormalDepth.w >= 0.0f &&
+                previousMaterial.a >= 0.0f)
+            {
+                float3 previousRayDirection;
+                if (PreviousCameraRayDirection(
+                    historyPixel,
+                    resolution,
+                    previousRayDirection))
+                {
+                    float3 reconstructedPreviousWorldPosition =
+                        g_previousCameraPosition +
+                        previousRayDirection * previousNormalDepth.w;
+                    surfaceErrorSum += tapWeight * length(
+                        reconstructedPreviousWorldPosition -
+                        worldPosition);
+                    surfaceErrorWeight += tapWeight;
+                }
+            }
+        }
+
+        if (tapRejectionReason != c_historyAccepted)
+        {
+            if (rejectionReason == c_historyRejectedOutsideScreen ||
+                tapRejectionReason != c_historyRejectedOutsideScreen)
+            {
+                rejectionReason = tapRejectionReason;
+            }
             continue;
         }
 
         float4 previousAccumulation =
             g_previousAccumulation.Load(int3(historyPixel, 0));
         if (previousAccumulation.a <= 0.0f)
+        {
+            rejectionReason = c_historyRejectedNoSamples;
             continue;
+        }
 
         float tapSampleCount = max(previousAccumulation.a, 1.0f);
         history.radianceAverage += tapWeight *
@@ -272,9 +380,20 @@ bool GatherValidatedHistory(
         validWeight += tapWeight;
     }
 
+    if (surfaceErrorWeight > 1.0e-6f)
+    {
+        relativeSurfaceError =
+            (surfaceErrorSum / surfaceErrorWeight) /
+            max(expectedPreviousDepth, 1.0e-3f);
+    }
+
     // Avoid stretching a tiny surviving bilinear tap across a disocclusion.
     if (validWeight < 0.10f)
+    {
+        if (validWeight > 0.0f)
+            rejectionReason = c_historyRejectedCoverage;
         return false;
+    }
 
     float inverseValidWeight = 1.0f / validWeight;
     history.radianceAverage *= inverseValidWeight;
@@ -287,7 +406,58 @@ bool GatherValidatedHistory(
     // confidence. At a disocclusion edge, one weak valid tap must contribute
     // proportionally less history instead of inheriting its entire count.
     history.sampleCount = max(weightedSampleCount, 1.0f);
+    rejectionReason = c_historyAccepted;
     return true;
+}
+
+float3 HistoryRejectionColor(uint rejectionReason)
+{
+    switch (rejectionReason)
+    {
+    case c_historyAccepted:
+        return float3(0.0f, 1.0f, 0.0f);
+    case c_historyRejectedProjection:
+        return float3(1.0f, 0.0f, 1.0f);
+    case c_historyRejectedOutsideScreen:
+        return float3(0.0f, 0.25f, 1.0f);
+    case c_historyRejectedHitMiss:
+        return float3(1.0f, 0.0f, 0.0f);
+    case c_historyRejectedInstance:
+        return float3(1.0f, 0.45f, 0.0f);
+    case c_historyRejectedHitDistance:
+        return float3(1.0f, 1.0f, 0.0f);
+    case c_historyRejectedNormal:
+        return float3(0.0f, 1.0f, 1.0f);
+    case c_historyRejectedMaterial:
+        return float3(0.55f, 0.0f, 1.0f);
+    case c_historyRejectedNoSamples:
+        return float3(0.45f, 0.45f, 0.45f);
+    case c_historyRejectedCoverage:
+        return float3(1.0f, 1.0f, 1.0f);
+    default:
+        return float3(0.0f, 0.0f, 0.25f);
+    }
+}
+
+float3 ReprojectionSurfaceErrorColor(float relativeError)
+{
+    if (relativeError < 0.0f)
+        return float3(0.0f, 0.0f, 0.0f);
+
+    // Green = 0%, yellow = 2.5%, red = 5% or larger relative
+    // world-space reconstruction error.
+    float normalizedError = saturate(relativeError / 0.05f);
+    if (normalizedError < 0.5f)
+    {
+        return lerp(
+            float3(0.0f, 1.0f, 0.0f),
+            float3(1.0f, 1.0f, 0.0f),
+            normalizedError * 2.0f);
+    }
+    return lerp(
+        float3(1.0f, 1.0f, 0.0f),
+        float3(1.0f, 0.0f, 0.0f),
+        (normalizedError - 0.5f) * 2.0f);
 }
 
 bool IsLinearDebugView()
@@ -715,6 +885,9 @@ void RunRaygen()
     float3 primaryRayDirection = float3(0.0f, 0.0f, 0.0f);
     bool temporalHistoryAttempted = false;
     bool temporalHistoryAccepted = false;
+    float2 temporalMotionVectorPixels = float2(0.0f, 0.0f);
+    uint temporalRejectionReason = c_historyNotAttempted;
+    float temporalRelativeSurfaceError = -1.0f;
     uint samplesPerPixel = clamp(g_samplesPerPixel, 1u, 8u);
 
     if (g_sceneType == c_scenePbrGpuValidation)
@@ -787,10 +960,11 @@ void RunRaygen()
         sampleSpecularDenoisingRadiance *= inverseSamplesPerPixel;
 
         if (g_enableTemporalReprojection != 0u &&
-            g_enableAtrous != 0u)
+            (g_enableAtrous != 0u ||
+             g_temporalDebugView == 6u))
         {
             // Preserve the unaccumulated current-frame observations. A later
-            // compute pass uses their 3x3 neighborhood to constrain only the
+            // compute pass uses their 5x5 neighborhood to constrain only the
             // reprojected history before A-Trous consumes these scratch maps.
             g_currentTotalRadiance[launchIndex] =
                 float4(max(sampleRadiance, 0.0f), 1.0f);
@@ -893,8 +1067,12 @@ void RunRaygen()
                     primaryRayDirection,
                     currentNormalHitDistance,
                     currentMaterial,
+                    launchIndex,
                     launchDim,
-                    history);
+                    history,
+                    temporalMotionVectorPixels,
+                    temporalRejectionReason,
+                    temporalRelativeSurfaceError);
             }
             else if (g_dynamicObjectMoved != 0u)
             {
@@ -904,6 +1082,9 @@ void RunRaygen()
                 historyValid =
                     !IsDynamicGuide(currentMaterial) &&
                     !IsDynamicGuide(previousMaterial);
+                temporalRejectionReason = historyValid
+                    ? c_historyAccepted
+                    : c_historyRejectedInstance;
             }
             else
             {
@@ -912,6 +1093,7 @@ void RunRaygen()
                 // the same screen pixel is still valid. Reuse its history
                 // directly instead of applying unstable geometric tests.
                 historyValid = true;
+                temporalRejectionReason = c_historyAccepted;
             }
         }
 
@@ -1045,6 +1227,47 @@ void RunRaygen()
                 : float3(1.0f, 0.0f, 0.0f))
             : float3(0.0f, 0.0f, 1.0f);
         g_output[launchIndex] = float4(debugColor, 1.0f);
+        return;
+    }
+    if (g_temporalDebugView == 3u)
+    {
+        // Current-to-previous motion in pixels. Zero motion is neutral gray;
+        // the red/green channels encode signed X/Y and blue grows with
+        // magnitude. Values saturate at 32 pixels.
+        float2 normalizedMotion = clamp(
+            temporalMotionVectorPixels / 32.0f,
+            -1.0f,
+            1.0f);
+        float motionMagnitude = saturate(
+            length(temporalMotionVectorPixels) / 32.0f);
+        float3 debugColor = float3(
+            0.5f + 0.5f * normalizedMotion.x,
+            0.5f + 0.5f * normalizedMotion.y,
+            0.5f + 0.5f * motionMagnitude);
+        g_output[launchIndex] = float4(debugColor, 1.0f);
+        return;
+    }
+    if (g_temporalDebugView == 4u)
+    {
+        g_output[launchIndex] = float4(
+            HistoryRejectionColor(temporalRejectionReason),
+            1.0f);
+        return;
+    }
+    if (g_temporalDebugView == 5u)
+    {
+        g_output[launchIndex] = float4(
+            ReprojectionSurfaceErrorColor(
+                temporalRelativeSurfaceError),
+            1.0f);
+        return;
+    }
+    if (g_temporalDebugView == 6u)
+    {
+        // The temporal compute pass replaces this placeholder with the
+        // edge-aware current-vs-history radiance diagnostic.
+        g_output[launchIndex] =
+            float4(0.0f, 0.0f, 0.0f, 1.0f);
         return;
     }
 

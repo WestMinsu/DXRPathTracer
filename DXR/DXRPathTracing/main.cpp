@@ -218,6 +218,33 @@ namespace
                     gOptions.temporalDebugView =
                         RayTracingManager::c_temporalDebugRejectionMask;
                 }
+                else if (debugView == L"motion" ||
+                         debugView == L"motion-vector")
+                {
+                    gOptions.temporalDebugView =
+                        RayTracingManager::c_temporalDebugMotionVector;
+                }
+                else if (debugView == L"reason" ||
+                         debugView == L"rejection-reason")
+                {
+                    gOptions.temporalDebugView =
+                        RayTracingManager::c_temporalDebugRejectionReason;
+                }
+                else if (debugView == L"error" ||
+                         debugView == L"surface-error" ||
+                         debugView == L"reprojection-error")
+                {
+                    gOptions.temporalDebugView =
+                        RayTracingManager::c_temporalDebugSurfaceError;
+                }
+                else if (debugView == L"radiance" ||
+                         debugView == L"radiance-difference" ||
+                         debugView == L"history-difference")
+                {
+                    gOptions.temporalDebugView =
+                        RayTracingManager::
+                        c_temporalDebugRadianceHistoryDifference;
+                }
                 else
                 {
                     gOptions.temporalDebugView =

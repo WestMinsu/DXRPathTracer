@@ -58,6 +58,10 @@ public:
     static constexpr UINT c_temporalDebugNone = 0;
     static constexpr UINT c_temporalDebugHistoryLength = 1;
     static constexpr UINT c_temporalDebugRejectionMask = 2;
+    static constexpr UINT c_temporalDebugMotionVector = 3;
+    static constexpr UINT c_temporalDebugRejectionReason = 4;
+    static constexpr UINT c_temporalDebugSurfaceError = 5;
+    static constexpr UINT c_temporalDebugRadianceHistoryDifference = 6;
 
     bool Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height);
     bool Resize(UINT width, UINT height);

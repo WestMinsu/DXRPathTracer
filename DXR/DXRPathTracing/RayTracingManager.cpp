@@ -174,10 +174,11 @@ namespace
         UINT resolution[2];
         float clipGamma;
         UINT minNeighborhoodSamples;
+        UINT debugView;
     };
     static_assert(
         sizeof(TemporalColorClipSettingsConstants) ==
-        4 * sizeof(std::uint32_t));
+        5 * sizeof(std::uint32_t));
 
     struct GpuEmissiveTriangle
     {
@@ -893,12 +894,18 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         commandList->ResourceBarrier(1, &statisticsToCopy);
     }
 
-    if (useTemporalHistory &&
+    const bool showRadianceHistoryDifference =
+        m_temporalDebugView ==
+        c_temporalDebugRadianceHistoryDifference;
+    const bool applyDynamicObjectColorClip =
         useAtrousFilter &&
         m_enableTemporalColorClip &&
-        m_temporalHistoryFrameCount > 0u &&
         m_temporalDebugView == c_temporalDebugNone &&
-        m_dynamicObjectMovedThisFrame)
+        m_dynamicObjectMovedThisFrame;
+    if (useTemporalHistory &&
+        m_temporalHistoryFrameCount > 0u &&
+        (applyDynamicObjectColorClip ||
+         showRadianceHistoryDifference))
     {
         DispatchTemporalColorClip(commandList);
     }
@@ -968,6 +975,7 @@ void RayTracingManager::DispatchTemporalColorClip(
         !m_specularIndirectAccumulationTexture ||
         !m_diffuseLuminanceMomentsTexture ||
         !m_specularLuminanceMomentsTexture ||
+        !m_outputTexture ||
         !m_normalDepthTexture ||
         !m_materialGuideTexture ||
         !m_atrousFilterTextureA ||
@@ -977,13 +985,14 @@ void RayTracingManager::DispatchTemporalColorClip(
         return;
     }
 
-    ID3D12Resource* uavResources[5] =
+    ID3D12Resource* uavResources[6] =
     {
         m_accumulationTexture.Get(),
         m_diffuseIndirectAccumulationTexture.Get(),
         m_specularIndirectAccumulationTexture.Get(),
         m_diffuseLuminanceMomentsTexture.Get(),
-        m_specularLuminanceMomentsTexture.Get()
+        m_specularLuminanceMomentsTexture.Get(),
+        m_outputTexture.Get()
     };
     D3D12_RESOURCE_BARRIER uavBarriers[_countof(uavResources)] = {};
     for (UINT index = 0; index < _countof(uavResources); ++index)
@@ -1063,6 +1072,9 @@ void RayTracingManager::DispatchTemporalColorClip(
     commandList->SetComputeRootDescriptorTable(
         10,
         gpuDescriptorHandle(7u));
+    commandList->SetComputeRootDescriptorTable(
+        11,
+        gpuDescriptorHandle(0u));
 
     TemporalColorClipSettingsConstants settings = {};
     settings.resolution[0] = m_width;
@@ -1071,9 +1083,10 @@ void RayTracingManager::DispatchTemporalColorClip(
     // rejecting history colors unsupported by the current local surface.
     settings.clipGamma = 2.0f;
     settings.minNeighborhoodSamples = 3u;
+    settings.debugView = m_temporalDebugView;
     commandList->SetComputeRoot32BitConstants(
-        11,
-        4,
+        12,
+        5,
         &settings,
         0);
     commandList->Dispatch(
@@ -1439,7 +1452,8 @@ void RayTracingManager::SetTemporalColorClipEnabled(bool enabled)
 
 void RayTracingManager::SetTemporalDebugView(UINT debugView)
 {
-    m_temporalDebugView = debugView <= c_temporalDebugRejectionMask
+    m_temporalDebugView =
+        debugView <= c_temporalDebugRadianceHistoryDifference
         ? debugView
         : c_temporalDebugNone;
 }
@@ -2750,7 +2764,7 @@ bool RayTracingManager::CreateAtrousPipeline()
 
 bool RayTracingManager::CreateTemporalColorClipPipeline()
 {
-    D3D12_DESCRIPTOR_RANGE descriptorRanges[11] = {};
+    D3D12_DESCRIPTOR_RANGE descriptorRanges[12] = {};
     for (UINT rangeIndex = 0; rangeIndex < 6; ++rangeIndex)
     {
         descriptorRanges[rangeIndex].RangeType =
@@ -2759,7 +2773,7 @@ bool RayTracingManager::CreateTemporalColorClipPipeline()
         descriptorRanges[rangeIndex].BaseShaderRegister = rangeIndex;
         descriptorRanges[rangeIndex].OffsetInDescriptorsFromTableStart = 0;
     }
-    for (UINT rangeIndex = 6; rangeIndex < 11; ++rangeIndex)
+    for (UINT rangeIndex = 6; rangeIndex < 12; ++rangeIndex)
     {
         descriptorRanges[rangeIndex].RangeType =
             D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
@@ -2768,8 +2782,8 @@ bool RayTracingManager::CreateTemporalColorClipPipeline()
         descriptorRanges[rangeIndex].OffsetInDescriptorsFromTableStart = 0;
     }
 
-    D3D12_ROOT_PARAMETER rootParameters[12] = {};
-    for (UINT parameterIndex = 0; parameterIndex < 11; ++parameterIndex)
+    D3D12_ROOT_PARAMETER rootParameters[13] = {};
+    for (UINT parameterIndex = 0; parameterIndex < 12; ++parameterIndex)
     {
         rootParameters[parameterIndex].ParameterType =
             D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -2780,11 +2794,11 @@ bool RayTracingManager::CreateTemporalColorClipPipeline()
         rootParameters[parameterIndex].ShaderVisibility =
             D3D12_SHADER_VISIBILITY_ALL;
     }
-    rootParameters[11].ParameterType =
+    rootParameters[12].ParameterType =
         D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParameters[11].Constants.ShaderRegister = 0;
-    rootParameters[11].Constants.Num32BitValues = 4;
-    rootParameters[11].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParameters[12].Constants.ShaderRegister = 0;
+    rootParameters[12].Constants.Num32BitValues = 5;
+    rootParameters[12].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
     rootSignatureDesc.NumParameters = _countof(rootParameters);

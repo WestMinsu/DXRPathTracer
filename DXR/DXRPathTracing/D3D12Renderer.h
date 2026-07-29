@@ -71,7 +71,8 @@ public:
     void SetInitialTemporalDebugView(UINT debugView)
     {
         m_temporalDebugView = static_cast<int>(
-            debugView <= RayTracingManager::c_temporalDebugRejectionMask
+            debugView <=
+                RayTracingManager::c_temporalDebugRadianceHistoryDifference
             ? debugView
             : RayTracingManager::c_temporalDebugNone);
     }

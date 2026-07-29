@@ -1641,7 +1641,11 @@ void D3D12Renderer::BuildImGuiFrame()
         {
             "None",
             "History Length",
-            "History Rejection Mask"
+            "History Rejection Mask",
+            "Motion Vector",
+            "History Rejection Reason",
+            "Reprojection Surface Error",
+            "Radiance History Difference"
         };
         ImGui::Combo(
             "Temporal Debug View",
@@ -1657,6 +1661,34 @@ void D3D12Renderer::BuildImGuiFrame()
             RayTracingManager::c_temporalDebugRejectionMask))
         {
             ImGui::TextDisabled("History: green = accepted, red = rejected, blue = unavailable.");
+        }
+        else if (m_temporalDebugView == static_cast<int>(
+            RayTracingManager::c_temporalDebugMotionVector))
+        {
+            ImGui::TextDisabled(
+                "Motion: gray = zero, RG = current-to-previous XY, blue = magnitude (32 px max).");
+        }
+        else if (m_temporalDebugView == static_cast<int>(
+            RayTracingManager::c_temporalDebugRejectionReason))
+        {
+            ImGui::TextDisabled(
+                "Reason: green accept, magenta projection, blue outside, red hit/miss.");
+            ImGui::TextDisabled(
+                "Orange instance, yellow distance, cyan normal, violet material, gray no history, white coverage.");
+        }
+        else if (m_temporalDebugView == static_cast<int>(
+            RayTracingManager::c_temporalDebugSurfaceError))
+        {
+            ImGui::TextDisabled(
+                "Surface error: green 0%%, yellow 2.5%%, red >= 5%%; black = unavailable.");
+        }
+        else if (m_temporalDebugView == static_cast<int>(
+            RayTracingManager::c_temporalDebugRadianceHistoryDifference))
+        {
+            ImGui::TextDisabled(
+                "Radiance difference: green = match, red = brighter history, blue = darker history.");
+            ImGui::TextDisabled(
+                "Uses a 5x5 edge-aware current estimate; full color at >= 50%% RGB difference.");
         }
         ImGui::TextDisabled(
             "Temporal history: up to 256 frames for valid pixels.");

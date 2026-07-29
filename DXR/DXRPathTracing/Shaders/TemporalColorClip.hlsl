@@ -10,12 +10,14 @@ RWTexture2D<float4> g_diffuseAccumulation : register(u1);
 RWTexture2D<float4> g_specularAccumulation : register(u2);
 RWTexture2D<float2> g_diffuseMoments : register(u3);
 RWTexture2D<float2> g_specularMoments : register(u4);
+RWTexture2D<float4> g_debugOutput : register(u5);
 
 cbuffer TemporalColorClipSettings : register(b0)
 {
     uint2 g_resolution;
     float g_clipGamma;
     uint g_minNeighborhoodSamples;
+    uint g_debugView;
 };
 
 static const uint c_groupSize = 8u;
@@ -105,6 +107,48 @@ float3 YCoCgToRgb(float3 ycocg)
 float Luminance(float3 color)
 {
     return dot(color, float3(0.2126f, 0.7152f, 0.0722f));
+}
+
+float3 RadianceHistoryDifferenceColor(
+    float4 accumulatedSignal,
+    float3 currentSignal,
+    float3 currentEstimateYCoCg,
+    float effectiveSampleCount)
+{
+    float totalCount = max(abs(accumulatedSignal.a), 1.0f);
+    float historyCount = totalCount - 1.0f;
+    if (historyCount < 1.0f ||
+        effectiveSampleCount < float(g_minNeighborhoodSamples))
+    {
+        return float3(0.0f, 0.0f, 0.0f);
+    }
+
+    float3 historyAverage = max(
+        (accumulatedSignal.rgb - currentSignal) / historyCount,
+        0.0f);
+    float3 currentEstimate = max(
+        YCoCgToRgb(currentEstimateYCoCg),
+        0.0f);
+    float historyLuminance = Luminance(historyAverage);
+    float currentLuminance = Luminance(currentEstimate);
+    float colorScale = max(
+        max(length(historyAverage), length(currentEstimate)),
+        0.01f);
+    float relativeColorDifference =
+        length(historyAverage - currentEstimate) / colorScale;
+    float differenceStrength = saturate(
+        relativeColorDifference / 0.50f);
+
+    // Green means the stable current 5x5 estimate agrees with history.
+    // Red means history is brighter (bright smear), blue means history is
+    // darker (dark smear). Saturation is reached at 50% RGB difference.
+    float3 mismatchColor = historyLuminance >= currentLuminance
+        ? float3(1.0f, 0.0f, 0.0f)
+        : float3(0.0f, 0.25f, 1.0f);
+    return lerp(
+        float3(0.0f, 1.0f, 0.0f),
+        mismatchColor,
+        differenceStrength);
 }
 
 float GuideWeight(
@@ -319,9 +363,7 @@ float4 ClipReprojectedHistory(
         lowerBound,
         upperBound);
 
-    // The bounds now come from a 5x5 edge-aware current-frame estimate rather
-    // than raw 1 spp neighbors, so luminance and chroma can both be clipped
-    // decisively without the previous confidence-vs-smearing tradeoff.
+    // The bounds come from a 5x5 edge-aware current-frame estimate.
     float3 clippedHistoryYCoCg = boundedHistoryYCoCg;
 
     float targetLuminance = max(clippedHistoryYCoCg.x, 0.0f);
@@ -389,7 +431,9 @@ void CSMain(
     uint2 pixel = dispatchThreadId.xy;
     if (any(pixel >= g_resolution))
         return;
-    if (!PixelNeedsClipping(groupThreadId.xy))
+    bool showRadianceHistoryDifference = g_debugView == 6u;
+    if (!showRadianceHistoryDifference &&
+        !PixelNeedsClipping(groupThreadId.xy))
         return;
 
     int2 centerPixel = int2(pixel);
@@ -416,6 +460,20 @@ void CSMain(
     float3 currentTotal = s_currentTotal[centerIndex].rgb;
     float3 currentDiffuse = s_currentDiffuse[centerIndex].rgb;
     float3 currentSpecular = s_currentSpecular[centerIndex].rgb;
+    if (showRadianceHistoryDifference)
+    {
+        float3 currentEstimateYCoCg =
+            (totalLower + totalUpper) * 0.5f;
+        g_debugOutput[centerPixel] = float4(
+            RadianceHistoryDifferenceColor(
+                g_totalAccumulation[centerPixel],
+                currentTotal,
+                currentEstimateYCoCg,
+                effectiveSampleCount),
+            1.0f);
+        return;
+    }
+
     float4 clippedTotal = ClipReprojectedHistory(
         g_totalAccumulation[centerPixel],
         currentTotal,
@@ -434,7 +492,6 @@ void CSMain(
         specularLower,
         specularUpper,
         effectiveSampleCount);
-
     float2 diffuseMoments = g_diffuseMoments[centerPixel];
     float2 specularMoments = g_specularMoments[centerPixel];
     RecenterMoments(clippedDiffuse, diffuseMoments);
