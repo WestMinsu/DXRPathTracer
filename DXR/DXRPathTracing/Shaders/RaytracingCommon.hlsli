@@ -137,7 +137,7 @@ static const float c_twoPi = 6.283185307f;
 
 RWTexture2D<float4> g_output : register(u0);
 RWTexture2D<float4> g_accumulation : register(u1);
-RWTexture2D<float4> g_normalDepth : register(u3);
+RWTexture2D<float4> g_normalHitDistance : register(u3);
 RWTexture2D<float4> g_materialGuide : register(u4);
 // These legacy-named resources store the complete primary-surface lobe
 // radiance (direct + indirect) used by the denoiser.
@@ -145,6 +145,12 @@ RWTexture2D<float4> g_diffuseIndirectAccumulation : register(u5);
 RWTexture2D<float4> g_specularIndirectAccumulation : register(u6);
 RWTexture2D<float2> g_diffuseLuminanceMoments : register(u7);
 RWTexture2D<float2> g_specularLuminanceMoments : register(u8);
+// Current-frame (unaccumulated) signals. These reuse the A-Trous scratch
+// textures until the spatial filter starts, so temporal clipping does not
+// require another set of full-resolution HDR resources.
+RWTexture2D<float4> g_currentDiffuseRadiance : register(u9);
+RWTexture2D<float4> g_currentSpecularRadiance : register(u10);
+RWTexture2D<float4> g_currentTotalRadiance : register(u11);
 RWStructuredBuffer<uint> g_statistics : register(u2);
 RaytracingAccelerationStructure g_scene : register(t0);
 StructuredBuffer<Vertex> g_vertices : register(t1);

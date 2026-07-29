@@ -1,5 +1,5 @@
 Texture2D<float4> g_source : register(t0);
-Texture2D<float4> g_normalDepth : register(t1);
+Texture2D<float4> g_normalHitDistance : register(t1);
 Texture2D<float4> g_materialGuide : register(t2);
 Texture2D<float2> g_luminanceMoments : register(t3);
 Texture2D<float4> g_diffuseIndirectAccumulation : register(t4);
@@ -177,7 +177,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     int2 centerPixel = int2(pixel);
     float3 centerColor = LoadFilterValue(centerPixel);
     float4 centerNormalDepth =
-        g_normalDepth.Load(int3(centerPixel, 0));
+        g_normalHitDistance.Load(int3(centerPixel, 0));
     float4 centerMaterial =
         g_materialGuide.Load(int3(centerPixel, 0));
 
@@ -216,7 +216,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 int2(0, 0),
                 int2(g_resolution) - int2(1, 1));
             float4 localNormalDepth =
-                g_normalDepth.Load(int3(localPixel, 0));
+                g_normalHitDistance.Load(int3(localPixel, 0));
             float4 localMaterial =
                 g_materialGuide.Load(int3(localPixel, 0));
             if (localNormalDepth.w < 0.0f || localMaterial.a < 0.0f)
@@ -292,7 +292,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 int2(g_resolution) - int2(1, 1));
 
             float4 sampleNormalDepth =
-                g_normalDepth.Load(int3(samplePixel, 0));
+                g_normalHitDistance.Load(int3(samplePixel, 0));
             float4 sampleMaterial =
                 g_materialGuide.Load(int3(samplePixel, 0));
             if (sampleNormalDepth.w < 0.0f || sampleMaterial.a < 0.0f)

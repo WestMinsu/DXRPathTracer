@@ -69,6 +69,7 @@ public:
     void SetLightingMode(UINT lightingMode);
     void SetTemporalReprojectionEnabled(bool enabled);
     void SetDynamicObjectReprojectionEnabled(bool enabled);
+    void SetTemporalColorClipEnabled(bool enabled);
     void SetTemporalDebugView(UINT debugView);
     void SetAtrousEnabled(bool enabled);
     void SetAtrousIterationCount(UINT iterationCount)
@@ -174,6 +175,7 @@ private:
     bool CreateEnvironmentMap();
     bool CreateGlobalRootSignature();
     bool CreateAtrousPipeline();
+    bool CreateTemporalColorClipPipeline();
     bool CreateRaytracingPipelineState();
     bool CreateShaderTables();
     bool CreateMissShaderTable();
@@ -214,11 +216,15 @@ private:
     bool LoadCompiledShader(std::vector<std::uint8_t>& shaderBytes) const;
     bool LoadCompiledAtrousShader(
         std::vector<std::uint8_t>& shaderBytes) const;
+    bool LoadCompiledTemporalColorClipShader(
+        std::vector<std::uint8_t>& shaderBytes) const;
     bool ReadBinaryFile(const std::wstring& path, std::vector<std::uint8_t>& bytes) const;
     std::wstring GetCompiledShaderPath() const;
     std::wstring GetCompiledAtrousShaderPath() const;
+    std::wstring GetCompiledTemporalColorClipShaderPath() const;
     std::wstring GetEnvironmentMapPath() const;
     void DispatchAtrousFilter(ID3D12GraphicsCommandList4* commandList);
+    void DispatchTemporalColorClip(ID3D12GraphicsCommandList4* commandList);
     void WriteTemporalHistoryDescriptors();
     bool ReportFailure(HRESULT hr, const wchar_t* message) const;
     void ReportMessage(const std::wstring& message) const;
@@ -242,6 +248,7 @@ private:
     bool m_enableRussianRoulette = false;
     bool m_enableTemporalReprojection = false;
     bool m_enableDynamicObjectReprojection = true;
+    bool m_enableTemporalColorClip = true;
     bool m_enableAtrous = false;
     UINT m_temporalDebugView = c_temporalDebugNone;
     UINT m_atrousIterationCount = 2;
@@ -350,6 +357,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_globalRootSignature;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_atrousRootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_atrousPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature>
+        m_temporalColorClipRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState>
+        m_temporalColorClipPipelineState;
     Microsoft::WRL::ComPtr<ID3D12StateObject> m_stateObject;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_rayGenShaderTable;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_missShaderTable;

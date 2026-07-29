@@ -272,6 +272,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
+    m_rayTracingManager->SetTemporalColorClipEnabled(
+        m_enableTemporalColorClip);
     m_rayTracingManager->SetAtrousEnabled(m_enableAtrous);
     m_rayTracingManager->SetAtrousIterationCount(
         static_cast<UINT>(m_atrousIterations));
@@ -338,6 +340,8 @@ void D3D12Renderer::Render()
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
+    m_rayTracingManager->SetTemporalColorClipEnabled(
+        m_enableTemporalColorClip);
     m_rayTracingManager->SetTemporalDebugView(
         m_enableTemporalReprojection
         ? static_cast<UINT>(m_temporalDebugView)
@@ -1628,6 +1632,11 @@ void D3D12Renderer::BuildImGuiFrame()
             ImGui::TextDisabled(
                 "OFF: reject moving-object history, ON: reproject its previous transform.");
         }
+        ImGui::Checkbox(
+            "Dynamic Object Color Clipping (with A-Trous)",
+            &m_enableTemporalColorClip);
+        ImGui::TextDisabled(
+            "Applies 5x5 edge-aware history clipping only around moving objects.");
         const char* temporalDebugNames[] =
         {
             "None",

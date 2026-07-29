@@ -181,14 +181,14 @@ bool IsValidHistoryTap(
 bool GatherValidatedHistory(
     float3 worldPosition,
     float3 currentRayDirection,
-    float4 currentNormalDepth,
+    float4 currentNormalHitDistance,
     float4 currentMaterial,
     uint2 resolution,
     out TemporalHistorySample history)
 {
     ResetTemporalHistorySample(history);
     bool currentHit =
-        currentNormalDepth.w >= 0.0f && currentMaterial.a >= 0.0f;
+        currentNormalHitDistance.w >= 0.0f && currentMaterial.a >= 0.0f;
     float2 historyPosition;
     float expectedPreviousDepth;
     if (!ProjectToPreviousFrame(
@@ -233,7 +233,7 @@ bool GatherValidatedHistory(
             historyPixel,
             currentHit,
             expectedPreviousDepth,
-            currentNormalDepth.xyz,
+            currentNormalHitDistance.xyz,
             currentMaterial,
             resolution))
         {
@@ -373,7 +373,7 @@ void TracePrimaryGuide(
     previousWorldPosition = payload.emission;
     dynamicInstance = payload.dynamicInstance;
     uint2 launchIndex = DispatchRaysIndex().xy;
-    g_normalDepth[launchIndex] = float4(payload.normal, payload.hitT);
+    g_normalHitDistance[launchIndex] = float4(payload.normal, payload.hitT);
     g_materialGuide[launchIndex] = float4(
         payload.baseColor,
         payload.roughness +
@@ -699,7 +699,7 @@ void RunRaygen()
     if (updatePrimaryGuides)
     {
         // A negative depth marks primary rays that missed geometry.
-        g_normalDepth[launchIndex] =
+        g_normalHitDistance[launchIndex] =
             float4(0.0f, 0.0f, 0.0f, -1.0f);
         g_materialGuide[launchIndex] =
             float4(0.0f, 0.0f, 0.0f, -1.0f);
@@ -786,6 +786,20 @@ void RunRaygen()
         sampleDiffuseDenoisingRadiance *= inverseSamplesPerPixel;
         sampleSpecularDenoisingRadiance *= inverseSamplesPerPixel;
 
+        if (g_enableTemporalReprojection != 0u &&
+            g_enableAtrous != 0u)
+        {
+            // Preserve the unaccumulated current-frame observations. A later
+            // compute pass uses their 3x3 neighborhood to constrain only the
+            // reprojected history before A-Trous consumes these scratch maps.
+            g_currentTotalRadiance[launchIndex] =
+                float4(max(sampleRadiance, 0.0f), 1.0f);
+            g_currentDiffuseRadiance[launchIndex] =
+                float4(max(sampleDiffuseDenoisingRadiance, 0.0f), 1.0f);
+            g_currentSpecularRadiance[launchIndex] =
+                float4(max(sampleSpecularDenoisingRadiance, 0.0f), 1.0f);
+        }
+
         if (updatePrimaryGuides)
         {
             float2 guideUv =
@@ -858,13 +872,13 @@ void RunRaygen()
                 (g_dynamicObjectMoved != 0u &&
                  DynamicObjectReprojectionEnabled()))
             {
-                float4 currentNormalDepth = g_normalDepth[launchIndex];
+                float4 currentNormalHitDistance = g_normalHitDistance[launchIndex];
                 bool currentHit =
-                    currentNormalDepth.w >= 0.0f &&
+                    currentNormalHitDistance.w >= 0.0f &&
                     currentMaterial.a >= 0.0f;
                 float3 currentWorldPosition = currentHit
                     ? g_cameraPosition +
-                        primaryRayDirection * currentNormalDepth.w
+                        primaryRayDirection * currentNormalHitDistance.w
                     : float3(0.0f, 0.0f, 0.0f);
                 bool currentDynamic =
                     currentHit &&
@@ -877,7 +891,7 @@ void RunRaygen()
                 historyValid = GatherValidatedHistory(
                     reprojectionWorldPosition,
                     primaryRayDirection,
-                    currentNormalDepth,
+                    currentNormalHitDistance,
                     currentMaterial,
                     launchDim,
                     history);

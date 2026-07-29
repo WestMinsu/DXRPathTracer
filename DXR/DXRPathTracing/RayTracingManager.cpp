@@ -35,6 +35,8 @@ namespace
     constexpr wchar_t c_compiledShaderRelativePath[] = L"Shaders\\Raytracing.dxil";
     constexpr wchar_t c_compiledAtrousShaderRelativePath[] =
         L"Shaders\\AtrousDenoiser.dxil";
+    constexpr wchar_t c_compiledTemporalColorClipShaderRelativePath[] =
+        L"Shaders\\TemporalColorClip.dxil";
     constexpr wchar_t c_environmentMapRelativePath[] = L"Assets\\Textures\\Cubemaps\\HDRI\\autumn_hill_view_4kSpecularHDR.dds";
     constexpr UINT c_environmentDescriptorIndex = 8;
     constexpr UINT c_materialTextureDescriptorIndex = 9;
@@ -166,6 +168,16 @@ namespace
     };
     static_assert(
         sizeof(AtrousSettingsConstants) == 11 * sizeof(std::uint32_t));
+
+    struct TemporalColorClipSettingsConstants
+    {
+        UINT resolution[2];
+        float clipGamma;
+        UINT minNeighborhoodSamples;
+    };
+    static_assert(
+        sizeof(TemporalColorClipSettingsConstants) ==
+        4 * sizeof(std::uint32_t));
 
     struct GpuEmissiveTriangle
     {
@@ -632,6 +644,9 @@ bool RayTracingManager::Initialize(HWND hWnd, ID3D12Device5* device, UINT width,
     if (!CreateAtrousPipeline())
         return false;
 
+    if (!CreateTemporalColorClipPipeline())
+        return false;
+
     if (!CreateRaytracingPipelineState())
         return false;
 
@@ -878,6 +893,16 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         commandList->ResourceBarrier(1, &statisticsToCopy);
     }
 
+    if (useTemporalHistory &&
+        useAtrousFilter &&
+        m_enableTemporalColorClip &&
+        m_temporalHistoryFrameCount > 0u &&
+        m_temporalDebugView == c_temporalDebugNone &&
+        m_dynamicObjectMovedThisFrame)
+    {
+        DispatchTemporalColorClip(commandList);
+    }
+
     if (useAtrousFilter &&
         m_temporalDebugView == c_temporalDebugNone)
         DispatchAtrousFilter(commandList);
@@ -930,6 +955,142 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     {
         ++m_temporalHistoryFrameCount;
     }
+}
+
+void RayTracingManager::DispatchTemporalColorClip(
+    ID3D12GraphicsCommandList4* commandList)
+{
+    if (!commandList ||
+        !m_temporalColorClipRootSignature ||
+        !m_temporalColorClipPipelineState ||
+        !m_accumulationTexture ||
+        !m_diffuseIndirectAccumulationTexture ||
+        !m_specularIndirectAccumulationTexture ||
+        !m_diffuseLuminanceMomentsTexture ||
+        !m_specularLuminanceMomentsTexture ||
+        !m_normalDepthTexture ||
+        !m_materialGuideTexture ||
+        !m_atrousFilterTextureA ||
+        !m_atrousFilterTextureB ||
+        !m_atrousFilteredDiffuseTexture)
+    {
+        return;
+    }
+
+    ID3D12Resource* uavResources[5] =
+    {
+        m_accumulationTexture.Get(),
+        m_diffuseIndirectAccumulationTexture.Get(),
+        m_specularIndirectAccumulationTexture.Get(),
+        m_diffuseLuminanceMomentsTexture.Get(),
+        m_specularLuminanceMomentsTexture.Get()
+    };
+    D3D12_RESOURCE_BARRIER uavBarriers[_countof(uavResources)] = {};
+    for (UINT index = 0; index < _countof(uavResources); ++index)
+    {
+        uavBarriers[index].Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        uavBarriers[index].UAV.pResource = uavResources[index];
+    }
+    commandList->ResourceBarrier(_countof(uavBarriers), uavBarriers);
+
+    ID3D12Resource* inputResources[5] =
+    {
+        m_atrousFilteredDiffuseTexture.Get(),
+        m_atrousFilterTextureA.Get(),
+        m_atrousFilterTextureB.Get(),
+        m_normalDepthTexture.Get(),
+        m_materialGuideTexture.Get()
+    };
+    D3D12_RESOURCE_BARRIER inputTransitions[_countof(inputResources)] = {};
+    for (UINT index = 0; index < _countof(inputResources); ++index)
+    {
+        inputTransitions[index].Type =
+            D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        inputTransitions[index].Transition.pResource = inputResources[index];
+        inputTransitions[index].Transition.StateBefore =
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+        inputTransitions[index].Transition.StateAfter =
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+        inputTransitions[index].Transition.Subresource =
+            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    }
+    commandList->ResourceBarrier(
+        _countof(inputTransitions),
+        inputTransitions);
+
+    const auto gpuDescriptorHandle = [&](UINT descriptorIndex)
+    {
+        D3D12_GPU_DESCRIPTOR_HANDLE handle =
+            m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
+        handle.ptr +=
+            static_cast<UINT64>(descriptorIndex) * m_descriptorSize;
+        return handle;
+    };
+
+    commandList->SetComputeRootSignature(
+        m_temporalColorClipRootSignature.Get());
+    commandList->SetPipelineState(m_temporalColorClipPipelineState.Get());
+    commandList->SetComputeRootDescriptorTable(
+        0,
+        gpuDescriptorHandle(c_atrousFilteredDiffuseSrvIndex));
+    commandList->SetComputeRootDescriptorTable(
+        1,
+        gpuDescriptorHandle(c_atrousFilterASrvIndex));
+    commandList->SetComputeRootDescriptorTable(
+        2,
+        gpuDescriptorHandle(c_atrousFilterBSrvIndex));
+    commandList->SetComputeRootDescriptorTable(
+        3,
+        gpuDescriptorHandle(c_atrousNormalDepthSrvIndex));
+    commandList->SetComputeRootDescriptorTable(
+        4,
+        gpuDescriptorHandle(c_atrousMaterialGuideSrvIndex));
+    commandList->SetComputeRootDescriptorTable(
+        5,
+        gpuDescriptorHandle(c_temporalPreviousMaterialGuideSrvIndex));
+    commandList->SetComputeRootDescriptorTable(
+        6,
+        gpuDescriptorHandle(1u));
+    commandList->SetComputeRootDescriptorTable(
+        7,
+        gpuDescriptorHandle(4u));
+    commandList->SetComputeRootDescriptorTable(
+        8,
+        gpuDescriptorHandle(5u));
+    commandList->SetComputeRootDescriptorTable(
+        9,
+        gpuDescriptorHandle(6u));
+    commandList->SetComputeRootDescriptorTable(
+        10,
+        gpuDescriptorHandle(7u));
+
+    TemporalColorClipSettingsConstants settings = {};
+    settings.resolution[0] = m_width;
+    settings.resolution[1] = m_height;
+    // Two standard deviations keeps ordinary Monte Carlo variation while
+    // rejecting history colors unsupported by the current local surface.
+    settings.clipGamma = 2.0f;
+    settings.minNeighborhoodSamples = 3u;
+    commandList->SetComputeRoot32BitConstants(
+        11,
+        4,
+        &settings,
+        0);
+    commandList->Dispatch(
+        (m_width + 7u) / 8u,
+        (m_height + 7u) / 8u,
+        1u);
+
+    commandList->ResourceBarrier(_countof(uavBarriers), uavBarriers);
+    for (UINT index = 0; index < _countof(inputTransitions); ++index)
+    {
+        std::swap(
+            inputTransitions[index].Transition.StateBefore,
+            inputTransitions[index].Transition.StateAfter);
+    }
+    commandList->ResourceBarrier(
+        _countof(inputTransitions),
+        inputTransitions);
 }
 
 void RayTracingManager::DispatchAtrousFilter(
@@ -1264,6 +1425,15 @@ void RayTracingManager::SetDynamicObjectReprojectionEnabled(bool enabled)
         return;
 
     m_enableDynamicObjectReprojection = enabled;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetTemporalColorClipEnabled(bool enabled)
+{
+    if (m_enableTemporalColorClip == enabled)
+        return;
+
+    m_enableTemporalColorClip = enabled;
     ResetAccumulation();
 }
 
@@ -2333,7 +2503,7 @@ bool RayTracingManager::CreateEnvironmentMap()
 
 bool RayTracingManager::CreateGlobalRootSignature()
 {
-    D3D12_DESCRIPTOR_RANGE outputRanges[2] = {};
+    D3D12_DESCRIPTOR_RANGE outputRanges[3] = {};
     outputRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     outputRanges[0].NumDescriptors = 2;
     outputRanges[0].BaseShaderRegister = 0;
@@ -2344,6 +2514,12 @@ bool RayTracingManager::CreateGlobalRootSignature()
     outputRanges[1].BaseShaderRegister = 3;
     outputRanges[1].RegisterSpace = 0;
     outputRanges[1].OffsetInDescriptorsFromTableStart = 2;
+    outputRanges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    outputRanges[2].NumDescriptors = 3;
+    outputRanges[2].BaseShaderRegister = 9;
+    outputRanges[2].RegisterSpace = 0;
+    outputRanges[2].OffsetInDescriptorsFromTableStart =
+        c_atrousFilterAUavIndex;
 
     D3D12_DESCRIPTOR_RANGE environmentRange = {};
     environmentRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -2569,6 +2745,99 @@ bool RayTracingManager::CreateAtrousPipeline()
     if (ReportFailure(hr, L"A-Trous pipeline state creation failed."))
         return false;
     m_atrousPipelineState->SetName(L"A-Trous pipeline state");
+    return true;
+}
+
+bool RayTracingManager::CreateTemporalColorClipPipeline()
+{
+    D3D12_DESCRIPTOR_RANGE descriptorRanges[11] = {};
+    for (UINT rangeIndex = 0; rangeIndex < 6; ++rangeIndex)
+    {
+        descriptorRanges[rangeIndex].RangeType =
+            D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        descriptorRanges[rangeIndex].NumDescriptors = 1;
+        descriptorRanges[rangeIndex].BaseShaderRegister = rangeIndex;
+        descriptorRanges[rangeIndex].OffsetInDescriptorsFromTableStart = 0;
+    }
+    for (UINT rangeIndex = 6; rangeIndex < 11; ++rangeIndex)
+    {
+        descriptorRanges[rangeIndex].RangeType =
+            D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        descriptorRanges[rangeIndex].NumDescriptors = 1;
+        descriptorRanges[rangeIndex].BaseShaderRegister = rangeIndex - 6;
+        descriptorRanges[rangeIndex].OffsetInDescriptorsFromTableStart = 0;
+    }
+
+    D3D12_ROOT_PARAMETER rootParameters[12] = {};
+    for (UINT parameterIndex = 0; parameterIndex < 11; ++parameterIndex)
+    {
+        rootParameters[parameterIndex].ParameterType =
+            D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rootParameters[parameterIndex].DescriptorTable.NumDescriptorRanges =
+            1;
+        rootParameters[parameterIndex].DescriptorTable.pDescriptorRanges =
+            &descriptorRanges[parameterIndex];
+        rootParameters[parameterIndex].ShaderVisibility =
+            D3D12_SHADER_VISIBILITY_ALL;
+    }
+    rootParameters[11].ParameterType =
+        D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParameters[11].Constants.ShaderRegister = 0;
+    rootParameters[11].Constants.Num32BitValues = 4;
+    rootParameters[11].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
+    rootSignatureDesc.NumParameters = _countof(rootParameters);
+    rootSignatureDesc.pParameters = rootParameters;
+
+    Microsoft::WRL::ComPtr<ID3DBlob> signature;
+    Microsoft::WRL::ComPtr<ID3DBlob> error;
+    HRESULT hr = D3D12SerializeRootSignature(
+        &rootSignatureDesc,
+        D3D_ROOT_SIGNATURE_VERSION_1,
+        &signature,
+        &error);
+    if (ReportFailure(
+        hr,
+        L"Temporal color clip root signature serialization failed."))
+    {
+        return false;
+    }
+
+    hr = m_device->CreateRootSignature(
+        0,
+        signature->GetBufferPointer(),
+        signature->GetBufferSize(),
+        IID_PPV_ARGS(&m_temporalColorClipRootSignature));
+    if (ReportFailure(
+        hr,
+        L"Temporal color clip root signature creation failed."))
+    {
+        return false;
+    }
+    m_temporalColorClipRootSignature->SetName(
+        L"Temporal color clip root signature");
+
+    std::vector<std::uint8_t> shaderBytes;
+    if (!LoadCompiledTemporalColorClipShader(shaderBytes))
+        return false;
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC pipelineDesc = {};
+    pipelineDesc.pRootSignature =
+        m_temporalColorClipRootSignature.Get();
+    pipelineDesc.CS.pShaderBytecode = shaderBytes.data();
+    pipelineDesc.CS.BytecodeLength = shaderBytes.size();
+    hr = m_device->CreateComputePipelineState(
+        &pipelineDesc,
+        IID_PPV_ARGS(&m_temporalColorClipPipelineState));
+    if (ReportFailure(
+        hr,
+        L"Temporal color clip pipeline state creation failed."))
+    {
+        return false;
+    }
+    m_temporalColorClipPipelineState->SetName(
+        L"Temporal color clip pipeline state");
     return true;
 }
 
@@ -4420,6 +4689,24 @@ bool RayTracingManager::LoadCompiledAtrousShader(
     return false;
 }
 
+bool RayTracingManager::LoadCompiledTemporalColorClipShader(
+    std::vector<std::uint8_t>& shaderBytes) const
+{
+    const std::wstring shaderPath =
+        GetCompiledTemporalColorClipShaderPath();
+    if (ReadBinaryFile(shaderPath, shaderBytes))
+        return true;
+
+    std::wstring message =
+        L"Compiled temporal color clip shader was not found.\n";
+    message += L"Expected: ";
+    message += shaderPath;
+    message +=
+        L"\nBuild the project once so the HLSL custom build step can create it.";
+    ReportMessage(message);
+    return false;
+}
+
 bool RayTracingManager::ReadBinaryFile(const std::wstring& path, std::vector<std::uint8_t>& bytes) const
 {
     ScopedFileHandle file(CreateFileW(
@@ -4511,6 +4798,31 @@ std::wstring RayTracingManager::GetCompiledAtrousShaderPath() const
         ? std::wstring()
         : modulePath.substr(0, slash + 1);
     return executableDir + c_compiledAtrousShaderRelativePath;
+}
+
+std::wstring RayTracingManager::GetCompiledTemporalColorClipShaderPath() const
+{
+    std::wstring modulePath(MAX_PATH, L'\0');
+    DWORD length = GetModuleFileNameW(
+        nullptr,
+        &modulePath[0],
+        static_cast<DWORD>(modulePath.size()));
+    while (length == modulePath.size())
+    {
+        modulePath.resize(modulePath.size() * 2);
+        length = GetModuleFileNameW(
+            nullptr,
+            &modulePath[0],
+            static_cast<DWORD>(modulePath.size()));
+    }
+
+    modulePath.resize(length);
+    const std::wstring::size_type slash =
+        modulePath.find_last_of(L"\\/");
+    const std::wstring executableDir = slash == std::wstring::npos
+        ? std::wstring()
+        : modulePath.substr(0, slash + 1);
+    return executableDir + c_compiledTemporalColorClipShaderRelativePath;
 }
 
 bool RayTracingManager::ReportFailure(HRESULT hr, const wchar_t* message) const
