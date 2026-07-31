@@ -114,6 +114,31 @@ public:
             ? 0.0001f
             : (depthSigma > 0.1f ? 0.1f : depthSigma);
     }
+    void SetInitialAtrousAdaptiveEdgeWeightsEnabled(bool enabled)
+    {
+        m_enableAtrousAdaptiveEdgeWeights = enabled;
+    }
+    void SetInitialAtrousAdaptiveDynamicWeights(
+        float normalExponent,
+        float depthSigma)
+    {
+        m_atrousAdaptiveDynamicNormalExponent = normalExponent;
+        m_atrousAdaptiveDynamicDepthSigma = depthSigma;
+    }
+    void SetInitialAtrousAdaptiveLowHistoryWeights(
+        float normalExponent,
+        float depthSigma)
+    {
+        m_atrousAdaptiveLowHistoryNormalExponent = normalExponent;
+        m_atrousAdaptiveLowHistoryDepthSigma = depthSigma;
+    }
+    void SetInitialAtrousAdaptiveStableWeights(
+        float normalExponent,
+        float depthSigma)
+    {
+        m_atrousAdaptiveStableNormalExponent = normalExponent;
+        m_atrousAdaptiveStableDepthSigma = depthSigma;
+    }
     void SetInitialAtrousColorSigma(float colorSigma)
     {
         m_atrousColorSigma =
@@ -290,6 +315,13 @@ private:
         RayTracingManager::c_atrousKernel3x3);
     float m_atrousNormalExponent = 32.0f;
     float m_atrousDepthSigma = 0.01f;
+    bool m_enableAtrousAdaptiveEdgeWeights = false;
+    float m_atrousAdaptiveDynamicNormalExponent = 1.0f;
+    float m_atrousAdaptiveDynamicDepthSigma = 0.1f;
+    float m_atrousAdaptiveLowHistoryNormalExponent = 8.0f;
+    float m_atrousAdaptiveLowHistoryDepthSigma = 0.02f;
+    float m_atrousAdaptiveStableNormalExponent = 32.0f;
+    float m_atrousAdaptiveStableDepthSigma = 0.01f;
     float m_atrousColorSigma = 4.0f;
     int m_lightingMode = static_cast<int>(
         RayTracingManager::c_lightingModeBsdf);

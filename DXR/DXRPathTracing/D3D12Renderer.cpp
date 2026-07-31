@@ -289,6 +289,17 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_atrousNormalExponent);
     m_rayTracingManager->SetAtrousDepthSigma(
         m_atrousDepthSigma);
+    m_rayTracingManager->SetAtrousAdaptiveEdgeWeightsEnabled(
+        m_enableAtrousAdaptiveEdgeWeights);
+    m_rayTracingManager->SetAtrousAdaptiveDynamicWeights(
+        m_atrousAdaptiveDynamicNormalExponent,
+        m_atrousAdaptiveDynamicDepthSigma);
+    m_rayTracingManager->SetAtrousAdaptiveLowHistoryWeights(
+        m_atrousAdaptiveLowHistoryNormalExponent,
+        m_atrousAdaptiveLowHistoryDepthSigma);
+    m_rayTracingManager->SetAtrousAdaptiveStableWeights(
+        m_atrousAdaptiveStableNormalExponent,
+        m_atrousAdaptiveStableDepthSigma);
     m_rayTracingManager->SetAtrousColorSigma(m_atrousColorSigma);
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
         m_animateDynamicSphere);
@@ -373,6 +384,17 @@ void D3D12Renderer::Render()
         m_atrousNormalExponent);
     m_rayTracingManager->SetAtrousDepthSigma(
         m_atrousDepthSigma);
+    m_rayTracingManager->SetAtrousAdaptiveEdgeWeightsEnabled(
+        m_enableAtrousAdaptiveEdgeWeights);
+    m_rayTracingManager->SetAtrousAdaptiveDynamicWeights(
+        m_atrousAdaptiveDynamicNormalExponent,
+        m_atrousAdaptiveDynamicDepthSigma);
+    m_rayTracingManager->SetAtrousAdaptiveLowHistoryWeights(
+        m_atrousAdaptiveLowHistoryNormalExponent,
+        m_atrousAdaptiveLowHistoryDepthSigma);
+    m_rayTracingManager->SetAtrousAdaptiveStableWeights(
+        m_atrousAdaptiveStableNormalExponent,
+        m_atrousAdaptiveStableDepthSigma);
     m_rayTracingManager->SetAtrousColorSigma(m_atrousColorSigma);
     m_rayTracingManager->SetEnableAccumulation(m_enableAccumulation);
     m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
@@ -1745,15 +1767,18 @@ void D3D12Renderer::BuildImGuiFrame()
             "A-Trous Kernel",
             &m_atrousKernelMode,
             "3x3\0" "5x5\0");
+        ImGui::Checkbox(
+            "Adaptive Edge Weights",
+            &m_enableAtrousAdaptiveEdgeWeights);
         ImGui::SliderFloat(
-            "Normal Exponent",
+            "Manual Normal Exponent",
             &m_atrousNormalExponent,
             1.0f,
             256.0f,
             "%.1f",
             ImGuiSliderFlags_Logarithmic);
         ImGui::SliderFloat(
-            "Depth Sigma",
+            "Manual Depth Sigma",
             &m_atrousDepthSigma,
             0.0001f,
             0.1f,
@@ -1769,6 +1794,57 @@ void D3D12Renderer::BuildImGuiFrame()
             "Diffuse: albedo; Specular guides are independently selectable.");
         ImGui::TextDisabled(
             "Lower normal exponent smooths curves; lower depth sigma blocks silhouettes.");
+        if (m_enableAtrousAdaptiveEdgeWeights)
+        {
+            if (ImGui::TreeNode("Adaptive Weight Tuning"))
+            {
+                ImGui::SliderFloat(
+                    "Dynamic Normal",
+                    &m_atrousAdaptiveDynamicNormalExponent,
+                    1.0f,
+                    256.0f,
+                    "%.1f",
+                    ImGuiSliderFlags_Logarithmic);
+                ImGui::SliderFloat(
+                    "Dynamic Depth",
+                    &m_atrousAdaptiveDynamicDepthSigma,
+                    0.0001f,
+                    0.1f,
+                    "%.4f",
+                    ImGuiSliderFlags_Logarithmic);
+                ImGui::SliderFloat(
+                    "Low History Normal",
+                    &m_atrousAdaptiveLowHistoryNormalExponent,
+                    1.0f,
+                    256.0f,
+                    "%.1f",
+                    ImGuiSliderFlags_Logarithmic);
+                ImGui::SliderFloat(
+                    "Low History Depth",
+                    &m_atrousAdaptiveLowHistoryDepthSigma,
+                    0.0001f,
+                    0.1f,
+                    "%.4f",
+                    ImGuiSliderFlags_Logarithmic);
+                ImGui::SliderFloat(
+                    "Stable Normal Base",
+                    &m_atrousAdaptiveStableNormalExponent,
+                    1.0f,
+                    256.0f,
+                    "%.1f",
+                    ImGuiSliderFlags_Logarithmic);
+                ImGui::SliderFloat(
+                    "Stable Depth",
+                    &m_atrousAdaptiveStableDepthSigma,
+                    0.0001f,
+                    0.1f,
+                    "%.4f",
+                    ImGuiSliderFlags_Logarithmic);
+                ImGui::TreePop();
+            }
+            ImGui::TextDisabled(
+                "Manual sliders are used only when Adaptive is OFF.");
+        }
         ImGui::TextDisabled(
             "Diffuse and specular use independent filter widths.");
         ImGui::TextDisabled(

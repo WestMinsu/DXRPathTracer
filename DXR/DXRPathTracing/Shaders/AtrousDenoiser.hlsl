@@ -24,6 +24,13 @@ cbuffer AtrousSettings : register(b0)
     uint g_specularMaterialWeightMode;
     uint g_specularRoughnessWeightMode;
     uint g_kernelMode;
+    uint g_adaptiveEdgeWeights;
+    float g_adaptiveDynamicNormalExponent;
+    float g_adaptiveDynamicDepthSigma;
+    float g_adaptiveLowHistoryNormalExponent;
+    float g_adaptiveLowHistoryDepthSigma;
+    float g_adaptiveStableNormalExponent;
+    float g_adaptiveStableDepthSigma;
 };
 
 static const uint c_filterChannelDiffuse = 0u;
@@ -72,9 +79,22 @@ float Luminance(float3 color)
 
 float GuideRoughness(float packedRoughness)
 {
-    return packedRoughness >= 1.5f
-        ? packedRoughness - 2.0f
-        : packedRoughness;
+    if (packedRoughness < 1.5f)
+        return packedRoughness;
+    return packedRoughness -
+        floor(packedRoughness * 0.5f) * 2.0f;
+}
+
+bool IsDynamicGuide(float4 materialGuide)
+{
+    return materialGuide.a >= 1.5f;
+}
+
+uint DynamicGuideInstance(float4 materialGuide)
+{
+    return IsDynamicGuide(materialGuide)
+        ? uint(floor(materialGuide.a * 0.5f)) - 1u
+        : 0u;
 }
 
 float3 LoadAverageRadiance(Texture2D<float4> textureResource, int2 pixel)
@@ -148,17 +168,77 @@ float RoughnessEdgeWeight(float centerRoughness, float sampleRoughness)
         : 1.0f;
 }
 
-float ChannelNormalExponent(float roughness)
+float ChannelNormalExponent(float roughness, float baseNormalExponent)
 {
     if (g_filterChannel != c_filterChannelSpecular)
-        return g_normalExponent;
+        return baseNormalExponent;
 
     // Glossy reflections vary rapidly for small normal changes. Tighten the
     // normal guide at low roughness and relax it for broad rough reflections.
     return lerp(
-        g_normalExponent * 4.0f,
-        g_normalExponent * 0.5f,
+        baseNormalExponent * 4.0f,
+        baseNormalExponent * 0.5f,
         saturate(roughness));
+}
+
+float SurfaceIdentityWeight(float4 centerMaterial, float4 sampleMaterial)
+{
+    if (g_adaptiveEdgeWeights == 0u)
+        return 1.0f;
+
+    bool centerDynamic = IsDynamicGuide(centerMaterial);
+    bool sampleDynamic = IsDynamicGuide(sampleMaterial);
+    if (!centerDynamic && !sampleDynamic)
+        return 1.0f;
+    if (centerDynamic != sampleDynamic)
+        return 0.0f;
+    return DynamicGuideInstance(centerMaterial) ==
+        DynamicGuideInstance(sampleMaterial)
+        ? 1.0f
+        : 0.0f;
+}
+
+void AdaptiveEdgeParameters(
+    int2 pixel,
+    float4 materialGuide,
+    float roughness,
+    out float normalExponent,
+    out float depthSigma)
+{
+    if (g_adaptiveEdgeWeights == 0u)
+    {
+        normalExponent = ChannelNormalExponent(
+            roughness,
+            g_normalExponent);
+        depthSigma = g_depthSigma;
+        return;
+    }
+
+    if (IsDynamicGuide(materialGuide))
+    {
+        // A dynamic instance is filtered aggressively only within the same
+        // instance. SurfaceIdentityWeight prevents background color leakage.
+        normalExponent = g_adaptiveDynamicNormalExponent;
+        depthSigma = g_adaptiveDynamicDepthSigma;
+        return;
+    }
+
+    float historyLength = max(
+        abs(g_totalAccumulation.Load(int3(pixel, 0)).a),
+        1.0f);
+    float historyConfidence = saturate(
+        (historyLength - 1.0f) / 15.0f);
+    float stableNormalExponent = ChannelNormalExponent(
+        roughness,
+        g_adaptiveStableNormalExponent);
+    normalExponent = lerp(
+        g_adaptiveLowHistoryNormalExponent,
+        stableNormalExponent,
+        historyConfidence);
+    depthSigma = lerp(
+        g_adaptiveLowHistoryDepthSigma,
+        g_adaptiveStableDepthSigma,
+        historyConfidence);
 }
 
 float StandardError(int2 pixel, float centerLuminance)
@@ -275,9 +355,16 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float centerRoughness = GuideRoughness(centerMaterial.a);
     float centerMetallic = saturate(
         g_metallicGuide.Load(int3(centerPixel, 0)));
-    float normalExponent = ChannelNormalExponent(centerRoughness);
+    float normalExponent;
+    float edgeDepthSigma;
+    AdaptiveEdgeParameters(
+        centerPixel,
+        centerMaterial,
+        centerRoughness,
+        normalExponent,
+        edgeDepthSigma);
     float depthScale =
-        max(centerDepth, 0.01f) * max(g_depthSigma, 1.0e-5f);
+        max(centerDepth, 0.01f) * max(edgeDepthSigma, 1.0e-5f);
     float localLuminanceSum = 0.0f;
     float localLuminanceSquareSum = 0.0f;
     float localWeightSum = 0.0f;
@@ -322,6 +409,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             float roughnessWeight = RoughnessEdgeWeight(
                 centerRoughness,
                 GuideRoughness(localMaterial.a));
+            float identityWeight = SurfaceIdentityWeight(
+                centerMaterial,
+                localMaterial);
             float spatialWeight =
                 c_kernel3x3[localX + 1] *
                 c_kernel3x3[localY + 1];
@@ -330,7 +420,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 normalWeight *
                 depthWeight *
                 materialWeight *
-                roughnessWeight;
+                roughnessWeight *
+                identityWeight;
             float localLuminance =
                 Luminance(LoadFilterValue(localPixel));
             localLuminanceSum += localLuminance * guideWeight;
@@ -404,13 +495,17 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             float roughnessWeight = RoughnessEdgeWeight(
                 centerRoughness,
                 GuideRoughness(sampleMaterial.a));
+            float identityWeight = SurfaceIdentityWeight(
+                centerMaterial,
+                sampleMaterial);
             float colorWeight = exp(
                 -abs(Luminance(sampleColor) - centerLuminance) /
                 colorScale);
             float spatialWeight =
                 KernelWeight1D(x) * KernelWeight1D(y);
             float weight = spatialWeight * normalWeight * depthWeight *
-                materialWeight * roughnessWeight * colorWeight;
+                materialWeight * roughnessWeight * identityWeight *
+                colorWeight;
 
             filteredColor += sampleColor * weight;
             totalWeight += weight;

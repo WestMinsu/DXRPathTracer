@@ -124,6 +124,43 @@ public:
             ? 0.0001f
             : (depthSigma > 0.1f ? 0.1f : depthSigma);
     }
+    void SetAtrousAdaptiveEdgeWeightsEnabled(bool enabled)
+    {
+        m_enableAtrousAdaptiveEdgeWeights = enabled;
+    }
+    void SetAtrousAdaptiveDynamicWeights(
+        float normalExponent,
+        float depthSigma)
+    {
+        m_atrousAdaptiveDynamicNormalExponent = normalExponent < 1.0f
+            ? 1.0f
+            : (normalExponent > 256.0f ? 256.0f : normalExponent);
+        m_atrousAdaptiveDynamicDepthSigma = depthSigma < 0.0001f
+            ? 0.0001f
+            : (depthSigma > 0.1f ? 0.1f : depthSigma);
+    }
+    void SetAtrousAdaptiveLowHistoryWeights(
+        float normalExponent,
+        float depthSigma)
+    {
+        m_atrousAdaptiveLowHistoryNormalExponent = normalExponent < 1.0f
+            ? 1.0f
+            : (normalExponent > 256.0f ? 256.0f : normalExponent);
+        m_atrousAdaptiveLowHistoryDepthSigma = depthSigma < 0.0001f
+            ? 0.0001f
+            : (depthSigma > 0.1f ? 0.1f : depthSigma);
+    }
+    void SetAtrousAdaptiveStableWeights(
+        float normalExponent,
+        float depthSigma)
+    {
+        m_atrousAdaptiveStableNormalExponent = normalExponent < 1.0f
+            ? 1.0f
+            : (normalExponent > 256.0f ? 256.0f : normalExponent);
+        m_atrousAdaptiveStableDepthSigma = depthSigma < 0.0001f
+            ? 0.0001f
+            : (depthSigma > 0.1f ? 0.1f : depthSigma);
+    }
     void SetAtrousColorSigma(float colorSigma)
     {
         m_atrousColorSigma =
@@ -306,6 +343,13 @@ private:
     UINT m_atrousKernelMode = c_atrousKernel3x3;
     float m_atrousNormalExponent = 32.0f;
     float m_atrousDepthSigma = 0.01f;
+    bool m_enableAtrousAdaptiveEdgeWeights = false;
+    float m_atrousAdaptiveDynamicNormalExponent = 1.0f;
+    float m_atrousAdaptiveDynamicDepthSigma = 0.1f;
+    float m_atrousAdaptiveLowHistoryNormalExponent = 8.0f;
+    float m_atrousAdaptiveLowHistoryDepthSigma = 0.02f;
+    float m_atrousAdaptiveStableNormalExponent = 32.0f;
+    float m_atrousAdaptiveStableDepthSigma = 0.01f;
     float m_atrousColorSigma = 4.0f;
     UINT m_samplesPerPixel = 1;
     UINT m_lightingMode = c_lightingModeBsdf;

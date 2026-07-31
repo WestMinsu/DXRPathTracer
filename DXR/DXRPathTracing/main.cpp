@@ -41,6 +41,13 @@ namespace
         UINT atrousKernelMode = RayTracingManager::c_atrousKernel3x3;
         float atrousNormalExponent = 32.0f;
         float atrousDepthSigma = 0.01f;
+        bool enableAtrousAdaptiveEdgeWeights = false;
+        float atrousAdaptiveDynamicNormalExponent = 1.0f;
+        float atrousAdaptiveDynamicDepthSigma = 0.1f;
+        float atrousAdaptiveLowHistoryNormalExponent = 8.0f;
+        float atrousAdaptiveLowHistoryDepthSigma = 0.02f;
+        float atrousAdaptiveStableNormalExponent = 32.0f;
+        float atrousAdaptiveStableDepthSigma = 0.01f;
         float atrousColorSigma = 4.0f;
         UINT lightingMode = RayTracingManager::c_lightingModeBsdf;
         bool enableIbl = true;
@@ -318,6 +325,48 @@ namespace
                      index + 1 < argumentCount)
             {
                 gOptions.atrousDepthSigma =
+                    static_cast<float>(_wtof(arguments[++index]));
+            }
+            else if (argument == L"--atrous-adaptive-edge-weights" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.enableAtrousAdaptiveEdgeWeights =
+                    _wtoi(arguments[++index]) != 0;
+            }
+            else if (argument == L"--atrous-adaptive-dynamic-normal" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.atrousAdaptiveDynamicNormalExponent =
+                    static_cast<float>(_wtof(arguments[++index]));
+            }
+            else if (argument == L"--atrous-adaptive-dynamic-depth" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.atrousAdaptiveDynamicDepthSigma =
+                    static_cast<float>(_wtof(arguments[++index]));
+            }
+            else if (argument == L"--atrous-adaptive-low-history-normal" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.atrousAdaptiveLowHistoryNormalExponent =
+                    static_cast<float>(_wtof(arguments[++index]));
+            }
+            else if (argument == L"--atrous-adaptive-low-history-depth" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.atrousAdaptiveLowHistoryDepthSigma =
+                    static_cast<float>(_wtof(arguments[++index]));
+            }
+            else if (argument == L"--atrous-adaptive-stable-normal" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.atrousAdaptiveStableNormalExponent =
+                    static_cast<float>(_wtof(arguments[++index]));
+            }
+            else if (argument == L"--atrous-adaptive-stable-depth" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.atrousAdaptiveStableDepthSigma =
                     static_cast<float>(_wtof(arguments[++index]));
             }
             else if (argument == L"--lighting-mode" &&
@@ -631,6 +680,17 @@ namespace
             gOptions.atrousNormalExponent);
         gRenderer.SetInitialAtrousDepthSigma(
             gOptions.atrousDepthSigma);
+        gRenderer.SetInitialAtrousAdaptiveEdgeWeightsEnabled(
+            gOptions.enableAtrousAdaptiveEdgeWeights);
+        gRenderer.SetInitialAtrousAdaptiveDynamicWeights(
+            gOptions.atrousAdaptiveDynamicNormalExponent,
+            gOptions.atrousAdaptiveDynamicDepthSigma);
+        gRenderer.SetInitialAtrousAdaptiveLowHistoryWeights(
+            gOptions.atrousAdaptiveLowHistoryNormalExponent,
+            gOptions.atrousAdaptiveLowHistoryDepthSigma);
+        gRenderer.SetInitialAtrousAdaptiveStableWeights(
+            gOptions.atrousAdaptiveStableNormalExponent,
+            gOptions.atrousAdaptiveStableDepthSigma);
         gRenderer.SetInitialAtrousColorSigma(
             gOptions.atrousColorSigma);
         gRenderer.SetInitialDynamicSphereAnimationEnabled(

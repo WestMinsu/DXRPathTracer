@@ -172,9 +172,16 @@ namespace
         UINT specularMaterialWeightMode;
         UINT specularRoughnessWeightMode;
         UINT kernelMode;
+        UINT adaptiveEdgeWeights;
+        float adaptiveDynamicNormalExponent;
+        float adaptiveDynamicDepthSigma;
+        float adaptiveLowHistoryNormalExponent;
+        float adaptiveLowHistoryDepthSigma;
+        float adaptiveStableNormalExponent;
+        float adaptiveStableDepthSigma;
     };
     static_assert(
-        sizeof(AtrousSettingsConstants) == 14 * sizeof(std::uint32_t));
+        sizeof(AtrousSettingsConstants) == 21 * sizeof(std::uint32_t));
 
     struct TemporalColorClipSettingsConstants
     {
@@ -1235,6 +1242,20 @@ void RayTracingManager::DispatchAtrousFilter(
             settings.specularRoughnessWeightMode =
                 m_atrousSpecularRoughnessWeightMode;
             settings.kernelMode = m_atrousKernelMode;
+            settings.adaptiveEdgeWeights =
+                m_enableAtrousAdaptiveEdgeWeights ? 1u : 0u;
+            settings.adaptiveDynamicNormalExponent =
+                m_atrousAdaptiveDynamicNormalExponent;
+            settings.adaptiveDynamicDepthSigma =
+                m_atrousAdaptiveDynamicDepthSigma;
+            settings.adaptiveLowHistoryNormalExponent =
+                m_atrousAdaptiveLowHistoryNormalExponent;
+            settings.adaptiveLowHistoryDepthSigma =
+                m_atrousAdaptiveLowHistoryDepthSigma;
+            settings.adaptiveStableNormalExponent =
+                m_atrousAdaptiveStableNormalExponent;
+            settings.adaptiveStableDepthSigma =
+                m_atrousAdaptiveStableDepthSigma;
 
             commandList->SetComputeRootDescriptorTable(
                 0,
@@ -1271,7 +1292,7 @@ void RayTracingManager::DispatchAtrousFilter(
                 gpuDescriptorHandle(destinationDescriptorIndex));
             commandList->SetComputeRoot32BitConstants(
                 10,
-                14,
+                21,
                 &settings,
                 0);
             commandList->Dispatch(
@@ -2768,7 +2789,7 @@ bool RayTracingManager::CreateAtrousPipeline()
     rootParameters[10].ParameterType =
         D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[10].Constants.ShaderRegister = 0;
-    rootParameters[10].Constants.Num32BitValues = 14;
+    rootParameters[10].Constants.Num32BitValues = 21;
     rootParameters[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
