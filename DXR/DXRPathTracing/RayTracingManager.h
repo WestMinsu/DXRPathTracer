@@ -62,6 +62,13 @@ public:
     static constexpr UINT c_temporalDebugRejectionReason = 4;
     static constexpr UINT c_temporalDebugSurfaceError = 5;
     static constexpr UINT c_temporalDebugRadianceHistoryDifference = 6;
+    static constexpr UINT c_specularMaterialWeightNone = 0;
+    static constexpr UINT c_specularMaterialWeightAlbedo = 1;
+    static constexpr UINT c_specularMaterialWeightF0 = 2;
+    static constexpr UINT c_specularRoughnessWeightNone = 0;
+    static constexpr UINT c_specularRoughnessWeightRoughness = 1;
+    static constexpr UINT c_atrousKernel3x3 = 0;
+    static constexpr UINT c_atrousKernel5x5 = 1;
 
     bool Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height);
     bool Resize(UINT width, UINT height);
@@ -79,7 +86,43 @@ public:
     void SetAtrousIterationCount(UINT iterationCount)
     {
         m_atrousIterationCount =
-            iterationCount < 1u ? 1u : (iterationCount > 5u ? 5u : iterationCount);
+            iterationCount < 1u ? 1u : (iterationCount > 8u ? 8u : iterationCount);
+    }
+    void SetAtrousSpecularIterationCount(UINT iterationCount)
+    {
+        m_atrousSpecularIterationCount =
+            iterationCount < 1u ? 1u : (iterationCount > 8u ? 8u : iterationCount);
+    }
+    void SetAtrousSpecularMaterialWeightMode(UINT mode)
+    {
+        m_atrousSpecularMaterialWeightMode = mode > c_specularMaterialWeightF0
+            ? c_specularMaterialWeightF0
+            : mode;
+    }
+    void SetAtrousSpecularRoughnessWeightMode(UINT mode)
+    {
+        m_atrousSpecularRoughnessWeightMode =
+            mode > c_specularRoughnessWeightRoughness
+            ? c_specularRoughnessWeightRoughness
+            : mode;
+    }
+    void SetAtrousKernelMode(UINT mode)
+    {
+        m_atrousKernelMode = mode > c_atrousKernel5x5
+            ? c_atrousKernel5x5
+            : mode;
+    }
+    void SetAtrousNormalExponent(float normalExponent)
+    {
+        m_atrousNormalExponent = normalExponent < 1.0f
+            ? 1.0f
+            : (normalExponent > 256.0f ? 256.0f : normalExponent);
+    }
+    void SetAtrousDepthSigma(float depthSigma)
+    {
+        m_atrousDepthSigma = depthSigma < 0.0001f
+            ? 0.0001f
+            : (depthSigma > 0.1f ? 0.1f : depthSigma);
     }
     void SetAtrousColorSigma(float colorSigma)
     {
@@ -255,7 +298,14 @@ private:
     bool m_enableTemporalColorClip = true;
     bool m_enableAtrous = false;
     UINT m_temporalDebugView = c_temporalDebugNone;
-    UINT m_atrousIterationCount = 2;
+    UINT m_atrousIterationCount = 5;
+    UINT m_atrousSpecularIterationCount = 3;
+    UINT m_atrousSpecularMaterialWeightMode = c_specularMaterialWeightF0;
+    UINT m_atrousSpecularRoughnessWeightMode =
+        c_specularRoughnessWeightRoughness;
+    UINT m_atrousKernelMode = c_atrousKernel3x3;
+    float m_atrousNormalExponent = 32.0f;
+    float m_atrousDepthSigma = 0.01f;
     float m_atrousColorSigma = 4.0f;
     UINT m_samplesPerPixel = 1;
     UINT m_lightingMode = c_lightingModeBsdf;
@@ -327,6 +377,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_previousNormalDepthTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_materialGuideTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_previousMaterialGuideTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_metallicGuideTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource>
         m_diffuseIndirectAccumulationTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource>

@@ -33,7 +33,14 @@ namespace
         bool enableTemporalReprojection = false;
         bool enableAtrous = false;
         UINT temporalDebugView = RayTracingManager::c_temporalDebugNone;
-        UINT atrousIterations = 2;
+        UINT atrousIterations = 5;
+        UINT atrousSpecularMaterialWeightMode =
+            RayTracingManager::c_specularMaterialWeightF0;
+        UINT atrousSpecularRoughnessWeightMode =
+            RayTracingManager::c_specularRoughnessWeightRoughness;
+        UINT atrousKernelMode = RayTracingManager::c_atrousKernel3x3;
+        float atrousNormalExponent = 32.0f;
+        float atrousDepthSigma = 0.01f;
         float atrousColorSigma = 4.0f;
         UINT lightingMode = RayTracingManager::c_lightingModeBsdf;
         bool enableIbl = true;
@@ -261,6 +268,56 @@ namespace
                      index + 1 < argumentCount)
             {
                 gOptions.atrousColorSigma =
+                    static_cast<float>(_wtof(arguments[++index]));
+            }
+            else if (argument == L"--atrous-specular-material-weight" &&
+                     index + 1 < argumentCount)
+            {
+                const std::wstring mode = arguments[++index];
+                if (mode == L"none")
+                {
+                    gOptions.atrousSpecularMaterialWeightMode =
+                        RayTracingManager::c_specularMaterialWeightNone;
+                }
+                else if (mode == L"albedo")
+                {
+                    gOptions.atrousSpecularMaterialWeightMode =
+                        RayTracingManager::c_specularMaterialWeightAlbedo;
+                }
+                else
+                {
+                    gOptions.atrousSpecularMaterialWeightMode =
+                        RayTracingManager::c_specularMaterialWeightF0;
+                }
+            }
+            else if (argument == L"--atrous-specular-roughness-weight" &&
+                     index + 1 < argumentCount)
+            {
+                const std::wstring mode = arguments[++index];
+                gOptions.atrousSpecularRoughnessWeightMode =
+                    mode == L"none"
+                    ? RayTracingManager::c_specularRoughnessWeightNone
+                    : RayTracingManager::c_specularRoughnessWeightRoughness;
+            }
+            else if (argument == L"--atrous-kernel" &&
+                     index + 1 < argumentCount)
+            {
+                const std::wstring mode = arguments[++index];
+                gOptions.atrousKernelMode =
+                    mode == L"5" || mode == L"5x5"
+                    ? RayTracingManager::c_atrousKernel5x5
+                    : RayTracingManager::c_atrousKernel3x3;
+            }
+            else if (argument == L"--atrous-normal-exponent" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.atrousNormalExponent =
+                    static_cast<float>(_wtof(arguments[++index]));
+            }
+            else if (argument == L"--atrous-depth-sigma" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.atrousDepthSigma =
                     static_cast<float>(_wtof(arguments[++index]));
             }
             else if (argument == L"--lighting-mode" &&
@@ -564,6 +621,16 @@ namespace
             gOptions.temporalDebugView);
         gRenderer.SetInitialAtrousIterationCount(
             gOptions.atrousIterations);
+        gRenderer.SetInitialAtrousSpecularMaterialWeightMode(
+            gOptions.atrousSpecularMaterialWeightMode);
+        gRenderer.SetInitialAtrousSpecularRoughnessWeightMode(
+            gOptions.atrousSpecularRoughnessWeightMode);
+        gRenderer.SetInitialAtrousKernelMode(
+            gOptions.atrousKernelMode);
+        gRenderer.SetInitialAtrousNormalExponent(
+            gOptions.atrousNormalExponent);
+        gRenderer.SetInitialAtrousDepthSigma(
+            gOptions.atrousDepthSigma);
         gRenderer.SetInitialAtrousColorSigma(
             gOptions.atrousColorSigma);
         gRenderer.SetInitialDynamicSphereAnimationEnabled(

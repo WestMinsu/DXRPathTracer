@@ -57,8 +57,10 @@ namespace
         c_atrousSpecularMomentsSrvIndex + 1;
     constexpr UINT c_atrousFilteredDiffuseSrvIndex =
         c_atrousTotalSrvIndex + 1;
-    constexpr UINT c_atrousFilterASrvIndex =
+    constexpr UINT c_atrousMetallicGuideSrvIndex =
         c_atrousFilteredDiffuseSrvIndex + 1;
+    constexpr UINT c_atrousFilterASrvIndex =
+        c_atrousMetallicGuideSrvIndex + 1;
     constexpr UINT c_atrousFilterBSrvIndex =
         c_atrousFilterASrvIndex + 1;
     constexpr UINT c_atrousFilterAUavIndex =
@@ -69,8 +71,10 @@ namespace
         c_atrousFilterBUavIndex + 1;
     constexpr UINT c_atrousOutputUavIndex =
         c_atrousFilteredDiffuseUavIndex + 1;
-    constexpr UINT c_temporalPreviousAccumulationSrvIndex =
+    constexpr UINT c_metallicGuideUavIndex =
         c_atrousOutputUavIndex + 1;
+    constexpr UINT c_temporalPreviousAccumulationSrvIndex =
+        c_metallicGuideUavIndex + 1;
     constexpr UINT c_temporalPreviousNormalDepthSrvIndex =
         c_temporalPreviousAccumulationSrvIndex + 1;
     constexpr UINT c_temporalPreviousMaterialGuideSrvIndex =
@@ -165,9 +169,12 @@ namespace
         float exposure;
         UINT demodulateDiffuse;
         UINT filterChannel;
+        UINT specularMaterialWeightMode;
+        UINT specularRoughnessWeightMode;
+        UINT kernelMode;
     };
     static_assert(
-        sizeof(AtrousSettingsConstants) == 11 * sizeof(std::uint32_t));
+        sizeof(AtrousSettingsConstants) == 14 * sizeof(std::uint32_t));
 
     struct TemporalColorClipSettingsConstants
     {
@@ -674,6 +681,7 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         !m_previousAccumulationTexture ||
         !m_previousNormalDepthTexture ||
         !m_previousMaterialGuideTexture ||
+        !m_metallicGuideTexture ||
         !m_previousDiffuseIndirectAccumulationTexture ||
         !m_previousSpecularIndirectAccumulationTexture ||
         !m_previousDiffuseLuminanceMomentsTexture ||
@@ -1115,6 +1123,7 @@ void RayTracingManager::DispatchAtrousFilter(
         !m_accumulationTexture ||
         !m_normalDepthTexture ||
         !m_materialGuideTexture ||
+        !m_metallicGuideTexture ||
         !m_diffuseIndirectAccumulationTexture ||
         !m_specularIndirectAccumulationTexture ||
         !m_diffuseLuminanceMomentsTexture ||
@@ -1132,8 +1141,8 @@ void RayTracingManager::DispatchAtrousFilter(
     outputUavBarrier.UAV.pResource = m_outputTexture.Get();
     commandList->ResourceBarrier(1, &outputUavBarrier);
 
-    D3D12_RESOURCE_BARRIER inputTransitions[7] = {};
-    ID3D12Resource* inputResources[7] =
+    D3D12_RESOURCE_BARRIER inputTransitions[8] = {};
+    ID3D12Resource* inputResources[8] =
     {
         m_diffuseIndirectAccumulationTexture.Get(),
         m_specularIndirectAccumulationTexture.Get(),
@@ -1141,7 +1150,8 @@ void RayTracingManager::DispatchAtrousFilter(
         m_materialGuideTexture.Get(),
         m_diffuseLuminanceMomentsTexture.Get(),
         m_specularLuminanceMomentsTexture.Get(),
-        m_accumulationTexture.Get()
+        m_accumulationTexture.Get(),
+        m_metallicGuideTexture.Get()
     };
     for (UINT index = 0; index < _countof(inputTransitions); ++index)
     {
@@ -1177,15 +1187,16 @@ void RayTracingManager::DispatchAtrousFilter(
             UINT accumulationSrvIndex,
             UINT momentsSrvIndex,
             UINT finalUavIndex,
-            ID3D12Resource* finalResource)
+            ID3D12Resource* finalResource,
+            UINT iterationCount)
     {
         for (UINT passIndex = 0;
-             passIndex < m_atrousIterationCount;
+             passIndex < iterationCount;
              ++passIndex)
         {
             const bool firstPass = passIndex == 0u;
             const bool finalPass =
-                passIndex + 1u == m_atrousIterationCount;
+                passIndex + 1u == iterationCount;
             const bool sourceIsA =
                 !firstPass && ((passIndex - 1u) % 2u == 0u);
             const bool destinationIsA = passIndex % 2u == 0u;
@@ -1212,13 +1223,18 @@ void RayTracingManager::DispatchAtrousFilter(
             settings.stepWidth = 1u << passIndex;
             settings.inputIsAccumulation = firstPass ? 1u : 0u;
             settings.finalPass = finalPass ? 1u : 0u;
-            settings.normalExponent = 64.0f;
-            settings.depthSigma = 0.02f;
+            settings.normalExponent = m_atrousNormalExponent;
+            settings.depthSigma = m_atrousDepthSigma;
             settings.colorSigma = m_atrousColorSigma;
             settings.exposure = m_exposure;
             settings.demodulateDiffuse =
                 filterChannel == c_atrousFilterChannelDiffuse ? 1u : 0u;
             settings.filterChannel = filterChannel;
+            settings.specularMaterialWeightMode =
+                m_atrousSpecularMaterialWeightMode;
+            settings.specularRoughnessWeightMode =
+                m_atrousSpecularRoughnessWeightMode;
+            settings.kernelMode = m_atrousKernelMode;
 
             commandList->SetComputeRootDescriptorTable(
                 0,
@@ -1244,15 +1260,18 @@ void RayTracingManager::DispatchAtrousFilter(
             commandList->SetComputeRootDescriptorTable(
                 7,
                 gpuDescriptorHandle(
-                    filterChannel == c_atrousFilterChannelDiffuse
-                    ? c_atrousDiffuseIndirectSrvIndex
-                    : c_atrousFilteredDiffuseSrvIndex));
+                    filterChannel == c_atrousFilterChannelSpecular
+                    ? c_atrousFilteredDiffuseSrvIndex
+                    : c_atrousDiffuseIndirectSrvIndex));
             commandList->SetComputeRootDescriptorTable(
                 8,
+                gpuDescriptorHandle(c_atrousMetallicGuideSrvIndex));
+            commandList->SetComputeRootDescriptorTable(
+                9,
                 gpuDescriptorHandle(destinationDescriptorIndex));
             commandList->SetComputeRoot32BitConstants(
-                9,
-                11,
+                10,
+                14,
                 &settings,
                 0);
             commandList->Dispatch(
@@ -1307,7 +1326,8 @@ void RayTracingManager::DispatchAtrousFilter(
         c_atrousDiffuseIndirectSrvIndex,
         c_atrousDiffuseMomentsSrvIndex,
         c_atrousFilteredDiffuseUavIndex,
-        m_atrousFilteredDiffuseTexture.Get());
+        m_atrousFilteredDiffuseTexture.Get(),
+        m_atrousIterationCount);
 
     D3D12_RESOURCE_BARRIER filteredDiffuseToSrv = {};
     filteredDiffuseToSrv.Type =
@@ -1327,7 +1347,8 @@ void RayTracingManager::DispatchAtrousFilter(
         c_atrousSpecularIndirectSrvIndex,
         c_atrousSpecularMomentsSrvIndex,
         c_atrousOutputUavIndex,
-        m_outputTexture.Get());
+        m_outputTexture.Get(),
+        m_atrousSpecularIterationCount);
 
     std::swap(
         filteredDiffuseToSrv.Transition.StateBefore,
@@ -1685,6 +1706,7 @@ bool RayTracingManager::CreateOutputTexture()
     m_previousNormalDepthTexture.Reset();
     m_materialGuideTexture.Reset();
     m_previousMaterialGuideTexture.Reset();
+    m_metallicGuideTexture.Reset();
     m_diffuseIndirectAccumulationTexture.Reset();
     m_previousDiffuseIndirectAccumulationTexture.Reset();
     m_specularIndirectAccumulationTexture.Reset();
@@ -1865,6 +1887,16 @@ bool RayTracingManager::CreateOutputTexture()
     {
         return false;
     }
+    D3D12_RESOURCE_DESC metallicGuideDesc = accumulationDesc;
+    metallicGuideDesc.Format = DXGI_FORMAT_R16_FLOAT;
+    if (!createFloatTexture(
+        metallicGuideDesc,
+        m_metallicGuideTexture,
+        L"Raytracing primary metallic guide",
+        L"Raytracing metallic guide texture creation failed."))
+    {
+        return false;
+    }
     if (!createFloatTexture(
         accumulationDesc,
         m_atrousFilterTextureA,
@@ -1935,6 +1967,14 @@ bool RayTracingManager::CreateOutputTexture()
         nullptr,
         &materialGuideUavDesc,
         descriptorHandle(3));
+    D3D12_UNORDERED_ACCESS_VIEW_DESC metallicGuideUavDesc = {};
+    metallicGuideUavDesc.Format = metallicGuideDesc.Format;
+    metallicGuideUavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    m_device->CreateUnorderedAccessView(
+        m_metallicGuideTexture.Get(),
+        nullptr,
+        &metallicGuideUavDesc,
+        descriptorHandle(c_metallicGuideUavIndex));
     m_device->CreateUnorderedAccessView(
         m_diffuseIndirectAccumulationTexture.Get(),
         nullptr,
@@ -1988,6 +2028,13 @@ bool RayTracingManager::CreateOutputTexture()
         m_materialGuideTexture.Get(),
         &materialGuideSrvDesc,
         descriptorHandle(c_atrousMaterialGuideSrvIndex));
+    D3D12_SHADER_RESOURCE_VIEW_DESC metallicGuideSrvDesc =
+        floatTextureSrvDesc;
+    metallicGuideSrvDesc.Format = metallicGuideDesc.Format;
+    m_device->CreateShaderResourceView(
+        m_metallicGuideTexture.Get(),
+        &metallicGuideSrvDesc,
+        descriptorHandle(c_atrousMetallicGuideSrvIndex));
     D3D12_SHADER_RESOURCE_VIEW_DESC momentsSrvDesc =
         floatTextureSrvDesc;
     momentsSrvDesc.Format = momentsDesc.Format;
@@ -2517,7 +2564,7 @@ bool RayTracingManager::CreateEnvironmentMap()
 
 bool RayTracingManager::CreateGlobalRootSignature()
 {
-    D3D12_DESCRIPTOR_RANGE outputRanges[3] = {};
+    D3D12_DESCRIPTOR_RANGE outputRanges[4] = {};
     outputRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     outputRanges[0].NumDescriptors = 2;
     outputRanges[0].BaseShaderRegister = 0;
@@ -2534,6 +2581,12 @@ bool RayTracingManager::CreateGlobalRootSignature()
     outputRanges[2].RegisterSpace = 0;
     outputRanges[2].OffsetInDescriptorsFromTableStart =
         c_atrousFilterAUavIndex;
+    outputRanges[3].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    outputRanges[3].NumDescriptors = 1;
+    outputRanges[3].BaseShaderRegister = 12;
+    outputRanges[3].RegisterSpace = 0;
+    outputRanges[3].OffsetInDescriptorsFromTableStart =
+        c_metallicGuideUavIndex;
 
     D3D12_DESCRIPTOR_RANGE environmentRange = {};
     environmentRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -2685,8 +2738,8 @@ bool RayTracingManager::CreateGlobalRootSignature()
 
 bool RayTracingManager::CreateAtrousPipeline()
 {
-    D3D12_DESCRIPTOR_RANGE descriptorRanges[9] = {};
-    for (UINT rangeIndex = 0; rangeIndex < 8; ++rangeIndex)
+    D3D12_DESCRIPTOR_RANGE descriptorRanges[10] = {};
+    for (UINT rangeIndex = 0; rangeIndex < 9; ++rangeIndex)
     {
         descriptorRanges[rangeIndex].RangeType =
             D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -2694,14 +2747,14 @@ bool RayTracingManager::CreateAtrousPipeline()
         descriptorRanges[rangeIndex].BaseShaderRegister = rangeIndex;
         descriptorRanges[rangeIndex].OffsetInDescriptorsFromTableStart = 0;
     }
-    descriptorRanges[8].RangeType =
+    descriptorRanges[9].RangeType =
         D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
-    descriptorRanges[8].NumDescriptors = 1;
-    descriptorRanges[8].BaseShaderRegister = 0;
-    descriptorRanges[8].OffsetInDescriptorsFromTableStart = 0;
+    descriptorRanges[9].NumDescriptors = 1;
+    descriptorRanges[9].BaseShaderRegister = 0;
+    descriptorRanges[9].OffsetInDescriptorsFromTableStart = 0;
 
-    D3D12_ROOT_PARAMETER rootParameters[10] = {};
-    for (UINT parameterIndex = 0; parameterIndex < 9; ++parameterIndex)
+    D3D12_ROOT_PARAMETER rootParameters[11] = {};
+    for (UINT parameterIndex = 0; parameterIndex < 10; ++parameterIndex)
     {
         rootParameters[parameterIndex].ParameterType =
             D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -2712,11 +2765,11 @@ bool RayTracingManager::CreateAtrousPipeline()
         rootParameters[parameterIndex].ShaderVisibility =
             D3D12_SHADER_VISIBILITY_ALL;
     }
-    rootParameters[9].ParameterType =
+    rootParameters[10].ParameterType =
         D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
-    rootParameters[9].Constants.ShaderRegister = 0;
-    rootParameters[9].Constants.Num32BitValues = 11;
-    rootParameters[9].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParameters[10].Constants.ShaderRegister = 0;
+    rootParameters[10].Constants.Num32BitValues = 14;
+    rootParameters[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
     rootSignatureDesc.NumParameters = _countof(rootParameters);

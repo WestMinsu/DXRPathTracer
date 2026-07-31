@@ -79,7 +79,40 @@ public:
     void SetInitialAtrousIterationCount(UINT iterationCount)
     {
         m_atrousIterations = static_cast<int>(
-            iterationCount < 1u ? 1u : (iterationCount > 5u ? 5u : iterationCount));
+            iterationCount < 1u ? 1u : (iterationCount > 8u ? 8u : iterationCount));
+    }
+    void SetInitialAtrousSpecularMaterialWeightMode(UINT mode)
+    {
+        m_atrousSpecularMaterialWeightMode = static_cast<int>(
+            mode > RayTracingManager::c_specularMaterialWeightF0
+            ? RayTracingManager::c_specularMaterialWeightF0
+            : mode);
+    }
+    void SetInitialAtrousSpecularRoughnessWeightMode(UINT mode)
+    {
+        m_atrousSpecularRoughnessWeightMode = static_cast<int>(
+            mode > RayTracingManager::c_specularRoughnessWeightRoughness
+            ? RayTracingManager::c_specularRoughnessWeightRoughness
+            : mode);
+    }
+    void SetInitialAtrousKernelMode(UINT mode)
+    {
+        m_atrousKernelMode = static_cast<int>(
+            mode > RayTracingManager::c_atrousKernel5x5
+            ? RayTracingManager::c_atrousKernel5x5
+            : mode);
+    }
+    void SetInitialAtrousNormalExponent(float normalExponent)
+    {
+        m_atrousNormalExponent = normalExponent < 1.0f
+            ? 1.0f
+            : (normalExponent > 256.0f ? 256.0f : normalExponent);
+    }
+    void SetInitialAtrousDepthSigma(float depthSigma)
+    {
+        m_atrousDepthSigma = depthSigma < 0.0001f
+            ? 0.0001f
+            : (depthSigma > 0.1f ? 0.1f : depthSigma);
     }
     void SetInitialAtrousColorSigma(float colorSigma)
     {
@@ -247,7 +280,16 @@ private:
     bool m_enableAtrous = false;
     int m_temporalDebugView = static_cast<int>(
         RayTracingManager::c_temporalDebugNone);
-    int m_atrousIterations = 2;
+    int m_atrousIterations = 5;
+    int m_atrousSpecularIterations = 3;
+    int m_atrousSpecularMaterialWeightMode = static_cast<int>(
+        RayTracingManager::c_specularMaterialWeightF0);
+    int m_atrousSpecularRoughnessWeightMode = static_cast<int>(
+        RayTracingManager::c_specularRoughnessWeightRoughness);
+    int m_atrousKernelMode = static_cast<int>(
+        RayTracingManager::c_atrousKernel3x3);
+    float m_atrousNormalExponent = 32.0f;
+    float m_atrousDepthSigma = 0.01f;
     float m_atrousColorSigma = 4.0f;
     int m_lightingMode = static_cast<int>(
         RayTracingManager::c_lightingModeBsdf);

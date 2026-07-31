@@ -550,6 +550,7 @@ void TracePrimaryGuide(
             (payload.dynamicInstance != 0u
                 ? float(payload.dynamicInstance + 1u) * 2.0f
                 : 0.0f));
+    g_metallicGuide[launchIndex] = payload.metallic;
 }
 
 void TracePath(
@@ -873,6 +874,7 @@ void RunRaygen()
             float4(0.0f, 0.0f, 0.0f, -1.0f);
         g_materialGuide[launchIndex] =
             float4(0.0f, 0.0f, 0.0f, -1.0f);
+        g_metallicGuide[launchIndex] = -1.0f;
     }
     float3 sampleRadiance = float3(0.0f, 0.0f, 0.0f);
     float3 sampleDiffuseDenoisingRadiance =
@@ -1385,17 +1387,13 @@ void MyClosestHitShader_SurfaceQuery(
         uint instanceIndex = InstanceID();
         if (instanceIndex < g_previousInstanceTransformCount)
         {
-            float3 objectPosition =
-                ObjectRayOrigin() + ObjectRayDirection() * RayTCurrent();
-            InstanceTransform previousTransform =
-                g_previousInstanceTransforms[instanceIndex];
-            previousWorldPosition = float3(
-                dot(previousTransform.row0.xyz, objectPosition) +
-                    previousTransform.row0.w,
-                dot(previousTransform.row1.xyz, objectPosition) +
-                    previousTransform.row1.w,
-                dot(previousTransform.row2.xyz, objectPosition) +
-                    previousTransform.row2.w);
+            float4 objectPosition = float4(
+                ObjectRayOrigin() + ObjectRayDirection() * RayTCurrent(),
+                1.0f);
+            row_major float3x4 previousObjectToWorld =
+                g_previousInstanceTransforms[instanceIndex].objectToWorld;
+            previousWorldPosition =
+                mul(previousObjectToWorld, objectPosition);
         }
         payload.emission = previousWorldPosition;
     }

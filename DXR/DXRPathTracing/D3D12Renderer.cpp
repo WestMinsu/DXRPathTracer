@@ -277,6 +277,18 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     m_rayTracingManager->SetAtrousEnabled(m_enableAtrous);
     m_rayTracingManager->SetAtrousIterationCount(
         static_cast<UINT>(m_atrousIterations));
+    m_rayTracingManager->SetAtrousSpecularIterationCount(
+        static_cast<UINT>(m_atrousSpecularIterations));
+    m_rayTracingManager->SetAtrousSpecularMaterialWeightMode(
+        static_cast<UINT>(m_atrousSpecularMaterialWeightMode));
+    m_rayTracingManager->SetAtrousSpecularRoughnessWeightMode(
+        static_cast<UINT>(m_atrousSpecularRoughnessWeightMode));
+    m_rayTracingManager->SetAtrousKernelMode(
+        static_cast<UINT>(m_atrousKernelMode));
+    m_rayTracingManager->SetAtrousNormalExponent(
+        m_atrousNormalExponent);
+    m_rayTracingManager->SetAtrousDepthSigma(
+        m_atrousDepthSigma);
     m_rayTracingManager->SetAtrousColorSigma(m_atrousColorSigma);
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
         m_animateDynamicSphere);
@@ -349,6 +361,18 @@ void D3D12Renderer::Render()
     m_rayTracingManager->SetAtrousEnabled(m_enableAtrous);
     m_rayTracingManager->SetAtrousIterationCount(
         static_cast<UINT>(m_atrousIterations));
+    m_rayTracingManager->SetAtrousSpecularIterationCount(
+        static_cast<UINT>(m_atrousSpecularIterations));
+    m_rayTracingManager->SetAtrousSpecularMaterialWeightMode(
+        static_cast<UINT>(m_atrousSpecularMaterialWeightMode));
+    m_rayTracingManager->SetAtrousSpecularRoughnessWeightMode(
+        static_cast<UINT>(m_atrousSpecularRoughnessWeightMode));
+    m_rayTracingManager->SetAtrousKernelMode(
+        static_cast<UINT>(m_atrousKernelMode));
+    m_rayTracingManager->SetAtrousNormalExponent(
+        m_atrousNormalExponent);
+    m_rayTracingManager->SetAtrousDepthSigma(
+        m_atrousDepthSigma);
     m_rayTracingManager->SetAtrousColorSigma(m_atrousColorSigma);
     m_rayTracingManager->SetEnableAccumulation(m_enableAccumulation);
     m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
@@ -1700,10 +1724,41 @@ void D3D12Renderer::BuildImGuiFrame()
     if (m_enableAtrous)
     {
         ImGui::SliderInt(
-            "A-Trous Iterations",
+            "Diffuse Iterations",
             &m_atrousIterations,
             1,
-            5);
+            8);
+        ImGui::SliderInt(
+            "Specular Iterations",
+            &m_atrousSpecularIterations,
+            1,
+            8);
+        ImGui::Combo(
+            "Specular Material Weight",
+            &m_atrousSpecularMaterialWeightMode,
+            "None\0Albedo\0F0\0");
+        ImGui::Combo(
+            "Specular Roughness Weight",
+            &m_atrousSpecularRoughnessWeightMode,
+            "None\0Roughness\0");
+        ImGui::Combo(
+            "A-Trous Kernel",
+            &m_atrousKernelMode,
+            "3x3\0" "5x5\0");
+        ImGui::SliderFloat(
+            "Normal Exponent",
+            &m_atrousNormalExponent,
+            1.0f,
+            256.0f,
+            "%.1f",
+            ImGuiSliderFlags_Logarithmic);
+        ImGui::SliderFloat(
+            "Depth Sigma",
+            &m_atrousDepthSigma,
+            0.0001f,
+            0.1f,
+            "%.4f",
+            ImGuiSliderFlags_Logarithmic);
         ImGui::SliderFloat(
             "A-Trous Color Sigma",
             &m_atrousColorSigma,
@@ -1711,9 +1766,11 @@ void D3D12Renderer::BuildImGuiFrame()
             16.0f,
             "%.2f");
         ImGui::TextDisabled(
-            "Variance + normal/depth/albedo/roughness guided.");
+            "Diffuse: albedo; Specular guides are independently selectable.");
         ImGui::TextDisabled(
-            "Filters indirect light only; lower sigma preserves detail.");
+            "Lower normal exponent smooths curves; lower depth sigma blocks silhouettes.");
+        ImGui::TextDisabled(
+            "Diffuse and specular use independent filter widths.");
         ImGui::TextDisabled(
             "HDR PFM accumulation remains unfiltered.");
     }

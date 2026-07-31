@@ -92,12 +92,11 @@ struct EnvironmentAliasEntry
     uint padding;
 };
 
-// Three object-to-world rows, mirrored by std::array<float, 12> on the CPU.
+// A row-major object-to-world transform, mirrored by std::array<float, 12>
+// on the CPU.
 struct InstanceTransform
 {
-    float4 row0;
-    float4 row1;
-    float4 row2;
+    row_major float3x4 objectToWorld;
 };
 
 static const uint c_sceneCornellBox = 0;
@@ -139,8 +138,8 @@ RWTexture2D<float4> g_output : register(u0);
 RWTexture2D<float4> g_accumulation : register(u1);
 RWTexture2D<float4> g_normalHitDistance : register(u3);
 RWTexture2D<float4> g_materialGuide : register(u4);
-// These legacy-named resources store the complete primary-surface lobe
-// radiance (direct + indirect) used by the denoiser.
+// Complete primary-surface radiance split by the first BSDF lobe.
+// Each signal includes both direct and indirect lighting.
 RWTexture2D<float4> g_diffuseIndirectAccumulation : register(u5);
 RWTexture2D<float4> g_specularIndirectAccumulation : register(u6);
 RWTexture2D<float2> g_diffuseLuminanceMoments : register(u7);
@@ -151,6 +150,7 @@ RWTexture2D<float2> g_specularLuminanceMoments : register(u8);
 RWTexture2D<float4> g_currentDiffuseRadiance : register(u9);
 RWTexture2D<float4> g_currentSpecularRadiance : register(u10);
 RWTexture2D<float4> g_currentTotalRadiance : register(u11);
+RWTexture2D<float> g_metallicGuide : register(u12);
 RWStructuredBuffer<uint> g_statistics : register(u2);
 RaytracingAccelerationStructure g_scene : register(t0);
 StructuredBuffer<Vertex> g_vertices : register(t1);

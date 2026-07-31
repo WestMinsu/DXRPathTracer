@@ -6,6 +6,7 @@ Texture2D<float4> g_diffuseIndirectAccumulation : register(t4);
 Texture2D<float4> g_specularIndirectAccumulation : register(t5);
 Texture2D<float4> g_totalAccumulation : register(t6);
 Texture2D<float4> g_filteredDiffuse : register(t7);
+Texture2D<float> g_metallicGuide : register(t8);
 RWTexture2D<float4> g_destination : register(u0);
 
 cbuffer AtrousSettings : register(b0)
@@ -20,19 +21,49 @@ cbuffer AtrousSettings : register(b0)
     float g_exposure;
     uint g_demodulateDiffuse;
     uint g_filterChannel;
+    uint g_specularMaterialWeightMode;
+    uint g_specularRoughnessWeightMode;
+    uint g_kernelMode;
 };
 
 static const uint c_filterChannelDiffuse = 0u;
 static const uint c_filterChannelSpecular = 1u;
+static const uint c_specularMaterialWeightNone = 0u;
+static const uint c_specularMaterialWeightAlbedo = 1u;
+static const uint c_specularMaterialWeightF0 = 2u;
+static const uint c_specularRoughnessWeightNone = 0u;
+static const uint c_specularRoughnessWeightRoughness = 1u;
+static const uint c_atrousKernel3x3 = 0u;
+static const uint c_atrousKernel5x5 = 1u;
 
-// A compact B3-style kernel. Two 3x3 passes require 18 taps per pixel,
-// compared with the previous three 5x5 passes (75 taps per pixel).
-static const float c_kernel[3] =
+static const float c_kernel3x3[3] =
 {
     1.0f / 4.0f,
     2.0f / 4.0f,
     1.0f / 4.0f
 };
+
+// Standard separable B3 spline kernel used by A-Trous filtering.
+static const float c_kernel5x5[5] =
+{
+    1.0f / 16.0f,
+    4.0f / 16.0f,
+    6.0f / 16.0f,
+    4.0f / 16.0f,
+    1.0f / 16.0f
+};
+
+int KernelRadius()
+{
+    return g_kernelMode == c_atrousKernel5x5 ? 2 : 1;
+}
+
+float KernelWeight1D(int offset)
+{
+    return g_kernelMode == c_atrousKernel5x5
+        ? c_kernel5x5[offset + 2]
+        : c_kernel3x3[offset + 1];
+}
 
 float Luminance(float3 color)
 {
@@ -80,6 +111,56 @@ float3 LoadFilterValue(int2 pixel)
     return value;
 }
 
+float3 GuideF0(float3 baseColor, float metallic)
+{
+    // Metallic-roughness workflow: dielectrics use about 4% normal-incidence
+    // reflectance, while metals use their base color as colored F0.
+    return lerp(0.04f.xxx, baseColor, saturate(metallic));
+}
+
+float MaterialEdgeWeight(
+    float4 centerMaterial,
+    float centerMetallic,
+    float4 sampleMaterial,
+    float sampleMetallic)
+{
+    if (g_filterChannel == c_filterChannelDiffuse ||
+        g_specularMaterialWeightMode == c_specularMaterialWeightAlbedo)
+    {
+        return exp(
+            -length(sampleMaterial.rgb - centerMaterial.rgb) / 0.12f);
+    }
+    if (g_specularMaterialWeightMode == c_specularMaterialWeightF0)
+    {
+        float3 centerF0 = GuideF0(centerMaterial.rgb, centerMetallic);
+        float3 sampleF0 = GuideF0(sampleMaterial.rgb, sampleMetallic);
+        return exp(-length(sampleF0 - centerF0) / 0.12f);
+    }
+    return 1.0f;
+}
+
+float RoughnessEdgeWeight(float centerRoughness, float sampleRoughness)
+{
+    return g_filterChannel == c_filterChannelSpecular &&
+        g_specularRoughnessWeightMode ==
+            c_specularRoughnessWeightRoughness
+        ? exp(-abs(sampleRoughness - centerRoughness) / 0.10f)
+        : 1.0f;
+}
+
+float ChannelNormalExponent(float roughness)
+{
+    if (g_filterChannel != c_filterChannelSpecular)
+        return g_normalExponent;
+
+    // Glossy reflections vary rapidly for small normal changes. Tighten the
+    // normal guide at low roughness and relax it for broad rough reflections.
+    return lerp(
+        g_normalExponent * 4.0f,
+        g_normalExponent * 0.5f,
+        saturate(roughness));
+}
+
 float StandardError(int2 pixel, float centerLuminance)
 {
     float sampleCount = max(
@@ -125,9 +206,6 @@ float3 ReconstructRadiance(float3 filteredSpecular, int2 pixel)
 {
     float3 totalRadiance =
         LoadAverageRadiance(g_totalAccumulation, pixel);
-    // The legacy-named accumulation textures contain complete primary-surface
-    // diffuse/specular radiance. Their residual is only camera-visible
-    // emission/environment and remains unfiltered.
     float3 originalDiffuse =
         LoadAverageRadiance(
             g_diffuseIndirectAccumulation,
@@ -136,10 +214,11 @@ float3 ReconstructRadiance(float3 filteredSpecular, int2 pixel)
         LoadAverageRadiance(
             g_specularIndirectAccumulation,
             pixel);
-    float3 unfilteredResidual =
-        max(
-            totalRadiance - originalDiffuse - originalSpecular,
-            0.0f);
+    // Camera-visible environment/emission is not associated with a primary
+    // surface lobe. Preserve that residual without spatial filtering.
+    float3 unfilteredResidual = max(
+        totalRadiance - originalDiffuse - originalSpecular,
+        0.0f);
     float3 filteredDiffuse =
         max(g_filteredDiffuse.Load(int3(pixel, 0)).rgb, 0.0f);
     return unfilteredResidual +
@@ -193,6 +272,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float standardError = StandardError(centerPixel, centerLuminance);
     float3 centerNormal = normalize(centerNormalDepth.xyz);
     float centerDepth = centerNormalDepth.w;
+    float centerRoughness = GuideRoughness(centerMaterial.a);
+    float centerMetallic = saturate(
+        g_metallicGuide.Load(int3(centerPixel, 0)));
+    float normalExponent = ChannelNormalExponent(centerRoughness);
     float depthScale =
         max(centerDepth, 0.01f) * max(g_depthSigma, 1.0e-5f);
     float localLuminanceSum = 0.0f;
@@ -222,26 +305,31 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             if (localNormalDepth.w < 0.0f || localMaterial.a < 0.0f)
                 continue;
 
+            float localMetallic = saturate(
+                g_metallicGuide.Load(int3(localPixel, 0)));
             float normalWeight = pow(
                 saturate(dot(
                     centerNormal,
                     normalize(localNormalDepth.xyz))),
-                g_normalExponent);
+                normalExponent);
             float depthWeight = exp(
                 -abs(localNormalDepth.w - centerDepth) / depthScale);
-            float albedoWeight = exp(
-                -length(localMaterial.rgb - centerMaterial.rgb) / 0.12f);
-            float roughnessWeight = exp(
-                -abs(
-                    GuideRoughness(localMaterial.a) -
-                    GuideRoughness(centerMaterial.a)) / 0.10f);
+            float materialWeight = MaterialEdgeWeight(
+                centerMaterial,
+                centerMetallic,
+                localMaterial,
+                localMetallic);
+            float roughnessWeight = RoughnessEdgeWeight(
+                centerRoughness,
+                GuideRoughness(localMaterial.a));
             float spatialWeight =
-                c_kernel[localX + 1] * c_kernel[localY + 1];
+                c_kernel3x3[localX + 1] *
+                c_kernel3x3[localY + 1];
             float guideWeight =
                 spatialWeight *
                 normalWeight *
                 depthWeight *
-                albedoWeight *
+                materialWeight *
                 roughnessWeight;
             float localLuminance =
                 Luminance(LoadFilterValue(localPixel));
@@ -278,11 +366,12 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float3 filteredColor = 0.0f;
     float totalWeight = 0.0f;
 
-    [unroll]
-    for (int y = -1; y <= 1; ++y)
+    int kernelRadius = KernelRadius();
+    [loop]
+    for (int y = -kernelRadius; y <= kernelRadius; ++y)
     {
-        [unroll]
-        for (int x = -1; x <= 1; ++x)
+        [loop]
+        for (int x = -kernelRadius; x <= kernelRadius; ++x)
         {
             int2 samplePixel =
                 centerPixel + int2(x, y) * int(g_stepWidth);
@@ -300,23 +389,28 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
             float3 sampleColor = LoadFilterValue(samplePixel);
             float3 sampleNormal = normalize(sampleNormalDepth.xyz);
+            float sampleMetallic = saturate(
+                g_metallicGuide.Load(int3(samplePixel, 0)));
             float normalWeight = pow(
                 saturate(dot(centerNormal, sampleNormal)),
-                g_normalExponent);
+                normalExponent);
             float depthWeight = exp(
                 -abs(sampleNormalDepth.w - centerDepth) / depthScale);
-            float albedoWeight = exp(
-                -length(sampleMaterial.rgb - centerMaterial.rgb) / 0.12f);
-            float roughnessWeight = exp(
-                -abs(
-                    GuideRoughness(sampleMaterial.a) -
-                    GuideRoughness(centerMaterial.a)) / 0.10f);
+            float materialWeight = MaterialEdgeWeight(
+                centerMaterial,
+                centerMetallic,
+                sampleMaterial,
+                sampleMetallic);
+            float roughnessWeight = RoughnessEdgeWeight(
+                centerRoughness,
+                GuideRoughness(sampleMaterial.a));
             float colorWeight = exp(
                 -abs(Luminance(sampleColor) - centerLuminance) /
                 colorScale);
             float spatialWeight =
-                c_kernel[x + 1] * c_kernel[y + 1];
-            float weight = spatialWeight * normalWeight * depthWeight * albedoWeight * roughnessWeight * colorWeight;
+                KernelWeight1D(x) * KernelWeight1D(y);
+            float weight = spatialWeight * normalWeight * depthWeight *
+                materialWeight * roughnessWeight * colorWeight;
 
             filteredColor += sampleColor * weight;
             totalWeight += weight;
