@@ -43,6 +43,7 @@ namespace
     {
         const cgltf_texture* texture = nullptr;
         bool isSrgb = false;
+        float alphaCoverageCutoff = -1.0f;
         std::uint32_t sceneTextureIndex = c_invalidSceneTextureIndex;
     };
 
@@ -453,8 +454,75 @@ namespace
         return static_cast<std::uint8_t>(std::floor(scaled + 0.5f));
     }
 
-    void GenerateMipChain(SceneTexture& texture)
+    float AlphaCoverage(
+        const SceneTextureMip& mip,
+        float cutoff,
+        float alphaScale)
     {
+        if (mip.rgba8.empty())
+            return 0.0f;
+
+        std::size_t coveredTexelCount = 0;
+        const std::size_t texelCount = mip.rgba8.size() / 4u;
+        for (std::size_t texel = 0; texel < texelCount; ++texel)
+        {
+            const float alpha = mip.rgba8[texel * 4u + 3u] / 255.0f;
+            if (Clamp01(alpha * alphaScale) >= cutoff)
+                ++coveredTexelCount;
+        }
+        return static_cast<float>(coveredTexelCount) /
+            static_cast<float>((std::max)(texelCount, std::size_t{ 1u }));
+    }
+
+    void PreserveAlphaCoverage(
+        SceneTextureMip& mip,
+        float cutoff,
+        float targetCoverage)
+    {
+        if (cutoff <= 0.0f || cutoff > 1.0f || mip.rgba8.empty())
+            return;
+
+        float lowerScale = 0.0f;
+        float upperScale = 1.0f;
+        while (AlphaCoverage(mip, cutoff, upperScale) < targetCoverage &&
+               upperScale < 64.0f)
+        {
+            upperScale *= 2.0f;
+        }
+
+        for (std::uint32_t iteration = 0; iteration < 16u; ++iteration)
+        {
+            const float middleScale = (lowerScale + upperScale) * 0.5f;
+            if (AlphaCoverage(mip, cutoff, middleScale) < targetCoverage)
+                lowerScale = middleScale;
+            else
+                upperScale = middleScale;
+        }
+
+        const float lowerError = std::abs(
+            AlphaCoverage(mip, cutoff, lowerScale) - targetCoverage);
+        const float upperError = std::abs(
+            AlphaCoverage(mip, cutoff, upperScale) - targetCoverage);
+        const float alphaScale = lowerError < upperError
+            ? lowerScale
+            : upperScale;
+        for (std::size_t offset = 3u;
+             offset < mip.rgba8.size();
+             offset += 4u)
+        {
+            mip.rgba8[offset] = FloatToByte(
+                (mip.rgba8[offset] / 255.0f) * alphaScale);
+        }
+    }
+
+    void GenerateMipChain(
+        SceneTexture& texture,
+        float alphaCoverageCutoff)
+    {
+        const float targetAlphaCoverage =
+            alphaCoverageCutoff >= 0.0f && !texture.mips.empty()
+            ? AlphaCoverage(texture.mips.front(), alphaCoverageCutoff, 1.0f)
+            : 0.0f;
         while (!texture.mips.empty())
         {
             const SceneTextureMip& source = texture.mips.back();
@@ -520,6 +588,13 @@ namespace
                     }
                 }
             }
+            if (alphaCoverageCutoff >= 0.0f)
+            {
+                PreserveAlphaCoverage(
+                    destination,
+                    alphaCoverageCutoff,
+                    targetAlphaCoverage);
+            }
             texture.mips.push_back(std::move(destination));
         }
     }
@@ -555,6 +630,7 @@ namespace
     bool FindOrLoadTexture(
         const cgltf_texture_view& view,
         bool isSrgb,
+        float alphaCoverageCutoff,
         const std::wstring& gltfPath,
         SceneData& scene,
         std::vector<LoadedTextureKey>& loadedTextures,
@@ -569,7 +645,9 @@ namespace
 
         for (const LoadedTextureKey& loaded : loadedTextures)
         {
-            if (loaded.texture == view.texture && loaded.isSrgb == isSrgb)
+            if (loaded.texture == view.texture &&
+                loaded.isSrgb == isSrgb &&
+                loaded.alphaCoverageCutoff == alphaCoverageCutoff)
             {
                 textureIndex = loaded.sceneTextureIndex;
                 return true;
@@ -587,11 +665,12 @@ namespace
         texture.isSrgb = isSrgb ? 1u : 0u;
         if (!DecodeRgba8(encoded, texture, errorMessage))
             return false;
-        GenerateMipChain(texture);
+        GenerateMipChain(texture, alphaCoverageCutoff);
 
         textureIndex = static_cast<std::uint32_t>(scene.textures.size());
         scene.textures.push_back(std::move(texture));
-        loadedTextures.push_back({ view.texture, isSrgb, textureIndex });
+        loadedTextures.push_back(
+            { view.texture, isSrgb, alphaCoverageCutoff, textureIndex });
         return true;
     }
 
@@ -673,6 +752,9 @@ namespace
             }
 
             SceneMaterial material = MakeDefaultMaterial();
+            material.alphaCutoff = source.alpha_mode == cgltf_alpha_mode_mask
+                ? Clamp01(source.alpha_cutoff)
+                : -1.0f;
             if (source.has_pbr_metallic_roughness)
             {
                 material.baseColor[0] = Clamp01(source.pbr_metallic_roughness.base_color_factor[0]);
@@ -683,9 +765,18 @@ namespace
                 material.metallic = Clamp01(source.pbr_metallic_roughness.metallic_factor);
                 material.roughness = Clamp01(source.pbr_metallic_roughness.roughness_factor);
 
+                float alphaCoverageCutoff = -1.0f;
+                if (material.alphaCutoff >= 0.0f &&
+                    material.baseColorAlpha > 0.0f)
+                {
+                    alphaCoverageCutoff =
+                        material.alphaCutoff / material.baseColorAlpha;
+                }
+
                 if (!FindOrLoadTexture(
                     source.pbr_metallic_roughness.base_color_texture,
                     true,
+                    alphaCoverageCutoff,
                     gltfPath,
                     scene,
                     loadedTextures,
@@ -694,6 +785,7 @@ namespace
                     !FindOrLoadTexture(
                         source.pbr_metallic_roughness.metallic_roughness_texture,
                         false,
+                        -1.0f,
                         gltfPath,
                         scene,
                         loadedTextures,
@@ -707,6 +799,7 @@ namespace
             if (!FindOrLoadTexture(
                 source.normal_texture,
                 false,
+                -1.0f,
                 gltfPath,
                 scene,
                 loadedTextures,
@@ -718,10 +811,6 @@ namespace
             material.normalTextureScale = source.normal_texture.texture
                 ? source.normal_texture.scale
                 : 1.0f;
-            material.alphaCutoff = source.alpha_mode == cgltf_alpha_mode_mask
-                ? Clamp01(source.alpha_cutoff)
-                : -1.0f;
-
             const float emissiveStrength = source.has_emissive_strength
                 ? std::max(source.emissive_strength.emissive_strength, 0.0f)
                 : 1.0f;

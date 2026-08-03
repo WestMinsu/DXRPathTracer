@@ -96,7 +96,10 @@ float EstimateTriangleUvFootprint(
         uvPerWorld * grazingScale;
 }
 
-bool PassesSceneAlphaMask(uint primitiveIndex, float2 texCoord)
+bool PassesSceneAlphaMask(
+    uint primitiveIndex,
+    float2 texCoord,
+    float uvFootprint)
 {
     SceneMaterial material = GetSceneMaterial(primitiveIndex);
     if (material.alphaCutoff < 0.0f)
@@ -109,8 +112,9 @@ bool PassesSceneAlphaMask(uint primitiveIndex, float2 texCoord)
     {
         uint textureIndex = NonUniformResourceIndex(
             material.baseColorTextureIndex);
+        float mipLevel = TextureMipLevel(textureIndex, uvFootprint);
         alpha *= g_materialTextures[textureIndex].SampleLevel(
-                g_materialSampler, texCoord, 0.0f).a;
+                g_materialSampler, texCoord, mipLevel).a;
     }
     return alpha >= material.alphaCutoff;
 }

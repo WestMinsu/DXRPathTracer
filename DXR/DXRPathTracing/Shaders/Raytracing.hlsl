@@ -1307,7 +1307,20 @@ bool PassesCurrentAlphaMask(
     uint i1 = hitGeometry.vertexOffset + g_indices[indexOffset + 1u];
     uint i2 = hitGeometry.vertexOffset + g_indices[indexOffset + 2u];
     float2 texCoord = InterpolateTexCoord(i0, i1, i2, attributes);
-    return PassesSceneAlphaMask(globalPrimitiveIndex, texCoord);
+    float3x4 objectToWorldTransform = ObjectToWorld3x4();
+    float3 worldNormal = normalize(mul(
+        (float3x3)objectToWorldTransform,
+        InterpolateNormal(i0, i1, i2, attributes)));
+    float uvFootprint = EstimateTriangleUvFootprint(
+        i0,
+        i1,
+        i2,
+        objectToWorldTransform,
+        worldNormal);
+    return PassesSceneAlphaMask(
+        globalPrimitiveIndex,
+        texCoord,
+        uvFootprint);
 }
 
 [shader("anyhit")]
