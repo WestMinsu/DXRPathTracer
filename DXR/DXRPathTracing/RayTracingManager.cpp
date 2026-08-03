@@ -149,7 +149,7 @@ namespace
         UINT samplesPerPixel;
         UINT previousInstanceTransformCount;
         float previousCameraPosition[3];
-        UINT temporalTransformPadding;
+        float textureLodBiasOrDisabled;
         float previousCameraTarget[3];
         UINT enableTemporalReprojection;
         UINT temporalDebugView;
@@ -179,9 +179,12 @@ namespace
         float adaptiveLowHistoryDepthSigma;
         float adaptiveStableNormalExponent;
         float adaptiveStableDepthSigma;
+        UINT passIndex;
+        UINT adaptiveIterations;
+        UINT debugView;
     };
     static_assert(
-        sizeof(AtrousSettingsConstants) == 21 * sizeof(std::uint32_t));
+        sizeof(AtrousSettingsConstants) == 24 * sizeof(std::uint32_t));
 
     struct TemporalColorClipSettingsConstants
     {
@@ -823,7 +826,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         m_previousCameraPosition.begin(),
         m_previousCameraPosition.end(),
         renderSettings.previousCameraPosition);
-    renderSettings.temporalTransformPadding = 0u;
+    renderSettings.textureLodBiasOrDisabled =
+        m_enableTextureLod ? m_textureLodBias : -100.0f;
     std::copy(
         m_previousCameraTarget.begin(),
         m_previousCameraTarget.end(),
@@ -1197,13 +1201,15 @@ void RayTracingManager::DispatchAtrousFilter(
             ID3D12Resource* finalResource,
             UINT iterationCount)
     {
+        const UINT dispatchIterationCount =
+            m_enableAtrousAdaptiveIterations ? 5u : iterationCount;
         for (UINT passIndex = 0;
-             passIndex < iterationCount;
+             passIndex < dispatchIterationCount;
              ++passIndex)
         {
             const bool firstPass = passIndex == 0u;
             const bool finalPass =
-                passIndex + 1u == iterationCount;
+                passIndex + 1u == dispatchIterationCount;
             const bool sourceIsA =
                 !firstPass && ((passIndex - 1u) % 2u == 0u);
             const bool destinationIsA = passIndex % 2u == 0u;
@@ -1256,6 +1262,10 @@ void RayTracingManager::DispatchAtrousFilter(
                 m_atrousAdaptiveStableNormalExponent;
             settings.adaptiveStableDepthSigma =
                 m_atrousAdaptiveStableDepthSigma;
+            settings.passIndex = passIndex;
+            settings.adaptiveIterations =
+                m_enableAtrousAdaptiveIterations ? 1u : 0u;
+            settings.debugView = m_atrousDebugView;
 
             commandList->SetComputeRootDescriptorTable(
                 0,
@@ -1292,7 +1302,7 @@ void RayTracingManager::DispatchAtrousFilter(
                 gpuDescriptorHandle(destinationDescriptorIndex));
             commandList->SetComputeRoot32BitConstants(
                 10,
-                21,
+                24,
                 &settings,
                 0);
             commandList->Dispatch(
@@ -1552,6 +1562,22 @@ void RayTracingManager::SetPbrMaterialOverride(bool enabled)
         return;
 
     m_overridePbrMaterial = enabled;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetTextureLodSettings(bool enabled, float bias)
+{
+    const float clampedBias = bias < -4.0f
+        ? -4.0f
+        : (bias > 4.0f ? 4.0f : bias);
+    if (m_enableTextureLod == enabled &&
+        m_textureLodBias == clampedBias)
+    {
+        return;
+    }
+
+    m_enableTextureLod = enabled;
+    m_textureLodBias = clampedBias;
     ResetAccumulation();
 }
 
@@ -2789,7 +2815,7 @@ bool RayTracingManager::CreateAtrousPipeline()
     rootParameters[10].ParameterType =
         D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[10].Constants.ShaderRegister = 0;
-    rootParameters[10].Constants.Num32BitValues = 21;
+    rootParameters[10].Constants.Num32BitValues = 24;
     rootParameters[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};

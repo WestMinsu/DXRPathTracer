@@ -81,6 +81,17 @@ public:
         m_atrousIterations = static_cast<int>(
             iterationCount < 1u ? 1u : (iterationCount > 8u ? 8u : iterationCount));
     }
+    void SetInitialAtrousAdaptiveIterationsEnabled(bool enabled)
+    {
+        m_enableAtrousAdaptiveIterations = enabled;
+    }
+    void SetInitialAtrousDebugView(UINT debugView)
+    {
+        m_atrousDebugView = static_cast<int>(
+            debugView > RayTracingManager::c_atrousDebugIterationCount
+            ? RayTracingManager::c_atrousDebugNone
+            : debugView);
+    }
     void SetInitialAtrousSpecularMaterialWeightMode(UINT mode)
     {
         m_atrousSpecularMaterialWeightMode = static_cast<int>(
@@ -143,6 +154,13 @@ public:
     {
         m_atrousColorSigma =
             colorSigma < 0.25f ? 0.25f : (colorSigma > 16.0f ? 16.0f : colorSigma);
+    }
+    void SetInitialTextureLodSettings(bool enabled, float bias)
+    {
+        m_enableTextureLod = enabled;
+        m_textureLodBias = bias < -4.0f
+            ? -4.0f
+            : (bias > 4.0f ? 4.0f : bias);
     }
     void SetInitialDynamicSphereAnimationEnabled(bool enabled)
     {
@@ -306,7 +324,10 @@ private:
     int m_temporalDebugView = static_cast<int>(
         RayTracingManager::c_temporalDebugNone);
     int m_atrousIterations = 5;
-    int m_atrousSpecularIterations = 3;
+    int m_atrousSpecularIterations = 4;
+    bool m_enableAtrousAdaptiveIterations = false;
+    int m_atrousDebugView = static_cast<int>(
+        RayTracingManager::c_atrousDebugNone);
     int m_atrousSpecularMaterialWeightMode = static_cast<int>(
         RayTracingManager::c_specularMaterialWeightF0);
     int m_atrousSpecularRoughnessWeightMode = static_cast<int>(
@@ -335,6 +356,8 @@ private:
     float m_pbrMetallic = 1.0f;
     float m_pbrRoughness = 0.35f;
     bool m_overridePbrMaterial = false;
+    bool m_enableTextureLod = true;
+    float m_textureLodBias = 0.0f;
     bool m_enableIbl = true;
     float m_iblIntensity = 2.0f;
     UINT m_validationSeed = 0;

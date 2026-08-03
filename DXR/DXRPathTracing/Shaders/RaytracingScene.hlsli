@@ -8,6 +8,94 @@ SceneMaterial GetSceneMaterial(uint primitiveIndex)
     return g_sceneMaterials[g_primitiveMaterialIndices[primitiveIndex]];
 }
 
+float TextureMipLevel(uint textureIndex, float uvFootprint)
+{
+    if (g_textureLodBiasOrDisabled < -16.0f)
+        return 0.0f;
+
+    uint textureWidth;
+    uint textureHeight;
+    uint mipLevelCount;
+    g_materialTextures[textureIndex].GetDimensions(
+        0u,
+        textureWidth,
+        textureHeight,
+        mipLevelCount);
+    float texelFootprint = uvFootprint *
+        float(max(textureWidth, textureHeight));
+    float mipLevel = log2(max(texelFootprint, 1.0f)) +
+        g_textureLodBiasOrDisabled;
+    return clamp(mipLevel, 0.0f, float(max(mipLevelCount, 1u) - 1u));
+}
+
+float EdgeUvPerWorld(
+    float3 worldPosition0,
+    float3 worldPosition1,
+    float2 texCoord0,
+    float2 texCoord1)
+{
+    float worldLength = length(worldPosition1 - worldPosition0);
+    return length(texCoord1 - texCoord0) /
+        max(worldLength, 1.0e-6f);
+}
+
+float EstimateTriangleUvFootprint(
+    uint i0,
+    uint i1,
+    uint i2,
+    float3x4 objectToWorldTransform,
+    float3 worldNormal)
+{
+    if (g_textureLodBiasOrDisabled < -16.0f)
+        return 0.0f;
+
+    float3 worldPosition0 = mul(
+        objectToWorldTransform,
+        float4(g_vertices[i0].position, 1.0f));
+    float3 worldPosition1 = mul(
+        objectToWorldTransform,
+        float4(g_vertices[i1].position, 1.0f));
+    float3 worldPosition2 = mul(
+        objectToWorldTransform,
+        float4(g_vertices[i2].position, 1.0f));
+    float2 texCoord0 = g_vertices[i0].texCoord;
+    float2 texCoord1 = g_vertices[i1].texCoord;
+    float2 texCoord2 = g_vertices[i2].texCoord;
+
+    float uvPerWorld = max(
+        EdgeUvPerWorld(
+            worldPosition0,
+            worldPosition1,
+            texCoord0,
+            texCoord1),
+        max(
+            EdgeUvPerWorld(
+                worldPosition0,
+                worldPosition2,
+                texCoord0,
+                texCoord2),
+            EdgeUvPerWorld(
+                worldPosition1,
+                worldPosition2,
+                texCoord1,
+                texCoord2)));
+
+    float3 hitPosition =
+        WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+    float cameraDistance = length(hitPosition - g_cameraPosition);
+    float pixelConeDiameter =
+        2.0f * tan(c_verticalFovRadians * 0.5f) /
+        max(float(DispatchRaysDimensions().y), 1.0f);
+    float viewAgreement = abs(dot(
+        normalize(worldNormal),
+        normalize(-WorldRayDirection())));
+    float grazingScale = min(
+        1.0f / max(viewAgreement, 0.25f),
+        4.0f);
+    return cameraDistance * pixelConeDiameter *
+        uvPerWorld * grazingScale;
+}
+
 bool PassesSceneAlphaMask(uint primitiveIndex, float2 texCoord)
 {
     SceneMaterial material = GetSceneMaterial(primitiveIndex);
@@ -37,7 +125,10 @@ float3 CornellSurfaceAlbedo(uint primitiveIndex)
     return GetSceneMaterial(primitiveIndex).baseColor;
 }
 
-PbrMaterial GetPbrMaterial(uint primitiveIndex, float2 texCoord)
+PbrMaterial GetPbrMaterial(
+    uint primitiveIndex,
+    float2 texCoord,
+    float uvFootprint)
 {
     SceneMaterial sceneMaterial = GetSceneMaterial(primitiveIndex);
     PbrMaterial material;
@@ -49,15 +140,17 @@ PbrMaterial GetPbrMaterial(uint primitiveIndex, float2 texCoord)
     {
         uint textureIndex = NonUniformResourceIndex(
             sceneMaterial.baseColorTextureIndex);
+        float mipLevel = TextureMipLevel(textureIndex, uvFootprint);
         material.baseColor *= g_materialTextures[textureIndex].SampleLevel(
-                g_materialSampler, texCoord, 0.0f).rgb;
+                g_materialSampler, texCoord, mipLevel).rgb;
     }
     if (sceneMaterial.metallicRoughnessTextureIndex != c_invalidSceneTextureIndex)
     {
         uint textureIndex = NonUniformResourceIndex(
             sceneMaterial.metallicRoughnessTextureIndex);
+        float mipLevel = TextureMipLevel(textureIndex, uvFootprint);
         float4 metallicRoughness = g_materialTextures[textureIndex].SampleLevel(
-                g_materialSampler, texCoord, 0.0f);
+                g_materialSampler, texCoord, mipLevel);
         material.roughness *= metallicRoughness.g;
         material.metallic *= metallicRoughness.b;
     }
@@ -76,6 +169,7 @@ PbrMaterial GetPbrMaterial(uint primitiveIndex, float2 texCoord)
 float3 ApplySceneNormalMap(
     uint primitiveIndex,
     float2 texCoord,
+    float uvFootprint,
     float4 interpolatedTangent,
     float3 normal)
 {
@@ -97,8 +191,9 @@ float3 ApplySceneNormalMap(
 
     uint textureIndex = NonUniformResourceIndex(
         sceneMaterial.normalTextureIndex);
+    float mipLevel = TextureMipLevel(textureIndex, uvFootprint);
     float3 tangentNormal = g_materialTextures[textureIndex].SampleLevel(
-            g_materialSampler, texCoord, 0.0f).xyz * 2.0f - 1.0f;
+            g_materialSampler, texCoord, mipLevel).xyz * 2.0f - 1.0f;
     tangentNormal.xy *= sceneMaterial.normalTextureScale;
     return normalize(
         tangent * tangentNormal.x +
@@ -106,9 +201,15 @@ float3 ApplySceneNormalMap(
         normal * tangentNormal.z);
 }
 
-float3 PbrMaterialDebugColor(uint primitiveIndex, float2 texCoord)
+float3 PbrMaterialDebugColor(
+    uint primitiveIndex,
+    float2 texCoord,
+    float uvFootprint)
 {
-    PbrMaterial material = GetPbrMaterial(primitiveIndex, texCoord);
+    PbrMaterial material = GetPbrMaterial(
+        primitiveIndex,
+        texCoord,
+        uvFootprint);
 
     if (g_pbrDebugView == c_pbrDebugAlbedo)
     {

@@ -29,11 +29,15 @@ namespace
         float pbrMetallic = 1.0f;
         float pbrRoughness = 0.35f;
         bool overridePbrMaterial = false;
+        bool enableTextureLod = true;
+        float textureLodBias = 0.0f;
         bool enableRussianRoulette = false;
         bool enableTemporalReprojection = false;
         bool enableAtrous = false;
         UINT temporalDebugView = RayTracingManager::c_temporalDebugNone;
         UINT atrousIterations = 5;
+        bool enableAtrousAdaptiveIterations = false;
+        UINT atrousDebugView = RayTracingManager::c_atrousDebugNone;
         UINT atrousSpecularMaterialWeightMode =
             RayTracingManager::c_specularMaterialWeightF0;
         UINT atrousSpecularRoughnessWeightMode =
@@ -271,6 +275,22 @@ namespace
                 gOptions.atrousIterations = static_cast<UINT>(
                     _wtoi(arguments[++index]));
             }
+            else if (argument == L"--atrous-adaptive-iterations" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.enableAtrousAdaptiveIterations =
+                    _wtoi(arguments[++index]) != 0;
+            }
+            else if (argument == L"--atrous-debug" &&
+                     index + 1 < argumentCount)
+            {
+                const std::wstring debugView = arguments[++index];
+                gOptions.atrousDebugView =
+                    debugView == L"iterations" ||
+                    debugView == L"iteration-count"
+                    ? RayTracingManager::c_atrousDebugIterationCount
+                    : RayTracingManager::c_atrousDebugNone;
+            }
             else if (argument == L"--atrous-color-sigma" &&
                      index + 1 < argumentCount)
             {
@@ -488,6 +508,18 @@ namespace
             {
                 gOptions.overridePbrMaterial = true;
             }
+            else if (argument == L"--texture-lod" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.enableTextureLod =
+                    _wtoi(arguments[++index]) != 0;
+            }
+            else if (argument == L"--texture-lod-bias" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.textureLodBias =
+                    static_cast<float>(_wtof(arguments[++index]));
+            }
             else if (argument == L"--ibl-intensity" && index + 1 < argumentCount)
             {
                 gOptions.iblIntensity = static_cast<float>(_wtof(arguments[++index]));
@@ -670,6 +702,10 @@ namespace
             gOptions.temporalDebugView);
         gRenderer.SetInitialAtrousIterationCount(
             gOptions.atrousIterations);
+        gRenderer.SetInitialAtrousAdaptiveIterationsEnabled(
+            gOptions.enableAtrousAdaptiveIterations);
+        gRenderer.SetInitialAtrousDebugView(
+            gOptions.atrousDebugView);
         gRenderer.SetInitialAtrousSpecularMaterialWeightMode(
             gOptions.atrousSpecularMaterialWeightMode);
         gRenderer.SetInitialAtrousSpecularRoughnessWeightMode(
@@ -693,6 +729,9 @@ namespace
             gOptions.atrousAdaptiveStableDepthSigma);
         gRenderer.SetInitialAtrousColorSigma(
             gOptions.atrousColorSigma);
+        gRenderer.SetInitialTextureLodSettings(
+            gOptions.enableTextureLod,
+            gOptions.textureLodBias);
         gRenderer.SetInitialDynamicSphereAnimationEnabled(
             gOptions.animateDynamicSphere);
         gRenderer.SetInitialDynamicCubeAnimationEnabled(

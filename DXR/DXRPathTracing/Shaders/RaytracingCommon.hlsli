@@ -222,7 +222,7 @@ cbuffer RenderSettings : register(b0)
     uint g_samplesPerPixel;
     uint g_previousInstanceTransformCount;
     float3 g_previousCameraPosition;
-    uint g_temporalTransformPadding;
+    float g_textureLodBiasOrDisabled;
     float3 g_previousCameraTarget;
     uint g_enableTemporalReprojection;
     uint g_temporalDebugView;

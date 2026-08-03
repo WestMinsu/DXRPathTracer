@@ -69,6 +69,8 @@ public:
     static constexpr UINT c_specularRoughnessWeightRoughness = 1;
     static constexpr UINT c_atrousKernel3x3 = 0;
     static constexpr UINT c_atrousKernel5x5 = 1;
+    static constexpr UINT c_atrousDebugNone = 0;
+    static constexpr UINT c_atrousDebugIterationCount = 1;
 
     bool Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height);
     bool Resize(UINT width, UINT height);
@@ -92,6 +94,16 @@ public:
     {
         m_atrousSpecularIterationCount =
             iterationCount < 1u ? 1u : (iterationCount > 8u ? 8u : iterationCount);
+    }
+    void SetAtrousAdaptiveIterationsEnabled(bool enabled)
+    {
+        m_enableAtrousAdaptiveIterations = enabled;
+    }
+    void SetAtrousDebugView(UINT debugView)
+    {
+        m_atrousDebugView = debugView > c_atrousDebugIterationCount
+            ? c_atrousDebugNone
+            : debugView;
     }
     void SetAtrousSpecularMaterialWeightMode(UINT mode)
     {
@@ -182,6 +194,7 @@ public:
     void SetPbrDebugView(UINT pbrDebugView);
     void SetPbrMaterial(float metallic, float roughness);
     void SetPbrMaterialOverride(bool enabled);
+    void SetTextureLodSettings(bool enabled, float bias);
     void SetIblSettings(bool enableIbl, float intensity);
     bool SetCamera(
         const std::array<float, 3>& position,
@@ -336,7 +349,9 @@ private:
     bool m_enableAtrous = false;
     UINT m_temporalDebugView = c_temporalDebugNone;
     UINT m_atrousIterationCount = 5;
-    UINT m_atrousSpecularIterationCount = 3;
+    UINT m_atrousSpecularIterationCount = 4;
+    bool m_enableAtrousAdaptiveIterations = false;
+    UINT m_atrousDebugView = c_atrousDebugNone;
     UINT m_atrousSpecularMaterialWeightMode = c_specularMaterialWeightF0;
     UINT m_atrousSpecularRoughnessWeightMode =
         c_specularRoughnessWeightRoughness;
@@ -359,6 +374,8 @@ private:
     float m_pbrMetallic = 1.0f;
     float m_pbrRoughness = 0.35f;
     bool m_overridePbrMaterial = false;
+    bool m_enableTextureLod = true;
+    float m_textureLodBias = 0.0f;
     bool m_enableIbl = true;
     bool m_enableStatistics = false;
     float m_iblIntensity = 1.0f;

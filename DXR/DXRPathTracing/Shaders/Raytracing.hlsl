@@ -1347,11 +1347,18 @@ void MyClosestHitShader_SurfaceQuery(
     float2 texCoord = InterpolateTexCoord(i0, i1, i2, attributes);
     float4 tangent = InterpolateTangent(i0, i1, i2, attributes);
     tangent.xyz = normalize(mul(objectToWorld, tangent.xyz));
+    float uvFootprint = EstimateTriangleUvFootprint(
+        i0,
+        i1,
+        i2,
+        objectToWorldTransform,
+        normal);
     if (IsPbrRenderingScene())
     {
         normal = ApplySceneNormalMap(
             globalPrimitiveIndex,
             texCoord,
+            uvFootprint,
             tangent,
             normal);
     }
@@ -1359,7 +1366,10 @@ void MyClosestHitShader_SurfaceQuery(
     PbrMaterial material;
     if (IsPbrRenderingScene())
     {
-        material = GetPbrMaterial(globalPrimitiveIndex, texCoord);
+        material = GetPbrMaterial(
+            globalPrimitiveIndex,
+            texCoord,
+            uvFootprint);
     }
     else
     {

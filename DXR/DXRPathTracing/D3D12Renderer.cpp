@@ -279,6 +279,12 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         static_cast<UINT>(m_atrousIterations));
     m_rayTracingManager->SetAtrousSpecularIterationCount(
         static_cast<UINT>(m_atrousSpecularIterations));
+    m_rayTracingManager->SetAtrousAdaptiveIterationsEnabled(
+        m_enableAtrousAdaptiveIterations);
+    m_rayTracingManager->SetAtrousDebugView(
+        m_enableAtrousAdaptiveIterations
+        ? static_cast<UINT>(m_atrousDebugView)
+        : RayTracingManager::c_atrousDebugNone);
     m_rayTracingManager->SetAtrousSpecularMaterialWeightMode(
         static_cast<UINT>(m_atrousSpecularMaterialWeightMode));
     m_rayTracingManager->SetAtrousSpecularRoughnessWeightMode(
@@ -301,6 +307,9 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_atrousAdaptiveStableNormalExponent,
         m_atrousAdaptiveStableDepthSigma);
     m_rayTracingManager->SetAtrousColorSigma(m_atrousColorSigma);
+    m_rayTracingManager->SetTextureLodSettings(
+        m_enableTextureLod,
+        m_textureLodBias);
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
         m_animateDynamicSphere);
     m_rayTracingManager->SetDynamicCubeAnimationEnabled(
@@ -374,6 +383,12 @@ void D3D12Renderer::Render()
         static_cast<UINT>(m_atrousIterations));
     m_rayTracingManager->SetAtrousSpecularIterationCount(
         static_cast<UINT>(m_atrousSpecularIterations));
+    m_rayTracingManager->SetAtrousAdaptiveIterationsEnabled(
+        m_enableAtrousAdaptiveIterations);
+    m_rayTracingManager->SetAtrousDebugView(
+        m_enableAtrousAdaptiveIterations
+        ? static_cast<UINT>(m_atrousDebugView)
+        : RayTracingManager::c_atrousDebugNone);
     m_rayTracingManager->SetAtrousSpecularMaterialWeightMode(
         static_cast<UINT>(m_atrousSpecularMaterialWeightMode));
     m_rayTracingManager->SetAtrousSpecularRoughnessWeightMode(
@@ -401,6 +416,9 @@ void D3D12Renderer::Render()
     m_rayTracingManager->SetPbrDebugView(static_cast<UINT>(m_pbrDebugView));
     m_rayTracingManager->SetPbrMaterial(m_pbrMetallic, m_pbrRoughness);
     m_rayTracingManager->SetPbrMaterialOverride(m_overridePbrMaterial);
+    m_rayTracingManager->SetTextureLodSettings(
+        m_enableTextureLod,
+        m_textureLodBias);
     m_rayTracingManager->SetIblSettings(m_enableIbl, m_iblIntensity);
     m_rayTracingManager->SetValidationSeed(m_validationSeed);
     m_rayTracingManager->SetExposure(m_exposure);
@@ -1617,6 +1635,19 @@ void D3D12Renderer::BuildImGuiFrame()
             m_rayTracingManager->SetPbrMaterial(m_pbrMetallic, m_pbrRoughness);
         }
 
+        ImGui::Checkbox("Ray Cone Texture LOD", &m_enableTextureLod);
+        if (m_enableTextureLod)
+        {
+            ImGui::SliderFloat(
+                "Texture LOD Bias",
+                &m_textureLodBias,
+                -2.0f,
+                2.0f,
+                "%.2f");
+            ImGui::TextDisabled(
+                "Higher bias reduces distant texture/normal-map aliasing.");
+        }
+
         bool iblChanged = false;
         iblChanged |= ImGui::Checkbox("Enable IBL", &m_enableIbl);
         iblChanged |= ImGui::SliderFloat("IBL Intensity", &m_iblIntensity, 0.0f, 4.0f, "%.2f");
@@ -1745,16 +1776,40 @@ void D3D12Renderer::BuildImGuiFrame()
     ImGui::Checkbox("A-Trous Filter", &m_enableAtrous);
     if (m_enableAtrous)
     {
+        ImGui::Checkbox(
+            "Adaptive Iterations",
+            &m_enableAtrousAdaptiveIterations);
         ImGui::SliderInt(
-            "Diffuse Iterations",
+            "Manual Diffuse Iterations",
             &m_atrousIterations,
             1,
             8);
         ImGui::SliderInt(
-            "Specular Iterations",
+            "Manual Specular Iterations",
             &m_atrousSpecularIterations,
             1,
             8);
+        if (m_enableAtrousAdaptiveIterations)
+        {
+            ImGui::Combo(
+                "A-Trous Debug View",
+                &m_atrousDebugView,
+                "Beauty\0Adaptive Iteration Count\0");
+            ImGui::TextDisabled(
+                "Auto: dynamic/low history 5; stable diffuse 4;");
+            ImGui::TextDisabled(
+                "stable specular 2/3/4 by roughness.");
+            ImGui::TextDisabled(
+                "Wide steps stop when fewer than 3 compatible neighbors remain.");
+            ImGui::TextDisabled(
+                "Manual iteration sliders are used only when Adaptive is OFF.");
+            if (m_atrousDebugView == static_cast<int>(
+                    RayTracingManager::c_atrousDebugIterationCount))
+            {
+                ImGui::TextDisabled(
+                    "Effective passes: blue 1, cyan 2, green 3, yellow 4, red 5.");
+            }
+        }
         ImGui::Combo(
             "Specular Material Weight",
             &m_atrousSpecularMaterialWeightMode,
