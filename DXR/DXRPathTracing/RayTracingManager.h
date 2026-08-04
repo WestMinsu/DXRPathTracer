@@ -82,6 +82,7 @@ public:
     void SetLightingMode(UINT lightingMode);
     void SetTemporalReprojectionEnabled(bool enabled);
     void SetDynamicObjectReprojectionEnabled(bool enabled);
+    void SetCurrentFrameVisibleResidualEnabled(bool enabled);
     void SetTemporalColorClipEnabled(bool enabled);
     void SetTemporalDebugView(UINT debugView);
     void SetAtrousEnabled(bool enabled);
@@ -345,6 +346,7 @@ private:
     bool m_enableRussianRoulette = false;
     bool m_enableTemporalReprojection = false;
     bool m_enableDynamicObjectReprojection = true;
+    bool m_useCurrentFrameVisibleResidual = true;
     bool m_enableTemporalColorClip = true;
     bool m_enableAtrous = false;
     UINT m_temporalDebugView = c_temporalDebugNone;

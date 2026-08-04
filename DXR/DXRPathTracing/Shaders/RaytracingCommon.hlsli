@@ -231,7 +231,19 @@ cbuffer RenderSettings : register(b0)
 
 bool DynamicObjectReprojectionEnabled()
 {
-    return g_enableDynamicObjectReprojection != 0u;
+    return (g_enableDynamicObjectReprojection & 1u) != 0u;
+}
+
+bool CurrentFrameVisibleResidualEnabled()
+{
+    return (g_enableDynamicObjectReprojection & 2u) != 0u;
+}
+
+bool TemporalLobeHistoryEnabled()
+{
+    return g_enableAtrous != 0u ||
+        (g_enableTemporalReprojection != 0u &&
+         CurrentFrameVisibleResidualEnabled());
 }
 
 bool IsPbrRenderingScene()

@@ -192,10 +192,11 @@ namespace
         float clipGamma;
         UINT minNeighborhoodSamples;
         UINT debugView;
+        UINT useCurrentFrameVisibleResidual;
     };
     static_assert(
         sizeof(TemporalColorClipSettingsConstants) ==
-        5 * sizeof(std::uint32_t));
+        6 * sizeof(std::uint32_t));
 
     struct GpuEmissiveTriangle
     {
@@ -836,7 +837,8 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         useTemporalHistory ? 1u : 0u;
     renderSettings.temporalDebugView = m_temporalDebugView;
     renderSettings.enableDynamicObjectReprojection =
-        m_enableDynamicObjectReprojection ? 1u : 0u;
+        (m_enableDynamicObjectReprojection ? 1u : 0u) |
+        (m_useCurrentFrameVisibleResidual ? 2u : 0u);
     commandList->SetComputeRoot32BitConstants(4, 42, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
@@ -1103,9 +1105,11 @@ void RayTracingManager::DispatchTemporalColorClip(
     settings.clipGamma = 2.0f;
     settings.minNeighborhoodSamples = 3u;
     settings.debugView = m_temporalDebugView;
+    settings.useCurrentFrameVisibleResidual =
+        m_useCurrentFrameVisibleResidual ? 1u : 0u;
     commandList->SetComputeRoot32BitConstants(
         12,
-        5,
+        6,
         &settings,
         0);
     commandList->Dispatch(
@@ -1490,6 +1494,15 @@ void RayTracingManager::SetDynamicObjectReprojectionEnabled(bool enabled)
         return;
 
     m_enableDynamicObjectReprojection = enabled;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetCurrentFrameVisibleResidualEnabled(bool enabled)
+{
+    if (m_useCurrentFrameVisibleResidual == enabled)
+        return;
+
+    m_useCurrentFrameVisibleResidual = enabled;
     ResetAccumulation();
 }
 
@@ -2196,7 +2209,6 @@ void RayTracingManager::WriteTemporalHistoryDescriptors()
     materialUavDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
     D3D12_UNORDERED_ACCESS_VIEW_DESC momentsUavDesc = float4UavDesc;
     momentsUavDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
-
     m_device->CreateUnorderedAccessView(
         m_accumulationTexture.Get(), nullptr, &float4UavDesc,
         descriptorHandle(1));
@@ -2218,7 +2230,6 @@ void RayTracingManager::WriteTemporalHistoryDescriptors()
     m_device->CreateUnorderedAccessView(
         m_specularLuminanceMomentsTexture.Get(), nullptr, &momentsUavDesc,
         descriptorHandle(7));
-
     D3D12_SHADER_RESOURCE_VIEW_DESC float4SrvDesc = {};
     float4SrvDesc.Shader4ComponentMapping =
         D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -2231,7 +2242,6 @@ void RayTracingManager::WriteTemporalHistoryDescriptors()
     materialSrvDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
     D3D12_SHADER_RESOURCE_VIEW_DESC momentsSrvDesc = float4SrvDesc;
     momentsSrvDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
-
     m_device->CreateShaderResourceView(
         m_diffuseIndirectAccumulationTexture.Get(), &float4SrvDesc,
         descriptorHandle(c_atrousDiffuseIndirectSrvIndex));
@@ -2275,7 +2285,6 @@ void RayTracingManager::WriteTemporalHistoryDescriptors()
     m_device->CreateShaderResourceView(
         m_previousSpecularLuminanceMomentsTexture.Get(), &momentsSrvDesc,
         descriptorHandle(c_temporalPreviousSpecularMomentsSrvIndex));
-
     const UINT transformFrame =
         static_cast<UINT>(m_frameIndex % c_tlasFrameCount);
     D3D12_SHADER_RESOURCE_VIEW_DESC transformSrvDesc = {};
@@ -2634,7 +2643,6 @@ bool RayTracingManager::CreateGlobalRootSignature()
     outputRanges[3].RegisterSpace = 0;
     outputRanges[3].OffsetInDescriptorsFromTableStart =
         c_metallicGuideUavIndex;
-
     D3D12_DESCRIPTOR_RANGE environmentRange = {};
     environmentRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     environmentRange.NumDescriptors = 1;
@@ -2897,7 +2905,7 @@ bool RayTracingManager::CreateTemporalColorClipPipeline()
     rootParameters[12].ParameterType =
         D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[12].Constants.ShaderRegister = 0;
-    rootParameters[12].Constants.Num32BitValues = 5;
+    rootParameters[12].Constants.Num32BitValues = 6;
     rootParameters[12].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};

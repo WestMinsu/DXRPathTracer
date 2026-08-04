@@ -272,6 +272,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
+    m_rayTracingManager->SetCurrentFrameVisibleResidualEnabled(
+        m_useCurrentFrameVisibleResidual);
     m_rayTracingManager->SetTemporalColorClipEnabled(
         m_enableTemporalColorClip);
     m_rayTracingManager->SetAtrousEnabled(m_enableAtrous);
@@ -372,6 +374,8 @@ void D3D12Renderer::Render()
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
+    m_rayTracingManager->SetCurrentFrameVisibleResidualEnabled(
+        m_useCurrentFrameVisibleResidual);
     m_rayTracingManager->SetTemporalColorClipEnabled(
         m_enableTemporalColorClip);
     m_rayTracingManager->SetTemporalDebugView(
@@ -1709,6 +1713,11 @@ void D3D12Renderer::BuildImGuiFrame()
             ImGui::TextDisabled(
                 "OFF: reject moving-object history, ON: reproject its previous transform.");
         }
+        ImGui::Checkbox(
+            "Current-frame Visible Emission / Environment",
+            &m_useCurrentFrameVisibleResidual);
+        ImGui::TextDisabled(
+            "Keeps visible emitters/environment out of temporal history; diffuse/specular lighting still accumulates.");
         ImGui::Checkbox(
             "Dynamic Object Color Clipping (with A-Trous)",
             &m_enableTemporalColorClip);

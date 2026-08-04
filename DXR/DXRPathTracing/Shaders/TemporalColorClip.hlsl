@@ -18,6 +18,7 @@ cbuffer TemporalColorClipSettings : register(b0)
     float g_clipGamma;
     uint g_minNeighborhoodSamples;
     uint g_debugView;
+    uint g_useCurrentFrameVisibleResidual;
 };
 
 static const uint c_groupSize = 8u;
@@ -474,12 +475,6 @@ void CSMain(
         return;
     }
 
-    float4 clippedTotal = ClipReprojectedHistory(
-        g_totalAccumulation[centerPixel],
-        currentTotal,
-        totalLower,
-        totalUpper,
-        effectiveSampleCount);
     float4 clippedDiffuse = ClipReprojectedHistory(
         g_diffuseAccumulation[centerPixel],
         currentDiffuse,
@@ -492,6 +487,32 @@ void CSMain(
         specularLower,
         specularUpper,
         effectiveSampleCount);
+    float4 clippedTotal;
+    if (g_useCurrentFrameVisibleResidual != 0u)
+    {
+        // RayGen intentionally keeps camera-visible emission/environment out
+        // of temporal history. Rebuild total from that current-frame residual
+        // and the independently clipped diffuse/specular histories so this
+        // pass does not reintroduce stale visible-light history.
+        float3 currentVisibleResidual = max(
+            currentTotal - currentDiffuse - currentSpecular,
+            0.0f);
+        float totalCount = max(abs(clippedDiffuse.a), 1.0f);
+        clippedTotal = float4(
+            currentVisibleResidual * totalCount +
+            clippedDiffuse.rgb +
+            clippedSpecular.rgb,
+            totalCount);
+    }
+    else
+    {
+        clippedTotal = ClipReprojectedHistory(
+            g_totalAccumulation[centerPixel],
+            currentTotal,
+            totalLower,
+            totalUpper,
+            effectiveSampleCount);
+    }
     float2 diffuseMoments = g_diffuseMoments[centerPixel];
     float2 specularMoments = g_specularMoments[centerPixel];
     RecenterMoments(clippedDiffuse, diffuseMoments);

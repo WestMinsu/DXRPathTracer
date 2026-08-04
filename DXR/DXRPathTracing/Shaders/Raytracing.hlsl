@@ -54,6 +54,9 @@ static const uint c_historyRejectedMaterial = 7u;
 static const uint c_historyRejectedNoSamples = 8u;
 static const uint c_historyRejectedCoverage = 9u;
 static const uint c_historyNotAttempted = 10u;
+static const uint c_primaryVisibilitySurface = 0u;
+static const uint c_primaryVisibilityEnvironment = 1u;
+static const uint c_primaryVisibilityEmitter = 2u;
 
 struct TemporalHistorySample
 {
@@ -358,7 +361,7 @@ bool GatherValidatedHistory(
             previousAccumulation.rgb / tapSampleCount;
         weightedSampleCount += tapWeight * tapSampleCount;
 
-        if (g_enableAtrous != 0u)
+        if (TemporalLobeHistoryEnabled())
         {
             float4 previousDiffuse =
                 g_previousDiffuseIndirect.Load(int3(historyPixel, 0));
@@ -526,10 +529,14 @@ void ResetSurfaceQueryPayload(out SurfaceQueryPayload payload)
 void TracePrimaryGuide(
     RayDesc ray,
     out float3 previousWorldPosition,
-    out uint dynamicInstance)
+    out uint dynamicInstance,
+    out float3 visibleResidual,
+    out uint visibilityClass)
 {
     previousWorldPosition = ray.Origin;
     dynamicInstance = 0u;
+    visibleResidual = float3(0.0f, 0.0f, 0.0f);
+    visibilityClass = c_primaryVisibilitySurface;
     SurfaceQueryPayload payload;
     ResetSurfaceQueryPayload(payload);
     // The guide query does not consume emission. Mark it before TraceRay so
@@ -538,10 +545,26 @@ void TracePrimaryGuide(
     payload.hit = DynamicObjectReprojectionEnabled() ? 2u : 0u;
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
     if (payload.hit == 0u)
+    {
+        visibilityClass = c_primaryVisibilityEnvironment;
+        if (g_showNormalColor == 0u &&
+            IsPbrRenderingScene() &&
+            g_pbrDebugView == c_pbrDebugBeauty &&
+            g_enableIbl != 0u)
+        {
+            visibleResidual = SampleEnvironmentMap(ray.Direction);
+        }
         return;
+    }
 
     previousWorldPosition = payload.emission;
     dynamicInstance = payload.dynamicInstance;
+    float3 surfaceEmission = SurfaceEmission(payload.primitiveIndex);
+    if (payload.frontFace != 0u && any(surfaceEmission > 0.0f))
+    {
+        visibilityClass = c_primaryVisibilityEmitter;
+        visibleResidual = surfaceEmission;
+    }
     uint2 launchIndex = DispatchRaysIndex().xy;
     g_normalHitDistance[launchIndex] = float4(payload.normal, payload.hitT);
     g_materialGuide[launchIndex] = float4(
@@ -775,7 +798,7 @@ void TracePath(
             {
                 break;
             }
-            if (depth == 0u && g_enableAtrous != 0u)
+            if (depth == 0u && TemporalLobeHistoryEnabled())
             {
                 EvaluateBrdfComponents(
                     material,
@@ -811,7 +834,7 @@ void TracePath(
             bounceWeight * inverseSurvivalProbability;
         if (depth == 0u)
         {
-            if (IsPbrRenderingScene() && g_enableAtrous != 0u)
+            if (IsPbrRenderingScene() && TemporalLobeHistoryEnabled())
             {
                 firstDiffuseWeight = diffuseContribution *
                     (inverseSurvivalProbability / samplePdf);
@@ -884,6 +907,9 @@ void RunRaygen()
     float3 previousPrimaryWorldPosition =
         float3(0.0f, 0.0f, 0.0f);
     uint primaryDynamicInstance = 0u;
+    float3 primaryGuideVisibleResidual =
+        float3(0.0f, 0.0f, 0.0f);
+    uint primaryVisibilityClass = c_primaryVisibilitySurface;
     float3 primaryRayDirection = float3(0.0f, 0.0f, 0.0f);
     bool temporalHistoryAttempted = false;
     bool temporalHistoryAccepted = false;
@@ -891,6 +917,13 @@ void RunRaygen()
     uint temporalRejectionReason = c_historyNotAttempted;
     float temporalRelativeSurfaceError = -1.0f;
     uint samplesPerPixel = clamp(g_samplesPerPixel, 1u, 8u);
+    bool useCurrentFrameVisibleResidual =
+        g_enableTemporalReprojection != 0u &&
+        CurrentFrameVisibleResidualEnabled() &&
+        g_sceneType != c_scenePbrGpuValidation &&
+        g_showNormalColor == 0u &&
+        (!IsPbrRenderingScene() ||
+         g_pbrDebugView == c_pbrDebugBeauty);
 
     if (g_sceneType == c_scenePbrGpuValidation)
     {
@@ -961,21 +994,6 @@ void RunRaygen()
         sampleDiffuseDenoisingRadiance *= inverseSamplesPerPixel;
         sampleSpecularDenoisingRadiance *= inverseSamplesPerPixel;
 
-        if (g_enableTemporalReprojection != 0u &&
-            (g_enableAtrous != 0u ||
-             g_temporalDebugView == 6u))
-        {
-            // Preserve the unaccumulated current-frame observations. A later
-            // compute pass uses their 5x5 neighborhood to constrain only the
-            // reprojected history before A-Trous consumes these scratch maps.
-            g_currentTotalRadiance[launchIndex] =
-                float4(max(sampleRadiance, 0.0f), 1.0f);
-            g_currentDiffuseRadiance[launchIndex] =
-                float4(max(sampleDiffuseDenoisingRadiance, 0.0f), 1.0f);
-            g_currentSpecularRadiance[launchIndex] =
-                float4(max(sampleSpecularDenoisingRadiance, 0.0f), 1.0f);
-        }
-
         if (updatePrimaryGuides)
         {
             float2 guideUv =
@@ -998,8 +1016,42 @@ void RunRaygen()
             TracePrimaryGuide(
                 guideRay,
                 previousPrimaryWorldPosition,
-                primaryDynamicInstance);
+                primaryDynamicInstance,
+                primaryGuideVisibleResidual,
+                primaryVisibilityClass);
             primaryRayDirection = guideRay.Direction;
+        }
+
+        if (useCurrentFrameVisibleResidual &&
+            primaryVisibilityClass != c_primaryVisibilitySurface)
+        {
+            // The unjittered guide owns primary visibility. Do not mix a
+            // jittered surface sample with guide-visible emission/environment
+            // at a silhouette pixel.
+            sampleDiffuseDenoisingRadiance =
+                float3(0.0f, 0.0f, 0.0f);
+            sampleSpecularDenoisingRadiance =
+                float3(0.0f, 0.0f, 0.0f);
+        }
+
+        if (g_enableTemporalReprojection != 0u &&
+            (g_enableAtrous != 0u ||
+             g_temporalDebugView == 6u))
+        {
+            // Preserve the unaccumulated current-frame observations. A later
+            // compute pass uses their 5x5 neighborhood to constrain only the
+            // reprojected history before A-Trous consumes these scratch maps.
+            float3 currentTotalRadiance = useCurrentFrameVisibleResidual
+                ? primaryGuideVisibleResidual +
+                    sampleDiffuseDenoisingRadiance +
+                    sampleSpecularDenoisingRadiance
+                : sampleRadiance;
+            g_currentTotalRadiance[launchIndex] =
+                float4(max(currentTotalRadiance, 0.0f), 1.0f);
+            g_currentDiffuseRadiance[launchIndex] =
+                float4(max(sampleDiffuseDenoisingRadiance, 0.0f), 1.0f);
+            g_currentSpecularRadiance[launchIndex] =
+                float4(max(sampleSpecularDenoisingRadiance, 0.0f), 1.0f);
         }
     }
 
@@ -1019,6 +1071,17 @@ void RunRaygen()
         sampleDiffuseDenoisingRadiance;
     float3 accumulatedSpecularRadiance =
         sampleSpecularDenoisingRadiance;
+    // The lobe split contains all radiance received at a primary surface.
+    // What remains is camera-visible emission/environment. Keeping that
+    // residual current-frame-only prevents an old visible area light from
+    // being reprojected as an unfiltered bright trail onto another surface.
+    float3 currentVisibleResidual = useCurrentFrameVisibleResidual
+        ? primaryGuideVisibleResidual
+        : max(
+            sampleRadiance -
+            sampleDiffuseDenoisingRadiance -
+            sampleSpecularDenoisingRadiance,
+            0.0f);
     float sampleDiffuseLuminance = dot(
         sampleDiffuseDenoisingRadiance,
         float3(0.2126f, 0.7152f, 0.0722f));
@@ -1110,7 +1173,7 @@ void RunRaygen()
             history.radianceAverage =
                 previousAccumulation.rgb / previousSampleCount;
             history.sampleCount = previousSampleCount;
-            if (g_enableAtrous != 0u)
+            if (TemporalLobeHistoryEnabled())
             {
                 float4 previousDiffuse;
                 float4 previousSpecular;
@@ -1179,9 +1242,12 @@ void RunRaygen()
                         255.0f);
                 }
             }
-            accumulatedColor +=
-                history.radianceAverage * retainedHistoryCount;
-            if (g_enableAtrous != 0u)
+            if (!useCurrentFrameVisibleResidual)
+            {
+                accumulatedColor +=
+                    history.radianceAverage * retainedHistoryCount;
+            }
+            if (TemporalLobeHistoryEnabled())
             {
                 accumulatedDiffuseRadiance +=
                     history.diffuseAverage * retainedHistoryCount;
@@ -1196,9 +1262,17 @@ void RunRaygen()
         }
     }
 
+    if (useCurrentFrameVisibleResidual)
+    {
+        accumulatedColor =
+            currentVisibleResidual * localSampleCount +
+            accumulatedDiffuseRadiance +
+            accumulatedSpecularRadiance;
+    }
+
     g_accumulation[launchIndex] =
         float4(accumulatedColor, localSampleCount);
-    if (g_enableAtrous != 0u)
+    if (TemporalLobeHistoryEnabled())
     {
         g_diffuseIndirectAccumulation[launchIndex] =
             float4(accumulatedDiffuseRadiance, localSampleCount);
