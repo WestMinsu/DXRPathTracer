@@ -13,6 +13,7 @@
 #include <cstring>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -22,6 +23,368 @@
 
 namespace
 {
+    using Matrix4 = std::array<float, 16>;
+
+    struct NodeAnimationPose
+    {
+        float translation[3] = { 0.0f, 0.0f, 0.0f };
+        float rotation[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+        float scale[3] = { 1.0f, 1.0f, 1.0f };
+        bool animatedTrs = false;
+    };
+
+    Matrix4 IdentityMatrix()
+    {
+        return {
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 1.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, 0.0f, 0.0f, 1.0f
+        };
+    }
+
+    Matrix4 MultiplyMatrix(const Matrix4& left, const Matrix4& right)
+    {
+        Matrix4 result = {};
+        for (std::size_t column = 0; column < 4; ++column)
+        {
+            for (std::size_t row = 0; row < 4; ++row)
+            {
+                float value = 0.0f;
+                for (std::size_t component = 0;
+                     component < 4;
+                     ++component)
+                {
+                    value += left[component * 4 + row] *
+                        right[column * 4 + component];
+                }
+                result[column * 4 + row] = value;
+            }
+        }
+        return result;
+    }
+
+    bool InvertAffineMatrix(const float source[16], Matrix4& inverse)
+    {
+        const float a00 = source[0];
+        const float a01 = source[4];
+        const float a02 = source[8];
+        const float a10 = source[1];
+        const float a11 = source[5];
+        const float a12 = source[9];
+        const float a20 = source[2];
+        const float a21 = source[6];
+        const float a22 = source[10];
+        const float determinant =
+            a00 * (a11 * a22 - a12 * a21) -
+            a01 * (a10 * a22 - a12 * a20) +
+            a02 * (a10 * a21 - a11 * a20);
+        if (std::abs(determinant) <= 1.0e-12f)
+            return false;
+
+        const float inverseDeterminant = 1.0f / determinant;
+        const float i00 = (a11 * a22 - a12 * a21) * inverseDeterminant;
+        const float i01 = (a02 * a21 - a01 * a22) * inverseDeterminant;
+        const float i02 = (a01 * a12 - a02 * a11) * inverseDeterminant;
+        const float i10 = (a12 * a20 - a10 * a22) * inverseDeterminant;
+        const float i11 = (a00 * a22 - a02 * a20) * inverseDeterminant;
+        const float i12 = (a02 * a10 - a00 * a12) * inverseDeterminant;
+        const float i20 = (a10 * a21 - a11 * a20) * inverseDeterminant;
+        const float i21 = (a01 * a20 - a00 * a21) * inverseDeterminant;
+        const float i22 = (a00 * a11 - a01 * a10) * inverseDeterminant;
+        const float tx = source[12];
+        const float ty = source[13];
+        const float tz = source[14];
+        inverse = {
+            i00, i10, i20, 0.0f,
+            i01, i11, i21, 0.0f,
+            i02, i12, i22, 0.0f,
+            -(i00 * tx + i01 * ty + i02 * tz),
+            -(i10 * tx + i11 * ty + i12 * tz),
+            -(i20 * tx + i21 * ty + i22 * tz),
+            1.0f
+        };
+        return true;
+    }
+
+    void NormalizeQuaternion(float quaternion[4])
+    {
+        const float lengthSquared =
+            quaternion[0] * quaternion[0] +
+            quaternion[1] * quaternion[1] +
+            quaternion[2] * quaternion[2] +
+            quaternion[3] * quaternion[3];
+        if (lengthSquared <= 1.0e-20f)
+        {
+            quaternion[0] = 0.0f;
+            quaternion[1] = 0.0f;
+            quaternion[2] = 0.0f;
+            quaternion[3] = 1.0f;
+            return;
+        }
+        const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+        for (std::size_t component = 0; component < 4; ++component)
+            quaternion[component] *= inverseLength;
+    }
+
+    void SlerpQuaternion(
+        const float firstSource[4],
+        const float secondSource[4],
+        float amount,
+        float result[4])
+    {
+        float first[4] = {
+            firstSource[0], firstSource[1],
+            firstSource[2], firstSource[3]
+        };
+        float second[4] = {
+            secondSource[0], secondSource[1],
+            secondSource[2], secondSource[3]
+        };
+        NormalizeQuaternion(first);
+        NormalizeQuaternion(second);
+        float cosine =
+            first[0] * second[0] +
+            first[1] * second[1] +
+            first[2] * second[2] +
+            first[3] * second[3];
+        if (cosine < 0.0f)
+        {
+            cosine = -cosine;
+            for (float& component : second)
+                component = -component;
+        }
+
+        if (cosine > 0.9995f)
+        {
+            for (std::size_t component = 0; component < 4; ++component)
+            {
+                result[component] =
+                    first[component] +
+                    (second[component] - first[component]) * amount;
+            }
+            NormalizeQuaternion(result);
+            return;
+        }
+
+        cosine = (std::max)(-1.0f, (std::min)(cosine, 1.0f));
+        const float angle = std::acos(cosine);
+        const float sine = std::sin(angle);
+        const float firstWeight = std::sin((1.0f - amount) * angle) / sine;
+        const float secondWeight = std::sin(amount * angle) / sine;
+        for (std::size_t component = 0; component < 4; ++component)
+        {
+            result[component] =
+                first[component] * firstWeight +
+                second[component] * secondWeight;
+        }
+        NormalizeQuaternion(result);
+    }
+
+    Matrix4 ComposeTrsMatrix(const NodeAnimationPose& pose)
+    {
+        float quaternion[4] = {
+            pose.rotation[0], pose.rotation[1],
+            pose.rotation[2], pose.rotation[3]
+        };
+        NormalizeQuaternion(quaternion);
+        const float x = quaternion[0];
+        const float y = quaternion[1];
+        const float z = quaternion[2];
+        const float w = quaternion[3];
+        const float xx = x * x;
+        const float yy = y * y;
+        const float zz = z * z;
+        const float xy = x * y;
+        const float xz = x * z;
+        const float yz = y * z;
+        const float xw = x * w;
+        const float yw = y * w;
+        const float zw = z * w;
+        return {
+            (1.0f - 2.0f * (yy + zz)) * pose.scale[0],
+            (2.0f * (xy + zw)) * pose.scale[0],
+            (2.0f * (xz - yw)) * pose.scale[0],
+            0.0f,
+            (2.0f * (xy - zw)) * pose.scale[1],
+            (1.0f - 2.0f * (xx + zz)) * pose.scale[1],
+            (2.0f * (yz + xw)) * pose.scale[1],
+            0.0f,
+            (2.0f * (xz + yw)) * pose.scale[2],
+            (2.0f * (yz - xw)) * pose.scale[2],
+            (1.0f - 2.0f * (xx + yy)) * pose.scale[2],
+            0.0f,
+            pose.translation[0],
+            pose.translation[1],
+            pose.translation[2],
+            1.0f
+        };
+    }
+
+    bool SampleAnimationSampler(
+        const SceneAnimationSampler& sampler,
+        SceneAnimationPath path,
+        float time,
+        float result[4])
+    {
+        const std::size_t componentCount =
+            sampler.outputComponentCount;
+        if (componentCount == 0 ||
+            componentCount > 4 ||
+            sampler.inputTimes.empty())
+        {
+            return false;
+        }
+
+        std::size_t firstKey = 0;
+        std::size_t secondKey = 0;
+        float amount = 0.0f;
+        if (time <= sampler.inputTimes.front())
+        {
+            firstKey = secondKey = 0;
+        }
+        else if (time >= sampler.inputTimes.back())
+        {
+            firstKey = secondKey = sampler.inputTimes.size() - 1;
+        }
+        else
+        {
+            const auto secondIterator = std::upper_bound(
+                sampler.inputTimes.begin(),
+                sampler.inputTimes.end(),
+                time);
+            secondKey = static_cast<std::size_t>(
+                secondIterator - sampler.inputTimes.begin());
+            firstKey = secondKey - 1;
+            const float interval =
+                sampler.inputTimes[secondKey] -
+                sampler.inputTimes[firstKey];
+            amount = interval > 0.0f
+                ? (time - sampler.inputTimes[firstKey]) / interval
+                : 0.0f;
+        }
+
+        const bool cubic =
+            sampler.interpolation ==
+            SceneAnimationInterpolation::CubicSpline;
+        const auto valueOffset = [componentCount, cubic](
+            std::size_t key,
+            std::size_t cubicPart)
+        {
+            return cubic
+                ? (key * 3u + cubicPart) * componentCount
+                : key * componentCount;
+        };
+        const std::size_t firstValueOffset =
+            valueOffset(firstKey, cubic ? 1u : 0u);
+        const std::size_t secondValueOffset =
+            valueOffset(secondKey, cubic ? 1u : 0u);
+
+        if (firstKey == secondKey ||
+            sampler.interpolation ==
+                SceneAnimationInterpolation::Step)
+        {
+            for (std::size_t component = 0;
+                 component < componentCount;
+                 ++component)
+            {
+                result[component] =
+                    sampler.outputValues[firstValueOffset + component];
+            }
+        }
+        else if (cubic)
+        {
+            const float interval =
+                sampler.inputTimes[secondKey] -
+                sampler.inputTimes[firstKey];
+            const float amountSquared = amount * amount;
+            const float amountCubed = amountSquared * amount;
+            const float h00 = 2.0f * amountCubed -
+                3.0f * amountSquared + 1.0f;
+            const float h10 = amountCubed -
+                2.0f * amountSquared + amount;
+            const float h01 = -2.0f * amountCubed +
+                3.0f * amountSquared;
+            const float h11 = amountCubed - amountSquared;
+            const std::size_t firstOutTangentOffset =
+                valueOffset(firstKey, 2u);
+            const std::size_t secondInTangentOffset =
+                valueOffset(secondKey, 0u);
+            for (std::size_t component = 0;
+                 component < componentCount;
+                 ++component)
+            {
+                result[component] =
+                    h00 * sampler.outputValues[
+                        firstValueOffset + component] +
+                    h10 * interval * sampler.outputValues[
+                        firstOutTangentOffset + component] +
+                    h01 * sampler.outputValues[
+                        secondValueOffset + component] +
+                    h11 * interval * sampler.outputValues[
+                        secondInTangentOffset + component];
+            }
+        }
+        else if (path == SceneAnimationPath::Rotation)
+        {
+            SlerpQuaternion(
+                &sampler.outputValues[firstValueOffset],
+                &sampler.outputValues[secondValueOffset],
+                amount,
+                result);
+        }
+        else
+        {
+            for (std::size_t component = 0;
+                 component < componentCount;
+                 ++component)
+            {
+                const float first =
+                    sampler.outputValues[firstValueOffset + component];
+                const float second =
+                    sampler.outputValues[secondValueOffset + component];
+                result[component] =
+                    first + (second - first) * amount;
+            }
+        }
+
+        if (path == SceneAnimationPath::Rotation)
+            NormalizeQuaternion(result);
+        return true;
+    }
+
+    Matrix4 ConvertRightHandedDeltaToLeftHanded(
+        const Matrix4& rightHanded)
+    {
+        constexpr float signs[4] = { 1.0f, 1.0f, -1.0f, 1.0f };
+        Matrix4 leftHanded = {};
+        for (std::size_t column = 0; column < 4; ++column)
+        {
+            for (std::size_t row = 0; row < 4; ++row)
+            {
+                leftHanded[column * 4 + row] =
+                    signs[row] *
+                    rightHanded[column * 4 + row] *
+                    signs[column];
+            }
+        }
+        return leftHanded;
+    }
+
+    void WriteInstanceTransform(
+        const Matrix4& columnMajor,
+        std::array<float, 12>& rowMajor)
+    {
+        for (std::size_t row = 0; row < 3; ++row)
+        {
+            for (std::size_t column = 0; column < 4; ++column)
+            {
+                rowMajor[row * 4 + column] =
+                    columnMajor[column * 4 + row];
+            }
+        }
+    }
+
     void WriteGpuTimestamp(
         ID3D12GraphicsCommandList4* commandList,
         const RayTracingManager::GpuProfileQueries* profileQueries,
@@ -1839,6 +2202,255 @@ void RayTracingManager::ResetDynamicSphereTimeline()
     m_dynamicObjectAngularSpeed = 0.0;
 }
 
+bool RayTracingManager::ConfigureSceneAnimation(const SceneData& scene)
+{
+    m_hasSceneAnimation = false;
+    m_sceneAnimationTimeSeconds = 0.0;
+    m_sceneAnimationDuration = 0.0f;
+    m_sceneAnimationCurrentTime = 0.0f;
+    m_sceneAnimationMeshNodeIndex = c_invalidSceneNodeIndex;
+    m_sceneAnimationName.clear();
+    m_sceneAnimationNodes.clear();
+    m_sceneAnimationClip = {};
+    m_sceneAnimationDefaultWorldInverse = IdentityMatrix();
+    m_sceneAnimationInstanceTransform =
+        { 1.0f, 0.0f, 0.0f, 0.0f,
+          0.0f, 1.0f, 0.0f, 0.0f,
+          0.0f, 0.0f, 1.0f, 0.0f };
+
+    if (scene.animations.empty() || scene.nodes.empty())
+        return true;
+
+    std::uint32_t meshNodeIndex = c_invalidSceneNodeIndex;
+    for (std::size_t nodeIndex = 0;
+         nodeIndex < scene.nodes.size();
+         ++nodeIndex)
+    {
+        const SceneNode& node = scene.nodes[nodeIndex];
+        if (!node.activeInScene ||
+            node.meshIndex == c_invalidSceneMeshIndex)
+        {
+            continue;
+        }
+        if (meshNodeIndex != c_invalidSceneNodeIndex)
+        {
+            // The current renderer owns one BLAS instance for the complete
+            // imported model. Independently animated mesh nodes require the
+            // upcoming per-node BLAS/instance stage.
+            return true;
+        }
+        meshNodeIndex = static_cast<std::uint32_t>(nodeIndex);
+    }
+    if (meshNodeIndex == c_invalidSceneNodeIndex)
+        return true;
+
+    const SceneAnimation& clip = scene.animations.front();
+    bool affectsMeshTransform = false;
+    for (const SceneAnimationChannel& channel : clip.channels)
+    {
+        if (channel.targetPath == SceneAnimationPath::Weights)
+            continue;
+        if (scene.nodes[channel.targetNodeIndex].hasMatrix)
+        {
+            // glTF animation targets are TRS properties. Matrix nodes need
+            // decomposition before they can be animated safely.
+            return true;
+        }
+
+        std::uint32_t currentNode = meshNodeIndex;
+        while (currentNode != c_invalidSceneNodeIndex)
+        {
+            if (currentNode == channel.targetNodeIndex)
+            {
+                affectsMeshTransform = true;
+                break;
+            }
+            currentNode = scene.nodes[currentNode].parentIndex;
+        }
+    }
+    if (!affectsMeshTransform)
+        return true;
+
+    Matrix4 defaultWorldInverse;
+    if (!InvertAffineMatrix(
+        scene.nodes[meshNodeIndex].worldTransform,
+        defaultWorldInverse))
+    {
+        return false;
+    }
+
+    m_sceneAnimationNodes = scene.nodes;
+    m_sceneAnimationClip = clip;
+    m_sceneAnimationMeshNodeIndex = meshNodeIndex;
+    m_sceneAnimationDefaultWorldInverse = defaultWorldInverse;
+    m_sceneAnimationDuration =
+        (std::max)(clip.endTime - clip.startTime, 0.0f);
+    m_sceneAnimationName = clip.name.empty()
+        ? "Animation 0"
+        : clip.name;
+    m_hasSceneAnimation = true;
+    return EvaluateSceneAnimation(0.0);
+}
+
+bool RayTracingManager::EvaluateSceneAnimation(double elapsedSeconds)
+{
+    if (!m_hasSceneAnimation ||
+        m_sceneAnimationMeshNodeIndex >=
+            m_sceneAnimationNodes.size())
+    {
+        return true;
+    }
+
+    float sampleTime = m_sceneAnimationClip.startTime;
+    if (m_sceneAnimationDuration > 1.0e-6f)
+    {
+        double loopTime = std::fmod(
+            elapsedSeconds,
+            static_cast<double>(m_sceneAnimationDuration));
+        if (loopTime < 0.0)
+            loopTime += m_sceneAnimationDuration;
+        sampleTime += static_cast<float>(loopTime);
+    }
+    m_sceneAnimationCurrentTime =
+        sampleTime - m_sceneAnimationClip.startTime;
+
+    std::vector<NodeAnimationPose> poses(
+        m_sceneAnimationNodes.size());
+    std::vector<Matrix4> localTransforms(
+        m_sceneAnimationNodes.size(),
+        IdentityMatrix());
+    for (std::size_t nodeIndex = 0;
+         nodeIndex < m_sceneAnimationNodes.size();
+         ++nodeIndex)
+    {
+        const SceneNode& node = m_sceneAnimationNodes[nodeIndex];
+        NodeAnimationPose& pose = poses[nodeIndex];
+        std::copy_n(node.translation, 3, pose.translation);
+        std::copy_n(node.rotation, 4, pose.rotation);
+        std::copy_n(node.scale, 3, pose.scale);
+    }
+
+    for (const SceneAnimationChannel& channel :
+         m_sceneAnimationClip.channels)
+    {
+        if (channel.targetPath == SceneAnimationPath::Weights)
+            continue;
+        if (channel.targetNodeIndex >= poses.size() ||
+            channel.samplerIndex >=
+                m_sceneAnimationClip.samplers.size())
+        {
+            return false;
+        }
+
+        float sampledValue[4] =
+            { 0.0f, 0.0f, 0.0f, 1.0f };
+        if (!SampleAnimationSampler(
+            m_sceneAnimationClip.samplers[channel.samplerIndex],
+            channel.targetPath,
+            sampleTime,
+            sampledValue))
+        {
+            return false;
+        }
+        NodeAnimationPose& pose = poses[channel.targetNodeIndex];
+        pose.animatedTrs = true;
+        switch (channel.targetPath)
+        {
+        case SceneAnimationPath::Translation:
+            std::copy_n(sampledValue, 3, pose.translation);
+            break;
+        case SceneAnimationPath::Rotation:
+            std::copy_n(sampledValue, 4, pose.rotation);
+            break;
+        case SceneAnimationPath::Scale:
+            std::copy_n(sampledValue, 3, pose.scale);
+            break;
+        case SceneAnimationPath::Weights:
+            break;
+        }
+    }
+
+    for (std::size_t nodeIndex = 0;
+         nodeIndex < m_sceneAnimationNodes.size();
+         ++nodeIndex)
+    {
+        const SceneNode& node = m_sceneAnimationNodes[nodeIndex];
+        if (node.hasMatrix && !poses[nodeIndex].animatedTrs)
+        {
+            std::copy_n(
+                node.localTransform,
+                16,
+                localTransforms[nodeIndex].begin());
+        }
+        else
+        {
+            localTransforms[nodeIndex] =
+                ComposeTrsMatrix(poses[nodeIndex]);
+        }
+    }
+
+    std::vector<Matrix4> worldTransforms(
+        m_sceneAnimationNodes.size(),
+        IdentityMatrix());
+    std::vector<std::uint8_t> visitState(
+        m_sceneAnimationNodes.size(),
+        0u);
+    std::function<bool(std::uint32_t)> evaluateWorld =
+        [&](std::uint32_t nodeIndex) -> bool
+    {
+        if (nodeIndex >= m_sceneAnimationNodes.size())
+            return false;
+        if (visitState[nodeIndex] == 2u)
+            return true;
+        if (visitState[nodeIndex] == 1u)
+            return false;
+        visitState[nodeIndex] = 1u;
+        const std::uint32_t parentIndex =
+            m_sceneAnimationNodes[nodeIndex].parentIndex;
+        if (parentIndex == c_invalidSceneNodeIndex)
+        {
+            worldTransforms[nodeIndex] =
+                localTransforms[nodeIndex];
+        }
+        else
+        {
+            if (!evaluateWorld(parentIndex))
+                return false;
+            worldTransforms[nodeIndex] = MultiplyMatrix(
+                worldTransforms[parentIndex],
+                localTransforms[nodeIndex]);
+        }
+        visitState[nodeIndex] = 2u;
+        return true;
+    };
+
+    if (!evaluateWorld(m_sceneAnimationMeshNodeIndex))
+        return false;
+    const Matrix4 rightHandedDelta = MultiplyMatrix(
+        worldTransforms[m_sceneAnimationMeshNodeIndex],
+        m_sceneAnimationDefaultWorldInverse);
+    const Matrix4 leftHandedDelta =
+        ConvertRightHandedDeltaToLeftHanded(rightHandedDelta);
+    for (const float value : leftHandedDelta)
+    {
+        if (!std::isfinite(value))
+            return false;
+    }
+    WriteInstanceTransform(
+        leftHandedDelta,
+        m_sceneAnimationInstanceTransform);
+    return true;
+}
+
+void RayTracingManager::ResetSceneAnimation()
+{
+    if (!m_hasSceneAnimation)
+        return;
+    m_sceneAnimationTimeSeconds = 0.0;
+    EvaluateSceneAnimation(0.0);
+    ResetAccumulation();
+}
+
 float RayTracingManager::GetSceneDiagonal() const
 {
     float diagonalSquared = 0.0f;
@@ -3297,7 +3909,9 @@ bool RayTracingManager::CreateAccelerationStructures()
     m_blasScratchBuffer.Reset();
     m_dynamicSphereBlasScratchBuffer.Reset();
     m_dynamicCubeBlasScratchBuffer.Reset();
-    if (!m_hasDynamicSphere && !m_hasDynamicCube)
+    if (!m_hasSceneAnimation &&
+        !m_hasDynamicSphere &&
+        !m_hasDynamicCube)
         m_tlasScratchBuffer.Reset();
     return buildSucceeded;
 }
@@ -3427,6 +4041,8 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     m_dynamicSphereGeometry = {};
     m_dynamicCubeGeometry = {};
     m_hasStaticAlphaGeometry = false;
+    if (!ConfigureSceneAnimation(SceneData{}))
+        return false;
     const bool isPbrScene = m_sceneType == c_scenePbrGgx ||
         m_sceneType == c_scenePbrGpuValidation;
     if (isPbrScene && !m_sceneFilePath.empty())
@@ -3450,6 +4066,14 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         if (!scene.IsValid() || !ComputeSceneBounds(scene, modelBounds))
         {
             ReportMessage(L"Loaded glTF scene data or bounds are invalid.");
+            return false;
+        }
+        if (!m_composeModelRoom &&
+            !m_sponzaLite &&
+            !ConfigureSceneAnimation(scene))
+        {
+            ReportMessage(
+                L"Failed to configure glTF node animation playback.");
             return false;
         }
         hasModelBounds = true;
@@ -3817,7 +4441,15 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     std::vector<SceneMetadataEntry> sceneMetadata;
     sceneMetadata.reserve(
         instanceCount + staticGeometryCount + dynamicInstanceCount);
-    sceneMetadata.push_back({ staticGeometryMetadataOffset, 0u, 0u, 0u });
+    sceneMetadata.push_back(
+        {
+            staticGeometryMetadataOffset,
+            m_hasSceneAnimation
+                ? c_sceneMetadataFlagDynamic
+                : 0u,
+            0u,
+            0u
+        });
     if (m_hasDynamicSphere)
     {
         sceneMetadata.push_back(
@@ -4373,9 +5005,10 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
         (m_hasDynamicSphere ? 1u : 0u) +
         (m_hasDynamicCube ? 1u : 0u);
     std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs(instanceCount);
-    instanceDescs[0].Transform[0][0] = 1.0f;
-    instanceDescs[0].Transform[1][1] = 1.0f;
-    instanceDescs[0].Transform[2][2] = 1.0f;
+    std::memcpy(
+        instanceDescs[0].Transform,
+        m_sceneAnimationInstanceTransform.data(),
+        sizeof(instanceDescs[0].Transform));
     instanceDescs[0].InstanceID = 0;
     instanceDescs[0].InstanceMask = 0xFF;
     instanceDescs[0].AccelerationStructure =
@@ -4464,7 +5097,9 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
     inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
     inputs.Flags =
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
-    if (m_hasDynamicSphere || m_hasDynamicCube)
+    if (m_hasSceneAnimation ||
+        m_hasDynamicSphere ||
+        m_hasDynamicCube)
     {
         inputs.Flags |=
             D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
@@ -4532,9 +5167,10 @@ bool RayTracingManager::WriteInstanceDescriptors(UINT frameIndex)
         instanceDescs,
         0,
         sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * instanceCount);
-    instanceDescs[0].Transform[0][0] = 1.0f;
-    instanceDescs[0].Transform[1][1] = 1.0f;
-    instanceDescs[0].Transform[2][2] = 1.0f;
+    std::memcpy(
+        instanceDescs[0].Transform,
+        m_sceneAnimationInstanceTransform.data(),
+        sizeof(instanceDescs[0].Transform));
     instanceDescs[0].InstanceID = 0;
     instanceDescs[0].InstanceMask = 0xFF;
     instanceDescs[0].AccelerationStructure =
@@ -4724,7 +5360,11 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
     ID3D12GraphicsCommandList4* commandList)
 {
     m_dynamicObjectMovedThisFrame = false;
-    if (!m_hasDynamicSphere && !m_hasDynamicCube)
+    const bool updateSceneAnimation =
+        m_hasSceneAnimation && m_sceneAnimationEnabled;
+    if (!updateSceneAnimation &&
+        !m_hasDynamicSphere &&
+        !m_hasDynamicCube)
         return true;
     if (!commandList || !m_topLevelAS || !m_tlasScratchBuffer)
         return false;
@@ -4737,7 +5377,14 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
     const float previousCubePositionX = m_dynamicCubePositionX;
     const float previousCubePositionZ = m_dynamicCubePositionZ;
     const float previousCubeRotation = m_dynamicCubeRotationY;
-    UpdateDynamicObjectMotion();
+    if (updateSceneAnimation)
+    {
+        m_sceneAnimationTimeSeconds += m_frameDeltaSeconds;
+        if (!EvaluateSceneAnimation(m_sceneAnimationTimeSeconds))
+            return false;
+    }
+    if (m_hasDynamicSphere || m_hasDynamicCube)
+        UpdateDynamicObjectMotion();
     m_previousInstanceTransforms = m_currentInstanceTransforms;
 
     const UINT descriptorFrame =
@@ -4745,7 +5392,23 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
     if (!WritePreviousInstanceTransforms(descriptorFrame))
         return false;
 
+    bool sceneAnimationTransformChanged =
+        m_hasSceneAnimation &&
+        m_currentInstanceTransforms.empty();
+    if (m_hasSceneAnimation &&
+        !m_currentInstanceTransforms.empty())
+    {
+        for (std::size_t component = 0;
+             component < m_sceneAnimationInstanceTransform.size();
+             ++component)
+        {
+            sceneAnimationTransformChanged |= std::abs(
+                m_currentInstanceTransforms[0][component] -
+                m_sceneAnimationInstanceTransform[component]) > 1.0e-7f;
+        }
+    }
     const bool transformChanged =
+        sceneAnimationTransformChanged ||
         std::abs(
             previousSpherePosition - m_dynamicSpherePositionX) > 1.0e-7f ||
         std::abs(

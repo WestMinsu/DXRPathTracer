@@ -571,7 +571,7 @@ void TracePrimaryGuide(
         payload.baseColor,
         payload.roughness +
             (payload.dynamicInstance != 0u
-                ? float(payload.dynamicInstance + 1u) * 2.0f
+                ? float(payload.dynamicInstance) * 2.0f
                 : 0.0f));
     g_metallicGuide[launchIndex] = payload.metallic;
 }
@@ -1474,8 +1474,9 @@ void MyClosestHitShader_SurfaceQuery(
     payload.roughness = material.roughness;
     payload.primitiveIndex = globalPrimitiveIndex;
     payload.dynamicInstance =
+        motionGuideQuery &&
         (instanceFlags & c_instanceFlagDynamic) != 0u
-            ? InstanceID()
+            ? InstanceID() + 1u
             : 0u;
     if (motionGuideQuery)
     {

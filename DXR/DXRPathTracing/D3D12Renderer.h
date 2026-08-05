@@ -325,6 +325,7 @@ private:
     bool m_cameraPathRecordingActive = false;
     bool m_animateDynamicSphere = false;
     bool m_animateDynamicCube = false;
+    bool m_animateGltfScene = true;
     bool m_showDynamicSphere = true;
     bool m_showDynamicCube = true;
     int m_dynamicTestSphereMaterialPreset = 0;

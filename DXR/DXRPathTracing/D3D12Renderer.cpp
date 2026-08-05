@@ -316,6 +316,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_animateDynamicSphere);
     m_rayTracingManager->SetDynamicCubeAnimationEnabled(
         m_animateDynamicCube);
+    m_rayTracingManager->SetSceneAnimationEnabled(
+        m_animateGltfScene);
     m_rayTracingManager->SetEnableStatistics(m_collectRayStatistics);
     if (!m_rayTracingManager->Initialize(m_hWnd, m_device.Get(), m_width, m_height))
         return false;
@@ -363,6 +365,9 @@ void D3D12Renderer::Render()
         m_animateDynamicSphere);
     m_rayTracingManager->SetDynamicCubeAnimationEnabled(
         m_animateDynamicCube);
+    m_rayTracingManager->SetSceneAnimationEnabled(
+        m_animateGltfScene);
+    m_rayTracingManager->SetFrameDeltaSeconds(frameDeltaSeconds);
     m_rayTracingManager->SetShowNormalColor(m_showNormalColor);
     m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
     m_rayTracingManager->SetSamplesPerPixel(
@@ -1691,6 +1696,11 @@ void D3D12Renderer::BuildImGuiFrame()
 
     ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(300.0f, 200.0f),
+        ImVec2(
+            460.0f,
+            (std::max)(240.0f, ImGui::GetIO().DisplaySize.y - 32.0f)));
     ImGui::Begin("DXR Debug");
     ImGui::TextDisabled("F1: Toggle ImGui rendering");
     const char* sceneNames[] =
@@ -1726,6 +1736,29 @@ void D3D12Renderer::BuildImGuiFrame()
             m_saveCurrentRequested = false;
             m_captureStatus.clear();
             m_rayTracingManager->SetPbrDebugView(static_cast<UINT>(m_pbrDebugView));
+        }
+
+        if (m_rayTracingManager &&
+            m_rayTracingManager->HasSceneAnimation())
+        {
+            ImGui::SeparatorText("glTF node animation");
+            if (ImGui::Checkbox(
+                "Play glTF animation",
+                &m_animateGltfScene))
+            {
+                m_rayTracingManager->SetSceneAnimationEnabled(
+                    m_animateGltfScene);
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Restart animation"))
+                m_rayTracingManager->ResetSceneAnimation();
+            ImGui::TextDisabled(
+                "%s: %.2f / %.2f s",
+                m_rayTracingManager->GetSceneAnimationName().c_str(),
+                m_rayTracingManager->GetSceneAnimationTime(),
+                m_rayTracingManager->GetSceneAnimationDuration());
+            ImGui::TextDisabled(
+                "Rigid node animation: TLAS transform update");
         }
 
         bool restoreGltfMaterial = false;
@@ -2562,6 +2595,9 @@ void D3D12Renderer::ConfigureAutomatedCapture(
         ? pbrDebugView
         : RayTracingManager::c_pbrDebugBeauty);
     m_enableAccumulation = true;
+    // Automated captures represent one fixed animation time. Advancing the
+    // node every frame would mix different poses in progressive accumulation.
+    m_animateGltfScene = false;
     m_captureActive = true;
     m_exitAfterCapture = true;
     m_captureStatus = "Automated capture running...";

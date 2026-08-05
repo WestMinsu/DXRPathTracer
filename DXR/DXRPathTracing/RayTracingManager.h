@@ -8,6 +8,8 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
+#include "SceneData.h"
+
 class RayTracingManager
 {
 public:
@@ -244,6 +246,34 @@ public:
     void SetDynamicSphereAnimationEnabled(bool enabled);
     void SetDynamicCubeVisible(bool visible);
     void SetDynamicCubeAnimationEnabled(bool enabled);
+    bool HasSceneAnimation() const { return m_hasSceneAnimation; }
+    bool IsSceneAnimationEnabled() const
+    {
+        return m_sceneAnimationEnabled;
+    }
+    void SetSceneAnimationEnabled(bool enabled)
+    {
+        m_sceneAnimationEnabled = enabled;
+    }
+    void ResetSceneAnimation();
+    void SetFrameDeltaSeconds(double seconds)
+    {
+        m_frameDeltaSeconds = seconds < 0.0
+            ? 0.0
+            : (seconds > 0.1 ? 0.1 : seconds);
+    }
+    float GetSceneAnimationTime() const
+    {
+        return m_sceneAnimationCurrentTime;
+    }
+    float GetSceneAnimationDuration() const
+    {
+        return m_sceneAnimationDuration;
+    }
+    const std::string& GetSceneAnimationName() const
+    {
+        return m_sceneAnimationName;
+    }
     void SetDynamicTestSphereMaterialPreset(UINT preset);
     void SetDynamicTestCubeMaterialPreset(UINT preset);
     void SetDynamicSphereDeterministicTimeline(bool enabled);
@@ -317,6 +347,8 @@ private:
         UINT frameIndex);
     bool WritePreviousInstanceTransforms(UINT frameIndex);
     void UpdateDynamicObjectMotion();
+    bool ConfigureSceneAnimation(const SceneData& scene);
+    bool EvaluateSceneAnimation(double elapsedSeconds);
     bool ExecuteBuildCommandListAndWait();
     bool CreateUploadBuffer(const void* data,
         UINT64 sizeInBytes,
@@ -437,6 +469,22 @@ private:
     double m_dynamicObjectAngularSpeed = 0.0;
     bool m_dynamicObjectMovedThisFrame = false;
     UINT64 m_dynamicSceneFrameIndex = 0;
+    bool m_hasSceneAnimation = false;
+    bool m_sceneAnimationEnabled = true;
+    double m_sceneAnimationTimeSeconds = 0.0;
+    double m_frameDeltaSeconds = 1.0 / 60.0;
+    float m_sceneAnimationDuration = 0.0f;
+    float m_sceneAnimationCurrentTime = 0.0f;
+    std::uint32_t m_sceneAnimationMeshNodeIndex =
+        c_invalidSceneNodeIndex;
+    std::string m_sceneAnimationName;
+    std::vector<SceneNode> m_sceneAnimationNodes;
+    SceneAnimation m_sceneAnimationClip;
+    std::array<float, 16> m_sceneAnimationDefaultWorldInverse = {};
+    std::array<float, 12> m_sceneAnimationInstanceTransform =
+        { 1.0f, 0.0f, 0.0f, 0.0f,
+          0.0f, 1.0f, 0.0f, 0.0f,
+          0.0f, 0.0f, 1.0f, 0.0f };
     GeometryRange m_staticGeometry;
     GeometryRange m_staticAlphaGeometry;
     GeometryRange m_dynamicSphereGeometry;
