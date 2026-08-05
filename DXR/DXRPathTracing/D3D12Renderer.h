@@ -37,6 +37,8 @@ public:
         m_sceneManifestPath = path;
     }
     void SetVSyncEnabled(bool enabled) { m_vsyncEnabled = enabled; }
+    void SetImGuiVisible(bool visible) { m_imguiVisible = visible; }
+    void SetGpuPassProfilingEnabled(bool enabled);
     void SetCollectRayStatistics(bool enabled) { m_collectRayStatistics = enabled; }
     void SetInitialMaxBounce(UINT maxBounce)
     {
@@ -209,16 +211,29 @@ public:
 private:
     static constexpr UINT c_frameCount = 2;
     static constexpr DXGI_FORMAT c_backBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-    static constexpr UINT c_gpuTimestampCount = 6;
-
     enum GpuTimestampIndex : UINT
     {
         c_gpuTotalBegin = 0,
         c_gpuDispatchBegin = 1,
-        c_gpuDispatchEnd = 2,
-        c_gpuUpscaleBegin = 3,
-        c_gpuUpscaleEnd = 4,
-        c_gpuTotalEnd = 5
+        c_gpuTlasBegin = 2,
+        c_gpuTlasEnd = 3,
+        c_gpuPathTraceBegin = 4,
+        c_gpuPathTraceEnd = 5,
+        c_gpuTemporalColorClipBegin = 6,
+        c_gpuTemporalColorClipEnd = 7,
+        c_gpuAtrousDiffuseBegin = 8,
+        c_gpuAtrousDiffuseEnd = 9,
+        c_gpuAtrousSpecularBegin = 10,
+        c_gpuAtrousSpecularEnd = 11,
+        c_gpuDispatchEnd = 12,
+        c_gpuUpscaleBegin = 13,
+        c_gpuUpscaleEnd = 14,
+        c_gpuOutputCopyBegin = 15,
+        c_gpuOutputCopyEnd = 16,
+        c_gpuUiBegin = 17,
+        c_gpuUiEnd = 18,
+        c_gpuTotalEnd = 19,
+        c_gpuTimestampCount = 20
     };
 
     bool CreateDevice();
@@ -240,6 +255,8 @@ private:
     CameraPose GetCurrentCameraPose() const;
     void InitializeFreeCamera();
     void UpdateFreeCamera(double deltaSeconds);
+    void WriteGpuTimestamp(UINT queryIndex);
+    void ResetGpuTimingResults();
     void ReadGpuTimingResults();
     bool OpenBenchmarkCsv();
     void RecordFrameMetrics(double cpuFrameMs);
@@ -297,6 +314,8 @@ private:
     UINT64 m_fenceValue = 0;
     HANDLE m_fenceEvent = nullptr;
     bool m_imguiInitialized = false;
+    bool m_imguiVisible = true;
+    bool m_gpuPassProfilingEnabled = true;
     bool m_vsyncEnabled = true;
     bool m_tearingSupported = false;
     bool m_collectRayStatistics = false;
@@ -381,7 +400,14 @@ private:
     FILE* m_benchmarkCsv = nullptr;
     UINT64 m_gpuTimestampFrequency = 0;
     double m_gpuDispatchMs = 0.0;
+    double m_gpuTlasMs = 0.0;
+    double m_gpuPathTraceMs = 0.0;
+    double m_gpuTemporalColorClipMs = 0.0;
+    double m_gpuAtrousDiffuseMs = 0.0;
+    double m_gpuAtrousSpecularMs = 0.0;
     double m_gpuUpscaleMs = 0.0;
+    double m_gpuOutputCopyMs = 0.0;
+    double m_gpuUiMs = 0.0;
     double m_gpuTotalMs = 0.0;
     double m_gpuMedianMs = 0.0;
     double m_gpuP95Ms = 0.0;

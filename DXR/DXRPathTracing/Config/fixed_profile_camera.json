@@ -1,0 +1,17 @@
+{
+  "frames_per_second": 60,
+  "loop": false,
+  "description": "Fixed Sponza profiling camera",
+  "keyframes": [
+    {
+      "time": 0.0,
+      "position": [-2.52108073, 2.87568331, 0.215313032],
+      "target": [17.7517757, -7.74788904, -0.612950087]
+    },
+    {
+      "time": 15.0,
+      "position": [-2.52108073, 2.87568331, 0.215313032],
+      "target": [17.7517757, -7.74788904, -0.612950087]
+    }
+  ]
+}

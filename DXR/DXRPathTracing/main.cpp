@@ -68,6 +68,8 @@ namespace
         bool benchmarkFramesSpecified = false;
         bool collectRayStatistics = false;
         bool rayStatisticsSpecified = false;
+        bool showImGui = true;
+        bool enableGpuPassProfiling = true;
         bool animateDynamicSphere = false;
         bool animateDynamicCube = false;
         std::wstring benchmarkOutput;
@@ -201,6 +203,19 @@ namespace
             {
                 gOptions.samplesPerPixel = static_cast<UINT>(
                     _wtoi(arguments[++index]));
+            }
+            else if (argument == L"--imgui" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.showImGui =
+                    _wtoi(arguments[++index]) != 0;
+            }
+            else if ((argument == L"--gpu-pass-profiling" ||
+                      argument == L"--gpu-profiling") &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.enableGpuPassProfiling =
+                    _wtoi(arguments[++index]) != 0;
             }
             else if (argument == L"--russian-roulette" &&
                      index + 1 < argumentCount)
@@ -745,6 +760,9 @@ namespace
         gRenderer.SetCameraPathAutoPlay(
             gOptions.cameraPathSpecified);
         gRenderer.SetVSyncEnabled(gOptions.vsync);
+        gRenderer.SetImGuiVisible(gOptions.showImGui);
+        gRenderer.SetGpuPassProfilingEnabled(
+            gOptions.enableGpuPassProfiling);
         gRenderer.ConfigureBenchmark(
             gOptions.benchmark,
             gOptions.benchmarkOutput,

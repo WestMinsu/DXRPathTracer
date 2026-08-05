@@ -13,6 +13,21 @@ class RayTracingManager
 public:
     static constexpr UINT c_statisticsRayDepthCount = 9;
 
+    struct GpuProfileQueries
+    {
+        ID3D12QueryHeap* heap = nullptr;
+        UINT tlasBegin = 0;
+        UINT tlasEnd = 0;
+        UINT pathTraceBegin = 0;
+        UINT pathTraceEnd = 0;
+        UINT temporalColorClipBegin = 0;
+        UINT temporalColorClipEnd = 0;
+        UINT atrousDiffuseBegin = 0;
+        UINT atrousDiffuseEnd = 0;
+        UINT atrousSpecularBegin = 0;
+        UINT atrousSpecularEnd = 0;
+    };
+
     struct FrameStatistics
     {
         std::array<UINT64, c_statisticsRayDepthCount> raysByDepth = {};
@@ -74,7 +89,9 @@ public:
 
     bool Initialize(HWND hWnd, ID3D12Device5* device, UINT width, UINT height);
     bool Resize(UINT width, UINT height);
-    void DispatchRays(ID3D12GraphicsCommandList4* commandList);
+    void DispatchRays(
+        ID3D12GraphicsCommandList4* commandList,
+        const GpuProfileQueries* profileQueries = nullptr);
     void SetShowNormalColor(bool showNormalColor);
     void SetMaxBounce(UINT maxBounce);
     void SetSamplesPerPixel(UINT samplesPerPixel);
@@ -321,7 +338,9 @@ private:
     std::wstring GetCompiledAtrousShaderPath() const;
     std::wstring GetCompiledTemporalColorClipShaderPath() const;
     std::wstring GetEnvironmentMapPath() const;
-    void DispatchAtrousFilter(ID3D12GraphicsCommandList4* commandList);
+    void DispatchAtrousFilter(
+        ID3D12GraphicsCommandList4* commandList,
+        const GpuProfileQueries* profileQueries);
     void DispatchTemporalColorClip(ID3D12GraphicsCommandList4* commandList);
     void WriteTemporalHistoryDescriptors();
     bool ReportFailure(HRESULT hr, const wchar_t* message) const;

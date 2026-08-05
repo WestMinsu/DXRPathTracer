@@ -22,6 +22,44 @@
 
 namespace
 {
+    void WriteGpuTimestamp(
+        ID3D12GraphicsCommandList4* commandList,
+        const RayTracingManager::GpuProfileQueries* profileQueries,
+        UINT queryIndex)
+    {
+        if (!commandList || !profileQueries || !profileQueries->heap)
+            return;
+
+        commandList->EndQuery(
+            profileQueries->heap,
+            D3D12_QUERY_TYPE_TIMESTAMP,
+            queryIndex);
+    }
+
+    void WriteEmptyGpuProfile(
+        ID3D12GraphicsCommandList4* commandList,
+        const RayTracingManager::GpuProfileQueries* profileQueries)
+    {
+        if (!profileQueries)
+            return;
+
+        const UINT queryIndices[] =
+        {
+            profileQueries->tlasBegin,
+            profileQueries->tlasEnd,
+            profileQueries->pathTraceBegin,
+            profileQueries->pathTraceEnd,
+            profileQueries->temporalColorClipBegin,
+            profileQueries->temporalColorClipEnd,
+            profileQueries->atrousDiffuseBegin,
+            profileQueries->atrousDiffuseEnd,
+            profileQueries->atrousSpecularBegin,
+            profileQueries->atrousSpecularEnd
+        };
+        for (UINT queryIndex : queryIndices)
+            WriteGpuTimestamp(commandList, profileQueries, queryIndex);
+    }
+
     constexpr wchar_t c_shadowMissShaderName[] = L"MyMissShader_ShadowRay";
     constexpr wchar_t c_rayGenShaderName[] = L"MyRaygenShader_PathTrace";
     constexpr wchar_t c_surfaceQueryClosestHitShaderName[] =
@@ -678,9 +716,14 @@ bool RayTracingManager::Initialize(HWND hWnd, ID3D12Device5* device, UINT width,
     return true;
 }
 
-void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
+void RayTracingManager::DispatchRays(
+    ID3D12GraphicsCommandList4* commandList,
+    const GpuProfileQueries* profileQueries)
 {
-    if (!commandList || !m_stateObject || !m_rayGenShaderTable || !m_missShaderTable ||
+    if (!commandList)
+        return;
+
+    if (!m_stateObject || !m_rayGenShaderTable || !m_missShaderTable ||
         !m_hitGroupShaderTable || !m_descriptorHeap || !m_topLevelAS || !m_accumulationTexture ||
         !m_environmentMap || !m_environmentDistributionBuffer ||
         !m_sceneMaterialBuffer || !m_primitiveMaterialIndexBuffer ||
@@ -700,11 +743,40 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         !m_statisticsBuffer ||
         !m_statisticsResetBuffer || !m_statisticsReadbackBuffer)
     {
+        WriteEmptyGpuProfile(commandList, profileQueries);
         return;
     }
 
-    if (!UpdateTopLevelAccelerationStructure(commandList))
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->tlasBegin : 0u);
+    const bool tlasUpdated =
+        UpdateTopLevelAccelerationStructure(commandList);
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->tlasEnd : 0u);
+    if (!tlasUpdated)
+    {
+        if (profileQueries)
+        {
+            const UINT remainingQueryIndices[] =
+            {
+                profileQueries->pathTraceBegin,
+                profileQueries->pathTraceEnd,
+                profileQueries->temporalColorClipBegin,
+                profileQueries->temporalColorClipEnd,
+                profileQueries->atrousDiffuseBegin,
+                profileQueries->atrousDiffuseEnd,
+                profileQueries->atrousSpecularBegin,
+                profileQueries->atrousSpecularEnd
+            };
+            for (UINT queryIndex : remainingQueryIndices)
+                WriteGpuTimestamp(commandList, profileQueries, queryIndex);
+        }
         return;
+    }
 
     const bool isBeautyFrame =
         !m_showNormalColor &&
@@ -886,7 +958,15 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     dispatchDesc.Height = m_height;
     dispatchDesc.Depth = 1;
 
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->pathTraceBegin : 0u);
     commandList->DispatchRays(&dispatchDesc);
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->pathTraceEnd : 0u);
 
     if (m_enableStatistics)
     {
@@ -923,6 +1003,10 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
         m_enableTemporalColorClip &&
         m_temporalDebugView == c_temporalDebugNone &&
         m_dynamicObjectMovedThisFrame;
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->temporalColorClipBegin : 0u);
     if (useTemporalHistory &&
         m_temporalHistoryFrameCount > 0u &&
         (applyDynamicObjectColorClip ||
@@ -930,10 +1014,28 @@ void RayTracingManager::DispatchRays(ID3D12GraphicsCommandList4* commandList)
     {
         DispatchTemporalColorClip(commandList);
     }
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->temporalColorClipEnd : 0u);
 
     if (useAtrousFilter &&
         m_temporalDebugView == c_temporalDebugNone)
-        DispatchAtrousFilter(commandList);
+    {
+        DispatchAtrousFilter(commandList, profileQueries);
+    }
+    else if (profileQueries)
+    {
+        const UINT atrousQueryIndices[] =
+        {
+            profileQueries->atrousDiffuseBegin,
+            profileQueries->atrousDiffuseEnd,
+            profileQueries->atrousSpecularBegin,
+            profileQueries->atrousSpecularEnd
+        };
+        for (UINT queryIndex : atrousQueryIndices)
+            WriteGpuTimestamp(commandList, profileQueries, queryIndex);
+    }
 
     if (useTemporalHistory)
     {
@@ -1130,7 +1232,8 @@ void RayTracingManager::DispatchTemporalColorClip(
 }
 
 void RayTracingManager::DispatchAtrousFilter(
-    ID3D12GraphicsCommandList4* commandList)
+    ID3D12GraphicsCommandList4* commandList,
+    const GpuProfileQueries* profileQueries)
 {
     if (!commandList ||
         !m_atrousRootSignature ||
@@ -1148,8 +1251,25 @@ void RayTracingManager::DispatchAtrousFilter(
         !m_atrousFilteredDiffuseTexture ||
         !m_outputTexture)
     {
+        if (commandList && profileQueries)
+        {
+            const UINT queryIndices[] =
+            {
+                profileQueries->atrousDiffuseBegin,
+                profileQueries->atrousDiffuseEnd,
+                profileQueries->atrousSpecularBegin,
+                profileQueries->atrousSpecularEnd
+            };
+            for (UINT queryIndex : queryIndices)
+                WriteGpuTimestamp(commandList, profileQueries, queryIndex);
+        }
         return;
     }
+
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->atrousDiffuseBegin : 0u);
 
     D3D12_RESOURCE_BARRIER outputUavBarrier = {};
     outputUavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
@@ -1377,6 +1497,15 @@ void RayTracingManager::DispatchAtrousFilter(
         D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     commandList->ResourceBarrier(1, &filteredDiffuseToSrv);
 
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->atrousDiffuseEnd : 0u);
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->atrousSpecularBegin : 0u);
+
     dispatchChannel(
         c_atrousFilterChannelSpecular,
         c_atrousSpecularIndirectSrvIndex,
@@ -1399,6 +1528,11 @@ void RayTracingManager::DispatchAtrousFilter(
     commandList->ResourceBarrier(
         _countof(inputTransitions),
         inputTransitions);
+
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->atrousSpecularEnd : 0u);
 }
 
 void RayTracingManager::ResetAccumulation()
@@ -2067,7 +2201,6 @@ bool RayTracingManager::CreateOutputTexture()
     floatTextureSrvDesc.Texture2D.MostDetailedMip = 0;
     floatTextureSrvDesc.Texture2D.MipLevels = 1;
     floatTextureSrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
-
     m_device->CreateShaderResourceView(
         m_diffuseIndirectAccumulationTexture.Get(),
         &floatTextureSrvDesc,

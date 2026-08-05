@@ -357,7 +357,8 @@ void D3D12Renderer::Render()
         if (m_cameraPathRecordingActive)
             UpdateCameraPathRecording(frameDeltaSeconds);
     }
-    BuildImGuiFrame();
+    if (m_imguiVisible)
+        BuildImGuiFrame();
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
         m_animateDynamicSphere);
     m_rayTracingManager->SetDynamicCubeAnimationEnabled(
@@ -436,35 +437,43 @@ void D3D12Renderer::Render()
     if (ReportFailure(hr, L"Command list reset failed."))
         return;
 
-    m_commandList->EndQuery(
-        m_gpuTimestampQueryHeap.Get(),
-        D3D12_QUERY_TYPE_TIMESTAMP,
-        c_gpuTotalBegin);
-    m_commandList->EndQuery(
-        m_gpuTimestampQueryHeap.Get(),
-        D3D12_QUERY_TYPE_TIMESTAMP,
-        c_gpuDispatchBegin);
-    m_rayTracingManager->DispatchRays(m_commandList.Get());
+    WriteGpuTimestamp(c_gpuTotalBegin);
+    WriteGpuTimestamp(c_gpuDispatchBegin);
+    RayTracingManager::GpuProfileQueries profileQueries = {};
+    profileQueries.heap = m_gpuPassProfilingEnabled
+        ? m_gpuTimestampQueryHeap.Get()
+        : nullptr;
+    profileQueries.tlasBegin = c_gpuTlasBegin;
+    profileQueries.tlasEnd = c_gpuTlasEnd;
+    profileQueries.pathTraceBegin = c_gpuPathTraceBegin;
+    profileQueries.pathTraceEnd = c_gpuPathTraceEnd;
+    profileQueries.temporalColorClipBegin =
+        c_gpuTemporalColorClipBegin;
+    profileQueries.temporalColorClipEnd =
+        c_gpuTemporalColorClipEnd;
+    profileQueries.atrousDiffuseBegin =
+        c_gpuAtrousDiffuseBegin;
+    profileQueries.atrousDiffuseEnd =
+        c_gpuAtrousDiffuseEnd;
+    profileQueries.atrousSpecularBegin =
+        c_gpuAtrousSpecularBegin;
+    profileQueries.atrousSpecularEnd =
+        c_gpuAtrousSpecularEnd;
+    m_rayTracingManager->DispatchRays(
+        m_commandList.Get(),
+        m_gpuPassProfilingEnabled ? &profileQueries : nullptr);
     m_objectLinearSpeed =
         m_rayTracingManager->GetDynamicObjectLinearSpeed();
     m_objectAngularSpeed =
         m_rayTracingManager->GetDynamicObjectAngularSpeed();
-    m_commandList->EndQuery(
-        m_gpuTimestampQueryHeap.Get(),
-        D3D12_QUERY_TYPE_TIMESTAMP,
-        c_gpuDispatchEnd);
+    WriteGpuTimestamp(c_gpuDispatchEnd);
 
     // Reserved for the MAPB bilinear compute pass. Keeping timestamps in the
     // baseline makes benchmark CSV columns stable before upscaling is added.
-    m_commandList->EndQuery(
-        m_gpuTimestampQueryHeap.Get(),
-        D3D12_QUERY_TYPE_TIMESTAMP,
-        c_gpuUpscaleBegin);
-    m_commandList->EndQuery(
-        m_gpuTimestampQueryHeap.Get(),
-        D3D12_QUERY_TYPE_TIMESTAMP,
-        c_gpuUpscaleEnd);
+    WriteGpuTimestamp(c_gpuUpscaleBegin);
+    WriteGpuTimestamp(c_gpuUpscaleEnd);
 
+    WriteGpuTimestamp(c_gpuOutputCopyBegin);
     ID3D12Resource* raytracingOutput = m_rayTracingManager->GetOutputResource();
 
     D3D12_RESOURCE_BARRIER preCopyBarriers[2] = {};
@@ -544,31 +553,44 @@ void D3D12Renderer::Render()
     postCopyBarriers[1].Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     postCopyBarriers[1].Transition.pResource = m_renderTargets[m_frameIndex].Get();
     postCopyBarriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
-    postCopyBarriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
+    postCopyBarriers[1].Transition.StateAfter = m_imguiVisible
+        ? D3D12_RESOURCE_STATE_RENDER_TARGET
+        : D3D12_RESOURCE_STATE_PRESENT;
     postCopyBarriers[1].Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     m_commandList->ResourceBarrier(2, postCopyBarriers);
 
-    RenderImGuiDrawData();
+    WriteGpuTimestamp(c_gpuOutputCopyEnd);
+    WriteGpuTimestamp(c_gpuUiBegin);
+    if (m_imguiVisible)
+        RenderImGuiDrawData();
+    WriteGpuTimestamp(c_gpuUiEnd);
 
-    D3D12_RESOURCE_BARRIER presentBarrier = {};
-    presentBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    presentBarrier.Transition.pResource = m_renderTargets[m_frameIndex].Get();
-    presentBarrier.Transition.StateBefore = D3D12_RESOURCE_STATE_RENDER_TARGET;
-    presentBarrier.Transition.StateAfter = D3D12_RESOURCE_STATE_PRESENT;
-    presentBarrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    m_commandList->ResourceBarrier(1, &presentBarrier);
+    if (m_imguiVisible)
+    {
+        D3D12_RESOURCE_BARRIER presentBarrier = {};
+        presentBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        presentBarrier.Transition.pResource =
+            m_renderTargets[m_frameIndex].Get();
+        presentBarrier.Transition.StateBefore =
+            D3D12_RESOURCE_STATE_RENDER_TARGET;
+        presentBarrier.Transition.StateAfter =
+            D3D12_RESOURCE_STATE_PRESENT;
+        presentBarrier.Transition.Subresource =
+            D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+        m_commandList->ResourceBarrier(1, &presentBarrier);
+    }
 
-    m_commandList->EndQuery(
-        m_gpuTimestampQueryHeap.Get(),
-        D3D12_QUERY_TYPE_TIMESTAMP,
-        c_gpuTotalEnd);
-    m_commandList->ResolveQueryData(
-        m_gpuTimestampQueryHeap.Get(),
-        D3D12_QUERY_TYPE_TIMESTAMP,
-        0,
-        c_gpuTimestampCount,
-        m_gpuTimestampReadback.Get(),
-        0);
+    WriteGpuTimestamp(c_gpuTotalEnd);
+    if (m_gpuPassProfilingEnabled)
+    {
+        m_commandList->ResolveQueryData(
+            m_gpuTimestampQueryHeap.Get(),
+            D3D12_QUERY_TYPE_TIMESTAMP,
+            0,
+            c_gpuTimestampCount,
+            m_gpuTimestampReadback.Get(),
+            0);
+    }
 
     hr = m_commandList->Close();
     if (ReportFailure(hr, L"Command list close failed."))
@@ -587,7 +609,8 @@ void D3D12Renderer::Render()
         return;
 
     WaitForGpu();
-    ReadGpuTimingResults();
+    if (m_gpuPassProfilingEnabled)
+        ReadGpuTimingResults();
     m_rayTracingManager->ReadFrameStatistics();
     SavePendingCaptures();
     m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
@@ -1102,7 +1125,17 @@ void D3D12Renderer::StopCameraPathRecording()
 void D3D12Renderer::OnKey(UINT virtualKey, bool pressed)
 {
     if (virtualKey < m_keyPressed.size())
+    {
+        const bool wasPressed = m_keyPressed[virtualKey];
+        if (virtualKey == VK_F1 && pressed && !wasPressed)
+            m_imguiVisible = !m_imguiVisible;
+        if (virtualKey == VK_F2 && pressed && !wasPressed)
+        {
+            SetGpuPassProfilingEnabled(
+                !m_gpuPassProfilingEnabled);
+        }
         m_keyPressed[virtualKey] = pressed;
+    }
 }
 
 void D3D12Renderer::OnRightMouseButton(bool pressed, int x, int y)
@@ -1320,9 +1353,62 @@ void D3D12Renderer::UpdateCameraPath()
     }
 }
 
+void D3D12Renderer::SetGpuPassProfilingEnabled(bool enabled)
+{
+    if (m_gpuPassProfilingEnabled == enabled)
+        return;
+
+    m_gpuPassProfilingEnabled = enabled;
+    ResetGpuTimingResults();
+
+    // Keep CPU histories from different profiling modes separate. GPU
+    // timestamps cover command-list intervals, while CPU frame time also
+    // includes Present, the GPU wait, and timestamp readback.
+    m_cpuFrameMs = 0.0;
+    m_cpuMedianMs = 0.0;
+    m_cpuP95Ms = 0.0;
+    m_cpuP99Ms = 0.0;
+    m_cpuTimingHistory.clear();
+}
+
+void D3D12Renderer::WriteGpuTimestamp(UINT queryIndex)
+{
+    if (!m_gpuPassProfilingEnabled ||
+        !m_commandList ||
+        !m_gpuTimestampQueryHeap)
+    {
+        return;
+    }
+
+    m_commandList->EndQuery(
+        m_gpuTimestampQueryHeap.Get(),
+        D3D12_QUERY_TYPE_TIMESTAMP,
+        queryIndex);
+}
+
+void D3D12Renderer::ResetGpuTimingResults()
+{
+    m_gpuDispatchMs = 0.0;
+    m_gpuTlasMs = 0.0;
+    m_gpuPathTraceMs = 0.0;
+    m_gpuTemporalColorClipMs = 0.0;
+    m_gpuAtrousDiffuseMs = 0.0;
+    m_gpuAtrousSpecularMs = 0.0;
+    m_gpuUpscaleMs = 0.0;
+    m_gpuOutputCopyMs = 0.0;
+    m_gpuUiMs = 0.0;
+    m_gpuTotalMs = 0.0;
+    m_gpuMedianMs = 0.0;
+    m_gpuP95Ms = 0.0;
+    m_gpuP99Ms = 0.0;
+    m_gpuTimingHistory.clear();
+}
+
 void D3D12Renderer::ReadGpuTimingResults()
 {
-    if (!m_gpuTimestampReadback || m_gpuTimestampFrequency == 0)
+    if (!m_gpuPassProfilingEnabled ||
+        !m_gpuTimestampReadback ||
+        m_gpuTimestampFrequency == 0)
         return;
 
     const SIZE_T dataSize = sizeof(UINT64) * c_gpuTimestampCount;
@@ -1347,7 +1433,24 @@ void D3D12Renderer::ReadGpuTimingResults()
         };
 
     m_gpuDispatchMs = elapsedMilliseconds(c_gpuDispatchBegin, c_gpuDispatchEnd);
+    m_gpuTlasMs = elapsedMilliseconds(c_gpuTlasBegin, c_gpuTlasEnd);
+    m_gpuPathTraceMs = elapsedMilliseconds(
+        c_gpuPathTraceBegin,
+        c_gpuPathTraceEnd);
+    m_gpuTemporalColorClipMs = elapsedMilliseconds(
+        c_gpuTemporalColorClipBegin,
+        c_gpuTemporalColorClipEnd);
+    m_gpuAtrousDiffuseMs = elapsedMilliseconds(
+        c_gpuAtrousDiffuseBegin,
+        c_gpuAtrousDiffuseEnd);
+    m_gpuAtrousSpecularMs = elapsedMilliseconds(
+        c_gpuAtrousSpecularBegin,
+        c_gpuAtrousSpecularEnd);
     m_gpuUpscaleMs = elapsedMilliseconds(c_gpuUpscaleBegin, c_gpuUpscaleEnd);
+    m_gpuOutputCopyMs = elapsedMilliseconds(
+        c_gpuOutputCopyBegin,
+        c_gpuOutputCopyEnd);
+    m_gpuUiMs = elapsedMilliseconds(c_gpuUiBegin, c_gpuUiEnd);
     m_gpuTotalMs = elapsedMilliseconds(c_gpuTotalBegin, c_gpuTotalEnd);
 
     D3D12_RANGE writeRange = { 0, 0 };
@@ -1407,7 +1510,10 @@ bool D3D12Renderer::OpenBenchmarkCsv()
 
     std::fprintf(
         m_benchmarkCsv,
-        "frame,cpu_ms,gpu_dispatch_ms,gpu_upscale_ms,gpu_total_ms,"
+        "frame,cpu_ms,gpu_dispatch_ms,gpu_tlas_ms,"
+        "gpu_path_trace_temporal_ms,gpu_temporal_color_clip_ms,"
+        "gpu_atrous_diffuse_ms,gpu_atrous_specular_ms,"
+        "gpu_upscale_ms,gpu_output_copy_ms,gpu_ui_ms,gpu_total_ms,"
         "profile,internal_scale,max_bounce,russian_roulette,lighting_mode,"
         "camera_linear_speed,"
         "camera_angular_speed,object_linear_speed,object_angular_speed,"
@@ -1422,14 +1528,24 @@ void D3D12Renderer::RecordFrameMetrics(double cpuFrameMs)
 {
     m_cpuFrameMs = cpuFrameMs;
     AppendTimingSample(m_cpuTimingHistory, m_cpuFrameMs);
-    AppendTimingSample(m_gpuTimingHistory, m_gpuTotalMs);
+    if (m_gpuPassProfilingEnabled)
+        AppendTimingSample(m_gpuTimingHistory, m_gpuTotalMs);
 
     m_cpuMedianMs = CalculatePercentile(m_cpuTimingHistory, 0.50);
     m_cpuP95Ms = CalculatePercentile(m_cpuTimingHistory, 0.95);
     m_cpuP99Ms = CalculatePercentile(m_cpuTimingHistory, 0.99);
-    m_gpuMedianMs = CalculatePercentile(m_gpuTimingHistory, 0.50);
-    m_gpuP95Ms = CalculatePercentile(m_gpuTimingHistory, 0.95);
-    m_gpuP99Ms = CalculatePercentile(m_gpuTimingHistory, 0.99);
+    if (m_gpuPassProfilingEnabled)
+    {
+        m_gpuMedianMs = CalculatePercentile(
+            m_gpuTimingHistory,
+            0.50);
+        m_gpuP95Ms = CalculatePercentile(
+            m_gpuTimingHistory,
+            0.95);
+        m_gpuP99Ms = CalculatePercentile(
+            m_gpuTimingHistory,
+            0.99);
+    }
 
     if (!m_benchmarkEnabled || m_benchmarkFinished || !m_benchmarkCsv)
         return;
@@ -1441,13 +1557,21 @@ void D3D12Renderer::RecordFrameMetrics(double cpuFrameMs)
         : 0u;
     std::fprintf(
         m_benchmarkCsv,
-        "%llu,%.6f,%.6f,%.6f,%.6f,fixed,1.000000,%d,%d,%d,"
+        "%llu,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,"
+        "%.6f,%.6f,%.6f,%.6f,fixed,1.000000,%d,%d,%d,"
         "%.6f,%.6f,%.6f,%.6f,%llu,%llu,%llu,"
         "%.6f,%llu,%llu,%u",
         static_cast<unsigned long long>(m_benchmarkFramesWritten),
         m_cpuFrameMs,
         m_gpuDispatchMs,
+        m_gpuTlasMs,
+        m_gpuPathTraceMs,
+        m_gpuTemporalColorClipMs,
+        m_gpuAtrousDiffuseMs,
+        m_gpuAtrousSpecularMs,
         m_gpuUpscaleMs,
+        m_gpuOutputCopyMs,
+        m_gpuUiMs,
         m_gpuTotalMs,
         m_maxBounce,
         m_enableRussianRoulette ? 1 : 0,
@@ -1558,7 +1682,7 @@ void D3D12Renderer::ShutdownImGui()
 
 void D3D12Renderer::BuildImGuiFrame()
 {
-    if (!m_imguiInitialized)
+    if (!m_imguiInitialized || !m_imguiVisible)
         return;
 
     ImGui_ImplDX12_NewFrame();
@@ -1568,6 +1692,7 @@ void D3D12Renderer::BuildImGuiFrame()
     ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
     ImGui::Begin("DXR Debug");
+    ImGui::TextDisabled("F1: Toggle ImGui rendering");
     const char* sceneNames[] =
     {
         "Cornell Box",
@@ -2151,26 +2276,63 @@ void D3D12Renderer::BuildImGuiFrame()
     }
     const ImGuiIO& io = ImGui::GetIO();
     const float frameTimeMs = io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f;
-    ImGui::Text("Frame: %.2f ms (%.1f FPS)", frameTimeMs, io.Framerate);
+    ImGui::Text(
+        "Display frame (ImGui rolling): %.2f ms (%.1f FPS)",
+        frameTimeMs,
+        io.Framerate);
     ImGui::Checkbox("VSync", &m_vsyncEnabled);
     ImGui::Checkbox("Collect ray statistics", &m_collectRayStatistics);
+    bool gpuPassProfilingEnabled =
+        m_gpuPassProfilingEnabled;
+    if (ImGui::Checkbox(
+            "GPU Pass Profiling (F2)",
+            &gpuPassProfilingEnabled))
+    {
+        SetGpuPassProfilingEnabled(
+            gpuPassProfilingEnabled);
+    }
     ImGui::Text(
-        "CPU current/median: %.2f / %.2f ms",
+        "CPU frame current/median: %.2f / %.2f ms",
         m_cpuFrameMs,
         m_cpuMedianMs);
+    ImGui::TextDisabled(
+        "CPU frame includes Present, GPU wait, and profiling readback.");
     ImGui::Text(
         "CPU p95/p99: %.2f / %.2f ms",
         m_cpuP95Ms,
         m_cpuP99Ms);
-    ImGui::Text(
-        "GPU dispatch/upscale: %.2f / %.2f ms",
-        m_gpuDispatchMs,
-        m_gpuUpscaleMs);
-    ImGui::Text(
-        "GPU total median/p95/p99: %.2f / %.2f / %.2f ms",
-        m_gpuMedianMs,
-        m_gpuP95Ms,
-        m_gpuP99Ms);
+    if (m_gpuPassProfilingEnabled)
+    {
+        ImGui::Text(
+            "GPU dispatch/upscale: %.2f / %.2f ms",
+            m_gpuDispatchMs,
+            m_gpuUpscaleMs);
+        ImGui::Text(
+            "GPU TLAS / Path+Temporal / Color Clip: %.2f / %.2f / %.2f ms",
+            m_gpuTlasMs,
+            m_gpuPathTraceMs,
+            m_gpuTemporalColorClipMs);
+        ImGui::Text(
+            "GPU A-Trous diffuse/specular: %.2f / %.2f ms",
+            m_gpuAtrousDiffuseMs,
+            m_gpuAtrousSpecularMs);
+        ImGui::Text(
+            "GPU output copy / UI: %.2f / %.2f ms",
+            m_gpuOutputCopyMs,
+            m_gpuUiMs);
+        ImGui::Text(
+            "GPU total median/p95/p99: %.2f / %.2f / %.2f ms",
+            m_gpuMedianMs,
+            m_gpuP95Ms,
+            m_gpuP99Ms);
+    }
+    else
+    {
+        ImGui::TextDisabled(
+            "GPU timestamps and ResolveQueryData are disabled.");
+        ImGui::TextDisabled(
+            "For ON/OFF comparison, use CPU median after warm-up.");
+    }
     if (m_cameraPathPlaybackActive)
     {
         const double pathTime = static_cast<double>(m_cameraPathFrameIndex) /
@@ -2259,7 +2421,7 @@ void D3D12Renderer::BuildImGuiFrame()
 
 void D3D12Renderer::RenderImGuiDrawData()
 {
-    if (!m_imguiInitialized)
+    if (!m_imguiInitialized || !m_imguiVisible)
         return;
 
     D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = GetCurrentRenderTargetView();
