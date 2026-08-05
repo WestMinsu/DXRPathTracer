@@ -18,12 +18,16 @@ struct GltfLoadReport
     std::uint32_t ignoredOcclusionTextureCount = 0;
     std::uint32_t loadedMaterialCount = 0;
     std::uint32_t loadedTextureCount = 0;
+    std::uint32_t loadedNodeCount = 0;
+    std::uint32_t loadedAnimationCount = 0;
+    std::uint32_t loadedAnimationSamplerCount = 0;
+    std::uint32_t loadedAnimationChannelCount = 0;
 };
 
-// Loads a static glTF 2.0 scene, converts its right-handed coordinates to the
-// renderer's left-handed coordinates, and flattens node transforms into SceneData.
-// The first stage supports triangle meshes with POSITION, NORMAL, indices,
-// and constant metallic-roughness material factors.
+// Loads a glTF 2.0 scene, preserves its node hierarchy and animation data,
+// converts mesh coordinates to the renderer's left-handed coordinates, and
+// currently flattens the default node transforms into SceneData geometry.
+// Animation playback is connected in a later stage.
 bool LoadGltfSceneData(
     const std::wstring& filePath,
     SceneData& scene,

@@ -2,9 +2,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 constexpr std::uint32_t c_invalidSceneTextureIndex = 0xFFFFFFFFu;
+constexpr std::uint32_t c_invalidSceneNodeIndex = 0xFFFFFFFFu;
+constexpr std::uint32_t c_invalidSceneMeshIndex = 0xFFFFFFFFu;
+constexpr std::uint32_t c_invalidSceneSkinIndex = 0xFFFFFFFFu;
 constexpr std::uint32_t c_pbrParameterModeFixed = 0u;
 constexpr std::uint32_t c_pbrParameterModeGlobal = 1u;
 constexpr std::uint32_t c_pbrParameterModeFixedNoOverride = 2u;
@@ -60,6 +64,78 @@ struct SceneMetadataEntry
     std::uint32_t data3 = 0;
 };
 
+enum class SceneAnimationInterpolation : std::uint32_t
+{
+    Linear,
+    Step,
+    CubicSpline
+};
+
+enum class SceneAnimationPath : std::uint32_t
+{
+    Translation,
+    Rotation,
+    Scale,
+    Weights
+};
+
+// Node transforms are stored in glTF's original right-handed coordinate
+// system. Geometry remains flattened into the renderer's left-handed system
+// until node animation playback is connected to GPU instances.
+struct SceneNode
+{
+    std::string name;
+    std::uint32_t parentIndex = c_invalidSceneNodeIndex;
+    std::vector<std::uint32_t> childIndices;
+    std::uint32_t meshIndex = c_invalidSceneMeshIndex;
+    std::uint32_t skinIndex = c_invalidSceneSkinIndex;
+    bool activeInScene = false;
+    bool hasMatrix = false;
+    float translation[3] = { 0.0f, 0.0f, 0.0f };
+    float rotation[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    float scale[3] = { 1.0f, 1.0f, 1.0f };
+    float localTransform[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+    float worldTransform[16] = {
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f
+    };
+};
+
+struct SceneAnimationSampler
+{
+    SceneAnimationInterpolation interpolation =
+        SceneAnimationInterpolation::Linear;
+    // Logical scalar count for one keyframe value: 3 for translation/scale,
+    // 4 for rotation, and the morph-target count for weights.
+    std::uint32_t outputComponentCount = 0;
+    std::vector<float> inputTimes;
+    // CUBICSPLINE stores in-tangent, value, and out-tangent for every key.
+    std::vector<float> outputValues;
+};
+
+struct SceneAnimationChannel
+{
+    std::uint32_t samplerIndex = 0;
+    std::uint32_t targetNodeIndex = c_invalidSceneNodeIndex;
+    SceneAnimationPath targetPath = SceneAnimationPath::Translation;
+};
+
+struct SceneAnimation
+{
+    std::string name;
+    std::vector<SceneAnimationSampler> samplers;
+    std::vector<SceneAnimationChannel> channels;
+    float startTime = 0.0f;
+    float endTime = 0.0f;
+};
+
 static_assert(sizeof(SceneVertex) == 48);
 static_assert(offsetof(SceneVertex, texCoord) == 24);
 static_assert(offsetof(SceneVertex, tangent) == 32);
@@ -85,6 +161,9 @@ struct SceneData
     std::vector<SceneMaterial> materials;
     std::vector<std::uint32_t> primitiveMaterialIndices;
     std::vector<SceneTexture> textures;
+    std::vector<SceneNode> nodes;
+    std::vector<std::uint32_t> rootNodeIndices;
+    std::vector<SceneAnimation> animations;
 
     bool IsValid() const;
 };

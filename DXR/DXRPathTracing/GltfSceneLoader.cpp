@@ -1242,6 +1242,456 @@ namespace
         return true;
     }
 
+    bool MarkActiveNode(
+        const cgltf_data& data,
+        const cgltf_node& node,
+        SceneData& scene,
+        std::wstring& errorMessage)
+    {
+        const cgltf_size nodeIndex = cgltf_node_index(&data, &node);
+        if (nodeIndex >= scene.nodes.size())
+            return Fail(errorMessage, L"A scene references an invalid node.");
+
+        SceneNode& sceneNode = scene.nodes[nodeIndex];
+        if (sceneNode.activeInScene)
+            return true;
+        sceneNode.activeInScene = true;
+        for (cgltf_size childIndex = 0;
+             childIndex < node.children_count;
+             ++childIndex)
+        {
+            if (!node.children[childIndex] ||
+                !MarkActiveNode(
+                    data,
+                    *node.children[childIndex],
+                    scene,
+                    errorMessage))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool ConvertNodes(
+        const cgltf_data& data,
+        const cgltf_scene* activeScene,
+        SceneData& scene,
+        std::wstring& errorMessage,
+        GltfLoadReport* report)
+    {
+        if (data.nodes_count >
+            static_cast<cgltf_size>(
+                std::numeric_limits<std::uint32_t>::max()))
+        {
+            return Fail(errorMessage, L"The glTF contains too many nodes.");
+        }
+
+        scene.nodes.resize(data.nodes_count);
+        for (cgltf_size nodeIndex = 0;
+             nodeIndex < data.nodes_count;
+             ++nodeIndex)
+        {
+            const cgltf_node& source = data.nodes[nodeIndex];
+            SceneNode& destination = scene.nodes[nodeIndex];
+            if (source.name)
+                destination.name = source.name;
+            if (source.parent)
+            {
+                const cgltf_size parentIndex =
+                    cgltf_node_index(&data, source.parent);
+                if (parentIndex >= data.nodes_count)
+                    return Fail(errorMessage, L"A node has an invalid parent.");
+                destination.parentIndex =
+                    static_cast<std::uint32_t>(parentIndex);
+            }
+            if (source.mesh)
+            {
+                const cgltf_size meshIndex =
+                    cgltf_mesh_index(&data, source.mesh);
+                if (meshIndex >= data.meshes_count ||
+                    meshIndex >
+                        std::numeric_limits<std::uint32_t>::max())
+                {
+                    return Fail(errorMessage, L"A node references an invalid mesh.");
+                }
+                destination.meshIndex =
+                    static_cast<std::uint32_t>(meshIndex);
+            }
+            if (source.skin)
+            {
+                const cgltf_size skinIndex =
+                    cgltf_skin_index(&data, source.skin);
+                if (skinIndex >= data.skins_count ||
+                    skinIndex >
+                        std::numeric_limits<std::uint32_t>::max())
+                {
+                    return Fail(errorMessage, L"A node references an invalid skin.");
+                }
+                destination.skinIndex =
+                    static_cast<std::uint32_t>(skinIndex);
+            }
+
+            destination.childIndices.reserve(source.children_count);
+            for (cgltf_size childIndex = 0;
+                 childIndex < source.children_count;
+                 ++childIndex)
+            {
+                if (!source.children[childIndex])
+                    return Fail(errorMessage, L"A node has a null child.");
+                const cgltf_size childNodeIndex =
+                    cgltf_node_index(&data, source.children[childIndex]);
+                if (childNodeIndex >= data.nodes_count ||
+                    childNodeIndex >
+                        std::numeric_limits<std::uint32_t>::max())
+                {
+                    return Fail(errorMessage, L"A node references an invalid child.");
+                }
+                destination.childIndices.push_back(
+                    static_cast<std::uint32_t>(childNodeIndex));
+            }
+
+            destination.hasMatrix = source.has_matrix != 0;
+            if (source.has_translation)
+            {
+                std::copy_n(
+                    source.translation,
+                    3,
+                    destination.translation);
+            }
+            if (source.has_rotation)
+            {
+                std::copy_n(
+                    source.rotation,
+                    4,
+                    destination.rotation);
+            }
+            if (source.has_scale)
+                std::copy_n(source.scale, 3, destination.scale);
+            cgltf_node_transform_local(
+                &source,
+                destination.localTransform);
+            cgltf_node_transform_world(
+                &source,
+                destination.worldTransform);
+        }
+
+        if (activeScene)
+        {
+            scene.rootNodeIndices.reserve(activeScene->nodes_count);
+            for (cgltf_size rootIndex = 0;
+                 rootIndex < activeScene->nodes_count;
+                 ++rootIndex)
+            {
+                const cgltf_node* root = activeScene->nodes[rootIndex];
+                if (!root)
+                    return Fail(errorMessage, L"The active scene has a null root node.");
+                const cgltf_size nodeIndex = cgltf_node_index(&data, root);
+                if (nodeIndex >= data.nodes_count)
+                    return Fail(errorMessage, L"The active scene has an invalid root node.");
+                scene.rootNodeIndices.push_back(
+                    static_cast<std::uint32_t>(nodeIndex));
+                if (!MarkActiveNode(
+                    data,
+                    *root,
+                    scene,
+                    errorMessage))
+                {
+                    return false;
+                }
+            }
+        }
+        else
+        {
+            for (cgltf_size nodeIndex = 0;
+                 nodeIndex < data.nodes_count;
+                 ++nodeIndex)
+            {
+                if (data.nodes[nodeIndex].parent)
+                    continue;
+                scene.rootNodeIndices.push_back(
+                    static_cast<std::uint32_t>(nodeIndex));
+                if (!MarkActiveNode(
+                    data,
+                    data.nodes[nodeIndex],
+                    scene,
+                    errorMessage))
+                {
+                    return false;
+                }
+            }
+        }
+
+        if (report)
+            report->loadedNodeCount =
+                static_cast<std::uint32_t>(scene.nodes.size());
+        return true;
+    }
+
+    bool UnpackAccessorFloats(
+        const cgltf_accessor& accessor,
+        std::vector<float>& values,
+        std::wstring& errorMessage)
+    {
+        const cgltf_size componentCount =
+            cgltf_num_components(accessor.type);
+        if (componentCount == 0 ||
+            accessor.count >
+                std::numeric_limits<std::size_t>::max() / componentCount)
+        {
+            return Fail(errorMessage, L"An animation accessor is too large.");
+        }
+
+        const cgltf_size floatCount = accessor.count * componentCount;
+        values.resize(floatCount);
+        if (cgltf_accessor_unpack_floats(
+                &accessor,
+                values.data(),
+                floatCount) != floatCount)
+        {
+            return Fail(errorMessage, L"Failed to unpack an animation accessor.");
+        }
+        for (const float value : values)
+        {
+            if (!std::isfinite(value))
+                return Fail(errorMessage, L"An animation accessor contains a non-finite value.");
+        }
+        return true;
+    }
+
+    bool ConvertAnimationInterpolation(
+        cgltf_interpolation_type source,
+        SceneAnimationInterpolation& destination,
+        std::wstring& errorMessage)
+    {
+        switch (source)
+        {
+        case cgltf_interpolation_type_linear:
+            destination = SceneAnimationInterpolation::Linear;
+            return true;
+        case cgltf_interpolation_type_step:
+            destination = SceneAnimationInterpolation::Step;
+            return true;
+        case cgltf_interpolation_type_cubic_spline:
+            destination = SceneAnimationInterpolation::CubicSpline;
+            return true;
+        default:
+            return Fail(errorMessage, L"An animation uses an unsupported interpolation mode.");
+        }
+    }
+
+    bool ConvertAnimationPath(
+        cgltf_animation_path_type source,
+        SceneAnimationPath& destination,
+        std::wstring& errorMessage)
+    {
+        switch (source)
+        {
+        case cgltf_animation_path_type_translation:
+            destination = SceneAnimationPath::Translation;
+            return true;
+        case cgltf_animation_path_type_rotation:
+            destination = SceneAnimationPath::Rotation;
+            return true;
+        case cgltf_animation_path_type_scale:
+            destination = SceneAnimationPath::Scale;
+            return true;
+        case cgltf_animation_path_type_weights:
+            destination = SceneAnimationPath::Weights;
+            return true;
+        default:
+            return Fail(errorMessage, L"An animation channel has an unsupported target path.");
+        }
+    }
+
+    bool ConvertAnimations(
+        const cgltf_data& data,
+        SceneData& scene,
+        std::wstring& errorMessage,
+        GltfLoadReport* report)
+    {
+        if (data.animations_count >
+            static_cast<cgltf_size>(
+                std::numeric_limits<std::uint32_t>::max()))
+        {
+            return Fail(errorMessage, L"The glTF contains too many animations.");
+        }
+
+        scene.animations.reserve(data.animations_count);
+        for (cgltf_size animationIndex = 0;
+             animationIndex < data.animations_count;
+             ++animationIndex)
+        {
+            const cgltf_animation& source =
+                data.animations[animationIndex];
+            if (source.samplers_count == 0 ||
+                source.channels_count == 0 ||
+                source.samplers_count >
+                    std::numeric_limits<std::uint32_t>::max() ||
+                source.channels_count >
+                    std::numeric_limits<std::uint32_t>::max())
+            {
+                return Fail(errorMessage, L"An animation has no usable samplers or channels.");
+            }
+
+            SceneAnimation animation;
+            if (source.name)
+                animation.name = source.name;
+            animation.samplers.resize(source.samplers_count);
+            animation.channels.resize(source.channels_count);
+            animation.startTime = std::numeric_limits<float>::max();
+            animation.endTime = std::numeric_limits<float>::lowest();
+
+            for (cgltf_size samplerIndex = 0;
+                 samplerIndex < source.samplers_count;
+                 ++samplerIndex)
+            {
+                const cgltf_animation_sampler& sourceSampler =
+                    source.samplers[samplerIndex];
+                if (!sourceSampler.input ||
+                    !sourceSampler.output ||
+                    sourceSampler.input->type != cgltf_type_scalar ||
+                    sourceSampler.input->count == 0)
+                {
+                    return Fail(errorMessage, L"An animation sampler has invalid input or output accessors.");
+                }
+
+                SceneAnimationSampler& sampler =
+                    animation.samplers[samplerIndex];
+                if (!ConvertAnimationInterpolation(
+                    sourceSampler.interpolation,
+                    sampler.interpolation,
+                    errorMessage) ||
+                    !UnpackAccessorFloats(
+                        *sourceSampler.input,
+                        sampler.inputTimes,
+                        errorMessage) ||
+                    !UnpackAccessorFloats(
+                        *sourceSampler.output,
+                        sampler.outputValues,
+                        errorMessage))
+                {
+                    return false;
+                }
+
+                for (std::size_t keyIndex = 0;
+                     keyIndex < sampler.inputTimes.size();
+                     ++keyIndex)
+                {
+                    if (sampler.inputTimes[keyIndex] < 0.0f ||
+                        (keyIndex > 0 &&
+                         sampler.inputTimes[keyIndex] <=
+                            sampler.inputTimes[keyIndex - 1]))
+                    {
+                        return Fail(errorMessage, L"Animation keyframe times must be non-negative and strictly increasing.");
+                    }
+                }
+
+                const std::size_t valueSetCount =
+                    sampler.interpolation ==
+                        SceneAnimationInterpolation::CubicSpline
+                    ? 3u
+                    : 1u;
+                if (sampler.inputTimes.size() >
+                    std::numeric_limits<std::size_t>::max() /
+                        valueSetCount)
+                {
+                    return Fail(errorMessage, L"An animation sampler is too large.");
+                }
+                const std::size_t keyValueSetCount =
+                    sampler.inputTimes.size() * valueSetCount;
+                if (keyValueSetCount == 0 ||
+                    sampler.outputValues.size() %
+                        keyValueSetCount != 0)
+                {
+                    return Fail(errorMessage, L"An animation sampler output count does not match its keyframes.");
+                }
+                const std::size_t outputComponentCount =
+                    sampler.outputValues.size() / keyValueSetCount;
+                if (outputComponentCount == 0 ||
+                    outputComponentCount >
+                        std::numeric_limits<std::uint32_t>::max())
+                {
+                    return Fail(errorMessage, L"An animation sampler has an invalid output component count.");
+                }
+                sampler.outputComponentCount =
+                    static_cast<std::uint32_t>(outputComponentCount);
+                animation.startTime = (std::min)(
+                    animation.startTime,
+                    sampler.inputTimes.front());
+                animation.endTime = (std::max)(
+                    animation.endTime,
+                    sampler.inputTimes.back());
+            }
+
+            for (cgltf_size channelIndex = 0;
+                 channelIndex < source.channels_count;
+                 ++channelIndex)
+            {
+                const cgltf_animation_channel& sourceChannel =
+                    source.channels[channelIndex];
+                if (!sourceChannel.sampler ||
+                    !sourceChannel.target_node)
+                {
+                    return Fail(errorMessage, L"An animation channel has no sampler or target node.");
+                }
+                const cgltf_size samplerIndex =
+                    cgltf_animation_sampler_index(
+                        &source,
+                        sourceChannel.sampler);
+                const cgltf_size targetNodeIndex =
+                    cgltf_node_index(
+                        &data,
+                        sourceChannel.target_node);
+                if (samplerIndex >= source.samplers_count ||
+                    targetNodeIndex >= data.nodes_count)
+                {
+                    return Fail(errorMessage, L"An animation channel references an invalid sampler or node.");
+                }
+
+                SceneAnimationChannel& channel =
+                    animation.channels[channelIndex];
+                channel.samplerIndex =
+                    static_cast<std::uint32_t>(samplerIndex);
+                channel.targetNodeIndex =
+                    static_cast<std::uint32_t>(targetNodeIndex);
+                if (!ConvertAnimationPath(
+                    sourceChannel.target_path,
+                    channel.targetPath,
+                    errorMessage))
+                {
+                    return false;
+                }
+
+                const std::uint32_t componentCount =
+                    animation.samplers[channel.samplerIndex].
+                        outputComponentCount;
+                if (((channel.targetPath ==
+                          SceneAnimationPath::Translation ||
+                      channel.targetPath ==
+                          SceneAnimationPath::Scale) &&
+                     componentCount != 3) ||
+                    (channel.targetPath ==
+                         SceneAnimationPath::Rotation &&
+                     componentCount != 4))
+                {
+                    return Fail(errorMessage, L"An animation sampler output has the wrong size for its target path.");
+                }
+            }
+
+            scene.animations.push_back(std::move(animation));
+            if (report)
+            {
+                ++report->loadedAnimationCount;
+                report->loadedAnimationSamplerCount +=
+                    static_cast<std::uint32_t>(source.samplers_count);
+                report->loadedAnimationChannelCount +=
+                    static_cast<std::uint32_t>(source.channels_count);
+            }
+        }
+        return true;
+    }
+
     bool AppendNode(
         const cgltf_data& data,
         const cgltf_node& node,
@@ -1255,6 +1705,9 @@ namespace
             return Fail(errorMessage, L"Skinned mesh nodes are not supported yet.");
         if (node.has_mesh_gpu_instancing)
             return Fail(errorMessage, L"GPU-instanced mesh nodes are not supported yet.");
+
+        if (cgltf_node_index(&data, &node) >= scene.nodes.size())
+            return Fail(errorMessage, L"Geometry references an invalid node.");
 
         if (node.mesh)
         {
@@ -1279,6 +1732,7 @@ namespace
                     return false;
                 }
             }
+
         }
 
         for (cgltf_size childIndex = 0; childIndex < node.children_count; ++childIndex)
@@ -1379,6 +1833,21 @@ bool LoadGltfSceneData(
     const cgltf_scene* activeScene = data->scene;
     if (!activeScene && data->scenes_count > 0)
         activeScene = &data->scenes[0];
+
+    if (!ConvertNodes(
+            *data,
+            activeScene,
+            loadedScene,
+            errorMessage,
+            report) ||
+        !ConvertAnimations(
+            *data,
+            loadedScene,
+            errorMessage,
+            report))
+    {
+        return false;
+    }
 
     if (activeScene)
     {

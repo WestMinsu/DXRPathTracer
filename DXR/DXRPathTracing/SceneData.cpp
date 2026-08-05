@@ -396,6 +396,135 @@ bool SceneData::IsValid() const
         }
     }
 
+    const auto finiteArray = [](const float* values, std::size_t count)
+    {
+        for (std::size_t index = 0; index < count; ++index)
+        {
+            if (!std::isfinite(values[index]))
+                return false;
+        }
+        return true;
+    };
+    for (std::size_t nodeIndex = 0; nodeIndex < nodes.size(); ++nodeIndex)
+    {
+        const SceneNode& node = nodes[nodeIndex];
+        if ((node.parentIndex != c_invalidSceneNodeIndex &&
+             node.parentIndex >= nodes.size()) ||
+            !finiteArray(node.translation, 3) ||
+            !finiteArray(node.rotation, 4) ||
+            !finiteArray(node.scale, 3) ||
+            !finiteArray(node.localTransform, 16) ||
+            !finiteArray(node.worldTransform, 16))
+        {
+            return false;
+        }
+
+        for (const std::uint32_t childIndex : node.childIndices)
+        {
+            if (childIndex >= nodes.size() ||
+                nodes[childIndex].parentIndex != nodeIndex)
+            {
+                return false;
+            }
+        }
+    }
+
+    for (const std::uint32_t rootNodeIndex : rootNodeIndices)
+    {
+        if (rootNodeIndex >= nodes.size() ||
+            nodes[rootNodeIndex].parentIndex != c_invalidSceneNodeIndex ||
+            !nodes[rootNodeIndex].activeInScene)
+        {
+            return false;
+        }
+    }
+
+    for (const SceneAnimation& animation : animations)
+    {
+        if (animation.samplers.empty() ||
+            animation.channels.empty() ||
+            !std::isfinite(animation.startTime) ||
+            !std::isfinite(animation.endTime) ||
+            animation.startTime > animation.endTime)
+        {
+            return false;
+        }
+
+        for (const SceneAnimationSampler& sampler : animation.samplers)
+        {
+            if (sampler.inputTimes.empty() ||
+                sampler.outputComponentCount == 0)
+            {
+                return false;
+            }
+
+            for (std::size_t keyIndex = 0;
+                 keyIndex < sampler.inputTimes.size();
+                 ++keyIndex)
+            {
+                const float time = sampler.inputTimes[keyIndex];
+                if (!std::isfinite(time) ||
+                    time < 0.0f ||
+                    (keyIndex > 0 &&
+                     time <= sampler.inputTimes[keyIndex - 1]))
+                {
+                    return false;
+                }
+            }
+
+            std::size_t valueSetCount = 1;
+            switch (sampler.interpolation)
+            {
+            case SceneAnimationInterpolation::Linear:
+            case SceneAnimationInterpolation::Step:
+                break;
+            case SceneAnimationInterpolation::CubicSpline:
+                valueSetCount = 3;
+                break;
+            default:
+                return false;
+            }
+            const std::uint64_t expectedValueCount =
+                static_cast<std::uint64_t>(sampler.inputTimes.size()) *
+                sampler.outputComponentCount * valueSetCount;
+            if (expectedValueCount != sampler.outputValues.size() ||
+                !finiteArray(
+                    sampler.outputValues.data(),
+                    sampler.outputValues.size()))
+            {
+                return false;
+            }
+        }
+
+        for (const SceneAnimationChannel& channel : animation.channels)
+        {
+            if (channel.samplerIndex >= animation.samplers.size() ||
+                channel.targetNodeIndex >= nodes.size())
+            {
+                return false;
+            }
+
+            const std::uint32_t componentCount =
+                animation.samplers[channel.samplerIndex].outputComponentCount;
+            switch (channel.targetPath)
+            {
+            case SceneAnimationPath::Translation:
+            case SceneAnimationPath::Scale:
+                if (componentCount != 3)
+                    return false;
+                break;
+            case SceneAnimationPath::Rotation:
+                if (componentCount != 4)
+                    return false;
+                break;
+            case SceneAnimationPath::Weights:
+                break;
+            default:
+                return false;
+            }
+        }
+    }
+
     return vertices.size() <= std::numeric_limits<std::uint32_t>::max() &&
         indices.size() <= std::numeric_limits<std::uint32_t>::max();
 }
