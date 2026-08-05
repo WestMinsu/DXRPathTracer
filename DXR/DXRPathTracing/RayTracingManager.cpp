@@ -2202,6 +2202,115 @@ void RayTracingManager::ResetDynamicSphereTimeline()
     m_dynamicObjectAngularSpeed = 0.0;
 }
 
+bool RayTracingManager::ConfigureImportedMeshInstances(
+    const SceneData& scene)
+{
+    if (scene.vertices.empty() || scene.nodes.empty() ||
+        scene.meshNodeInstances.empty() ||
+        scene.vertices.size() >
+            static_cast<std::size_t>(std::numeric_limits<UINT>::max()))
+        return false;
+
+    m_sceneAnimationNodes = scene.nodes;
+    for (const SceneMeshNodeInstance& source : scene.meshNodeInstances)
+    {
+        if (source.nodeIndex >= scene.nodes.size() ||
+            source.primitives.empty())
+            return false;
+
+        std::uint32_t blasIndex = c_invalidSceneMeshIndex;
+        for (std::size_t index = 0;
+             index < m_importedMeshBlases.size(); ++index)
+        {
+            if (m_importedMeshBlases[index].meshIndex == source.meshIndex)
+            {
+                blasIndex = static_cast<std::uint32_t>(index);
+                break;
+            }
+        }
+
+        if (blasIndex == c_invalidSceneMeshIndex)
+        {
+            ImportedMeshBlas blas;
+            blas.meshIndex = source.meshIndex;
+            if (!InvertAffineMatrix(
+                    scene.nodes[source.nodeIndex].worldTransform,
+                    blas.referenceWorldInverse))
+                return false;
+            for (const ScenePrimitiveRange& primitive : source.primitives)
+            {
+                GeometryRange geometry;
+                geometry.vertexCount = static_cast<UINT>(scene.vertices.size());
+                geometry.indexOffset = primitive.indexOffset;
+                geometry.indexCount = primitive.indexCount;
+                geometry.primitiveOffset = primitive.primitiveOffset;
+                geometry.containsAlphaMask = primitive.containsAlphaMask;
+                blas.geometries.push_back(geometry);
+            }
+            blasIndex = static_cast<std::uint32_t>(
+                m_importedMeshBlases.size());
+            m_importedMeshBlases.push_back(std::move(blas));
+        }
+
+        const ImportedMeshBlas& blas = m_importedMeshBlases[blasIndex];
+        if (source.primitives.size() != blas.geometries.size())
+            return false;
+        for (std::size_t primitiveIndex = 0;
+             primitiveIndex < source.primitives.size(); ++primitiveIndex)
+        {
+            const ScenePrimitiveRange& primitive =
+                source.primitives[primitiveIndex];
+            const GeometryRange& geometry = blas.geometries[primitiveIndex];
+            if (primitive.indexCount != geometry.indexCount ||
+                primitive.containsAlphaMask != geometry.containsAlphaMask)
+                return false;
+        }
+        ImportedMeshInstance instance;
+        instance.nodeIndex = source.nodeIndex;
+        instance.meshBlasIndex = blasIndex;
+        for (const ScenePrimitiveRange& primitive : source.primitives)
+            instance.primitiveOffsets.push_back(primitive.primitiveOffset);
+        m_importedMeshInstances.push_back(std::move(instance));
+    }
+    m_useImportedMeshInstances = !m_importedMeshInstances.empty();
+    if (!m_useImportedMeshInstances)
+        return false;
+    if (!scene.animations.empty())
+    {
+        m_sceneAnimationClip = scene.animations.front();
+        m_sceneAnimationDuration = (std::max)(
+            m_sceneAnimationClip.endTime - m_sceneAnimationClip.startTime,
+            0.0f);
+        m_sceneAnimationName = m_sceneAnimationClip.name.empty()
+            ? "clip_0"
+            : m_sceneAnimationClip.name;
+        for (ImportedMeshInstance& instance : m_importedMeshInstances)
+        {
+            for (const SceneAnimationChannel& channel :
+                 m_sceneAnimationClip.channels)
+            {
+                if (channel.targetPath == SceneAnimationPath::Weights)
+                    continue;
+                if (channel.targetNodeIndex >= scene.nodes.size() ||
+                    scene.nodes[channel.targetNodeIndex].hasMatrix)
+                    return false;
+                std::uint32_t nodeIndex = instance.nodeIndex;
+                while (nodeIndex != c_invalidSceneNodeIndex)
+                {
+                    if (nodeIndex == channel.targetNodeIndex)
+                    {
+                        instance.animated = true;
+                        m_hasSceneAnimation = true;
+                        break;
+                    }
+                    nodeIndex = scene.nodes[nodeIndex].parentIndex;
+                }
+            }
+        }
+    }
+    return EvaluateImportedSceneAnimation(0.0);
+}
+
 bool RayTracingManager::ConfigureSceneAnimation(const SceneData& scene)
 {
     m_hasSceneAnimation = false;
@@ -2217,6 +2326,12 @@ bool RayTracingManager::ConfigureSceneAnimation(const SceneData& scene)
         { 1.0f, 0.0f, 0.0f, 0.0f,
           0.0f, 1.0f, 0.0f, 0.0f,
           0.0f, 0.0f, 1.0f, 0.0f };
+    m_useImportedMeshInstances = false;
+    m_importedMeshBlases.clear();
+    m_importedMeshInstances.clear();
+
+    if (!scene.meshNodeInstances.empty())
+        return ConfigureImportedMeshInstances(scene);
 
     if (scene.animations.empty() || scene.nodes.empty())
         return true;
@@ -2292,8 +2407,131 @@ bool RayTracingManager::ConfigureSceneAnimation(const SceneData& scene)
     return EvaluateSceneAnimation(0.0);
 }
 
+bool RayTracingManager::EvaluateImportedSceneAnimation(double elapsedSeconds)
+{
+    if (!m_useImportedMeshInstances || m_sceneAnimationNodes.empty())
+        return true;
+
+    float sampleTime = 0.0f;
+    if (m_hasSceneAnimation)
+    {
+        sampleTime = m_sceneAnimationClip.startTime;
+        if (m_sceneAnimationDuration > 1.0e-6f)
+        {
+            double loopTime = std::fmod(
+                elapsedSeconds,
+                static_cast<double>(m_sceneAnimationDuration));
+            if (loopTime < 0.0)
+                loopTime += m_sceneAnimationDuration;
+            sampleTime += static_cast<float>(loopTime);
+        }
+        m_sceneAnimationCurrentTime =
+            sampleTime - m_sceneAnimationClip.startTime;
+    }
+
+    std::vector<NodeAnimationPose> poses(m_sceneAnimationNodes.size());
+    std::vector<Matrix4> localTransforms(
+        m_sceneAnimationNodes.size(), IdentityMatrix());
+    for (std::size_t nodeIndex = 0;
+         nodeIndex < m_sceneAnimationNodes.size(); ++nodeIndex)
+    {
+        const SceneNode& node = m_sceneAnimationNodes[nodeIndex];
+        std::copy_n(node.translation, 3, poses[nodeIndex].translation);
+        std::copy_n(node.rotation, 4, poses[nodeIndex].rotation);
+        std::copy_n(node.scale, 3, poses[nodeIndex].scale);
+    }
+
+    if (m_hasSceneAnimation)
+    {
+        for (const SceneAnimationChannel& channel :
+             m_sceneAnimationClip.channels)
+        {
+            if (channel.targetPath == SceneAnimationPath::Weights)
+                continue;
+            if (channel.targetNodeIndex >= poses.size() ||
+                channel.samplerIndex >= m_sceneAnimationClip.samplers.size())
+                return false;
+            float value[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+            if (!SampleAnimationSampler(
+                    m_sceneAnimationClip.samplers[channel.samplerIndex],
+                    channel.targetPath, sampleTime, value))
+                return false;
+            NodeAnimationPose& pose = poses[channel.targetNodeIndex];
+            pose.animatedTrs = true;
+            if (channel.targetPath == SceneAnimationPath::Translation)
+                std::copy_n(value, 3, pose.translation);
+            else if (channel.targetPath == SceneAnimationPath::Rotation)
+                std::copy_n(value, 4, pose.rotation);
+            else if (channel.targetPath == SceneAnimationPath::Scale)
+                std::copy_n(value, 3, pose.scale);
+        }
+    }
+
+    for (std::size_t nodeIndex = 0;
+         nodeIndex < m_sceneAnimationNodes.size(); ++nodeIndex)
+    {
+        const SceneNode& node = m_sceneAnimationNodes[nodeIndex];
+        if (node.hasMatrix && !poses[nodeIndex].animatedTrs)
+            std::copy_n(node.localTransform, 16,
+                localTransforms[nodeIndex].begin());
+        else
+            localTransforms[nodeIndex] = ComposeTrsMatrix(poses[nodeIndex]);
+    }
+
+    std::vector<Matrix4> worldTransforms(
+        m_sceneAnimationNodes.size(), IdentityMatrix());
+    std::vector<std::uint8_t> visitState(
+        m_sceneAnimationNodes.size(), 0u);
+    std::function<bool(std::uint32_t)> evaluateWorld =
+        [&](std::uint32_t nodeIndex) -> bool
+    {
+        if (nodeIndex >= m_sceneAnimationNodes.size())
+            return false;
+        if (visitState[nodeIndex] == 2u)
+            return true;
+        if (visitState[nodeIndex] == 1u)
+            return false;
+        visitState[nodeIndex] = 1u;
+        const std::uint32_t parent =
+            m_sceneAnimationNodes[nodeIndex].parentIndex;
+        if (parent == c_invalidSceneNodeIndex)
+            worldTransforms[nodeIndex] = localTransforms[nodeIndex];
+        else
+        {
+            if (!evaluateWorld(parent))
+                return false;
+            worldTransforms[nodeIndex] = MultiplyMatrix(
+                worldTransforms[parent], localTransforms[nodeIndex]);
+        }
+        visitState[nodeIndex] = 2u;
+        return true;
+    };
+
+    for (ImportedMeshInstance& instance : m_importedMeshInstances)
+    {
+        if (instance.meshBlasIndex >= m_importedMeshBlases.size() ||
+            !evaluateWorld(instance.nodeIndex))
+            return false;
+        const Matrix4 delta = MultiplyMatrix(
+            worldTransforms[instance.nodeIndex],
+            m_importedMeshBlases[instance.meshBlasIndex].
+                referenceWorldInverse);
+        const Matrix4 leftHanded =
+            ConvertRightHandedDeltaToLeftHanded(delta);
+        for (const float value : leftHanded)
+        {
+            if (!std::isfinite(value))
+                return false;
+        }
+        WriteInstanceTransform(leftHanded, instance.transform);
+    }
+    return true;
+}
+
 bool RayTracingManager::EvaluateSceneAnimation(double elapsedSeconds)
 {
+    if (m_useImportedMeshInstances)
+        return EvaluateImportedSceneAnimation(elapsedSeconds);
     if (!m_hasSceneAnimation ||
         m_sceneAnimationMeshNodeIndex >=
             m_sceneAnimationNodes.size())
@@ -3870,32 +4108,31 @@ bool RayTracingManager::CreateAccelerationStructures()
     if (!BuildBottomLevelAccelerationStructure())
         return false;
 
-    D3D12_RESOURCE_BARRIER blasBarriers[3] = {};
-    UINT blasBarrierCount = 0;
-    blasBarriers[blasBarrierCount].Type =
-        D3D12_RESOURCE_BARRIER_TYPE_UAV;
-    blasBarriers[blasBarrierCount].UAV.pResource = m_bottomLevelAS.Get();
-    ++blasBarrierCount;
+    std::vector<D3D12_RESOURCE_BARRIER> blasBarriers;
+    auto appendBlasBarrier = [&blasBarriers](ID3D12Resource* resource)
+    {
+        D3D12_RESOURCE_BARRIER barrier = {};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        barrier.UAV.pResource = resource;
+        blasBarriers.push_back(barrier);
+    };
+    if (m_useImportedMeshInstances)
+    {
+        for (const ImportedMeshBlas& blas : m_importedMeshBlases)
+            appendBlasBarrier(blas.accelerationStructure.Get());
+    }
+    else
+    {
+        appendBlasBarrier(m_bottomLevelAS.Get());
+    }
 
     if (m_hasDynamicSphere)
-    {
-        blasBarriers[blasBarrierCount].Type =
-            D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        blasBarriers[blasBarrierCount].UAV.pResource =
-            m_dynamicSphereBottomLevelAS.Get();
-        ++blasBarrierCount;
-    }
+        appendBlasBarrier(m_dynamicSphereBottomLevelAS.Get());
     if (m_hasDynamicCube)
-    {
-        blasBarriers[blasBarrierCount].Type =
-            D3D12_RESOURCE_BARRIER_TYPE_UAV;
-        blasBarriers[blasBarrierCount].UAV.pResource =
-            m_dynamicCubeBottomLevelAS.Get();
-        ++blasBarrierCount;
-    }
+        appendBlasBarrier(m_dynamicCubeBottomLevelAS.Get());
     m_buildCommandList->ResourceBarrier(
-        blasBarrierCount,
-        blasBarriers);
+        static_cast<UINT>(blasBarriers.size()),
+        blasBarriers.data());
 
     if (!BuildTopLevelAccelerationStructure())
         return false;
@@ -3907,6 +4144,8 @@ bool RayTracingManager::CreateAccelerationStructures()
 
     const bool buildSucceeded = ExecuteBuildCommandListAndWait();
     m_blasScratchBuffer.Reset();
+    for (ImportedMeshBlas& blas : m_importedMeshBlases)
+        blas.scratchBuffer.Reset();
     m_dynamicSphereBlasScratchBuffer.Reset();
     m_dynamicCubeBlasScratchBuffer.Reset();
     if (!m_hasSceneAnimation &&
@@ -4123,6 +4362,8 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             scene = CreateCornellBoxSceneData();
     }
 
+    if (!m_useImportedMeshInstances)
+    {
     // Keep opaque and alpha-tested triangles in separate geometry descriptors
     // inside one static BLAS. Opaque triangles then bypass Any-Hit while
     // alpha-mask triangles retain their required Any-Hit test.
@@ -4200,6 +4441,7 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         m_staticGeometry.indexCount =
             static_cast<UINT>(scene.indices.size());
         m_staticGeometry.containsAlphaMask = !alphaIndices.empty();
+    }
     }
 
     if (m_sponzaLite && hasModelBounds)
@@ -4434,7 +4676,10 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     const UINT dynamicInstanceCount =
         (m_hasDynamicSphere ? 1u : 0u) +
         (m_hasDynamicCube ? 1u : 0u);
-    const UINT instanceCount = 1u + dynamicInstanceCount;
+    const UINT staticInstanceCount = m_useImportedMeshInstances
+        ? static_cast<UINT>(m_importedMeshInstances.size())
+        : 1u;
+    const UINT instanceCount = staticInstanceCount + dynamicInstanceCount;
     const UINT staticGeometryMetadataOffset = instanceCount;
     UINT nextDynamicGeometryMetadataOffset =
         staticGeometryMetadataOffset + staticGeometryCount;
@@ -4490,8 +4735,70 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     if (m_hasDynamicCube)
         appendGeometryMetadata(m_dynamicCubeGeometry);
 
+    if (m_useImportedMeshInstances)
+    {
+        sceneMetadata.assign(instanceCount, SceneMetadataEntry{});
+        for (UINT instanceIndex = 0;
+             instanceIndex < staticInstanceCount; ++instanceIndex)
+        {
+            const ImportedMeshInstance& instance =
+                m_importedMeshInstances[instanceIndex];
+            if (instance.meshBlasIndex >= m_importedMeshBlases.size())
+                return false;
+            const ImportedMeshBlas& blas =
+                m_importedMeshBlases[instance.meshBlasIndex];
+            if (instance.primitiveOffsets.size() != blas.geometries.size())
+                return false;
+
+            sceneMetadata[instanceIndex] =
+            {
+                static_cast<UINT>(sceneMetadata.size()),
+                instance.animated ? c_sceneMetadataFlagDynamic : 0u,
+                0u,
+                0u
+            };
+            for (std::size_t geometryIndex = 0;
+                 geometryIndex < blas.geometries.size(); ++geometryIndex)
+            {
+                const GeometryRange& geometry = blas.geometries[geometryIndex];
+                sceneMetadata.push_back(
+                {
+                    geometry.vertexOffset,
+                    geometry.indexOffset,
+                    instance.primitiveOffsets[geometryIndex],
+                    0u
+                });
+            }
+        }
+        UINT dynamicInstanceIndex = staticInstanceCount;
+        if (m_hasDynamicSphere)
+        {
+            sceneMetadata[dynamicInstanceIndex++] =
+            {
+                static_cast<UINT>(sceneMetadata.size()),
+                c_sceneMetadataFlagDynamic,
+                0u,
+                0u
+            };
+            appendGeometryMetadata(m_dynamicSphereGeometry);
+        }
+        if (m_hasDynamicCube)
+        {
+            sceneMetadata[dynamicInstanceIndex] =
+            {
+                static_cast<UINT>(sceneMetadata.size()),
+                c_sceneMetadataFlagDynamic,
+                0u,
+                0u
+            };
+            appendGeometryMetadata(m_dynamicCubeGeometry);
+        }
+    }
+
     const UINT staticIndexCount =
-        m_staticGeometry.indexCount +
+        m_useImportedMeshInstances
+            ? static_cast<UINT>(scene.indices.size())
+            : m_staticGeometry.indexCount +
         (m_hasStaticAlphaGeometry
             ? m_staticAlphaGeometry.indexCount
             : 0u);
@@ -4875,6 +5182,21 @@ bool RayTracingManager::CreateMaterialTextures(const SceneData& scene)
 
 bool RayTracingManager::BuildBottomLevelAccelerationStructure()
 {
+    if (m_useImportedMeshInstances)
+    {
+        for (ImportedMeshBlas& blas : m_importedMeshBlases)
+        {
+            if (!BuildBottomLevelAccelerationStructure(
+                    blas.geometries.data(),
+                    static_cast<UINT>(blas.geometries.size()),
+                    L"Imported mesh bottom level acceleration structure",
+                    blas.accelerationStructure,
+                    blas.scratchBuffer))
+                return false;
+        }
+    }
+    else
+    {
     const std::array<GeometryRange, 2> staticGeometries =
         { m_staticGeometry, m_staticAlphaGeometry };
     const UINT staticGeometryCount =
@@ -4887,6 +5209,7 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure()
         m_blasScratchBuffer))
     {
         return false;
+    }
     }
 
     if (m_hasDynamicSphere &&
@@ -4997,22 +5320,65 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure(
     return true;
 }
 
+UINT RayTracingManager::GetStaticInstanceCount() const
+{
+    return m_useImportedMeshInstances
+        ? static_cast<UINT>(m_importedMeshInstances.size())
+        : 1u;
+}
+
+UINT RayTracingManager::PopulateStaticInstanceDescriptors(
+    D3D12_RAYTRACING_INSTANCE_DESC* instanceDescs) const
+{
+    if (!instanceDescs)
+        return 0u;
+    if (!m_useImportedMeshInstances)
+    {
+        std::memcpy(
+            instanceDescs[0].Transform,
+            m_sceneAnimationInstanceTransform.data(),
+            sizeof(instanceDescs[0].Transform));
+        instanceDescs[0].InstanceID = 0u;
+        instanceDescs[0].InstanceMask = 0xFF;
+        instanceDescs[0].AccelerationStructure =
+            m_bottomLevelAS->GetGPUVirtualAddress();
+        return 1u;
+    }
+
+    for (UINT instanceIndex = 0;
+         instanceIndex < m_importedMeshInstances.size(); ++instanceIndex)
+    {
+        const ImportedMeshInstance& instance =
+            m_importedMeshInstances[instanceIndex];
+        if (instance.meshBlasIndex >= m_importedMeshBlases.size())
+            return 0u;
+        const ImportedMeshBlas& blas =
+            m_importedMeshBlases[instance.meshBlasIndex];
+        if (!blas.accelerationStructure)
+            return 0u;
+        std::memcpy(
+            instanceDescs[instanceIndex].Transform,
+            instance.transform.data(),
+            sizeof(instanceDescs[instanceIndex].Transform));
+        instanceDescs[instanceIndex].InstanceID = instanceIndex;
+        instanceDescs[instanceIndex].InstanceMask = 0xFF;
+        instanceDescs[instanceIndex].AccelerationStructure =
+            blas.accelerationStructure->GetGPUVirtualAddress();
+    }
+    return static_cast<UINT>(m_importedMeshInstances.size());
+}
+
 bool RayTracingManager::BuildTopLevelAccelerationStructure()
 {
-    const UINT staticInstanceCount = 1u;
+    const UINT staticInstanceCount = GetStaticInstanceCount();
     const UINT instanceCount =
         staticInstanceCount +
         (m_hasDynamicSphere ? 1u : 0u) +
         (m_hasDynamicCube ? 1u : 0u);
     std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instanceDescs(instanceCount);
-    std::memcpy(
-        instanceDescs[0].Transform,
-        m_sceneAnimationInstanceTransform.data(),
-        sizeof(instanceDescs[0].Transform));
-    instanceDescs[0].InstanceID = 0;
-    instanceDescs[0].InstanceMask = 0xFF;
-    instanceDescs[0].AccelerationStructure =
-        m_bottomLevelAS->GetGPUVirtualAddress();
+    if (PopulateStaticInstanceDescriptors(instanceDescs.data()) !=
+        staticInstanceCount)
+        return false;
 
     UINT nextInstanceIndex = staticInstanceCount;
     if (m_hasDynamicSphere)
@@ -5158,7 +5524,7 @@ bool RayTracingManager::WriteInstanceDescriptors(UINT frameIndex)
     if (ReportFailure(hr, L"TLAS instance descriptor mapping failed."))
         return false;
 
-    const UINT staticInstanceCount = 1u;
+    const UINT staticInstanceCount = GetStaticInstanceCount();
     const UINT instanceCount =
         staticInstanceCount +
         (m_hasDynamicSphere ? 1u : 0u) +
@@ -5167,14 +5533,12 @@ bool RayTracingManager::WriteInstanceDescriptors(UINT frameIndex)
         instanceDescs,
         0,
         sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * instanceCount);
-    std::memcpy(
-        instanceDescs[0].Transform,
-        m_sceneAnimationInstanceTransform.data(),
-        sizeof(instanceDescs[0].Transform));
-    instanceDescs[0].InstanceID = 0;
-    instanceDescs[0].InstanceMask = 0xFF;
-    instanceDescs[0].AccelerationStructure =
-        m_bottomLevelAS->GetGPUVirtualAddress();
+    if (PopulateStaticInstanceDescriptors(instanceDescs) !=
+        staticInstanceCount)
+    {
+        m_instanceDescBuffers[frameIndex]->Unmap(0, nullptr);
+        return false;
+    }
     UINT nextInstanceIndex = staticInstanceCount;
     if (m_hasDynamicSphere)
     {
@@ -5392,17 +5756,38 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
     if (!WritePreviousInstanceTransforms(descriptorFrame))
         return false;
 
-    bool sceneAnimationTransformChanged =
-        m_hasSceneAnimation &&
-        m_currentInstanceTransforms.empty();
-    if (m_hasSceneAnimation &&
-        !m_currentInstanceTransforms.empty())
+    bool sceneAnimationTransformChanged = false;
+    if (m_hasSceneAnimation && m_useImportedMeshInstances)
     {
+        if (m_currentInstanceTransforms.size() <
+            m_importedMeshInstances.size())
+            sceneAnimationTransformChanged = true;
+        for (std::size_t instanceIndex = 0;
+             !sceneAnimationTransformChanged &&
+             instanceIndex < m_importedMeshInstances.size(); ++instanceIndex)
+        {
+            for (std::size_t component = 0; component < 12u; ++component)
+            {
+                if (std::abs(
+                    m_currentInstanceTransforms[instanceIndex][component] -
+                    m_importedMeshInstances[instanceIndex].
+                        transform[component]) > 1.0e-7f)
+                {
+                    sceneAnimationTransformChanged = true;
+                    break;
+                }
+            }
+        }
+    }
+    else if (m_hasSceneAnimation)
+    {
+        sceneAnimationTransformChanged =
+            m_currentInstanceTransforms.empty();
         for (std::size_t component = 0;
-             component < m_sceneAnimationInstanceTransform.size();
+             !sceneAnimationTransformChanged && component < 12u;
              ++component)
         {
-            sceneAnimationTransformChanged |= std::abs(
+            sceneAnimationTransformChanged = std::abs(
                 m_currentInstanceTransforms[0][component] -
                 m_sceneAnimationInstanceTransform[component]) > 1.0e-7f;
         }
@@ -5438,7 +5823,7 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
     buildDesc.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
     buildDesc.Inputs.NumDescs =
-        1u +
+        GetStaticInstanceCount() +
         (m_hasDynamicSphere ? 1u : 0u) +
         (m_hasDynamicCube ? 1u : 0u);
     buildDesc.Inputs.InstanceDescs =

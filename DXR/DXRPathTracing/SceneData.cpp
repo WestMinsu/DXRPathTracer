@@ -439,6 +439,35 @@ bool SceneData::IsValid() const
         }
     }
 
+    for (const SceneMeshNodeInstance& instance : meshNodeInstances)
+    {
+        if (instance.nodeIndex >= nodes.size() ||
+            instance.meshIndex == c_invalidSceneMeshIndex ||
+            nodes[instance.nodeIndex].meshIndex != instance.meshIndex ||
+            !nodes[instance.nodeIndex].activeInScene ||
+            instance.primitives.empty())
+        {
+            return false;
+        }
+
+        for (const ScenePrimitiveRange& primitive : instance.primitives)
+        {
+            if (primitive.vertexCount == 0 ||
+                primitive.indexCount == 0 ||
+                primitive.indexCount % 3u != 0u ||
+                static_cast<std::uint64_t>(primitive.vertexOffset) +
+                        primitive.vertexCount > vertices.size() ||
+                static_cast<std::uint64_t>(primitive.indexOffset) +
+                        primitive.indexCount > indices.size() ||
+                static_cast<std::uint64_t>(primitive.primitiveOffset) +
+                        primitive.indexCount / 3u >
+                    primitiveMaterialIndices.size())
+            {
+                return false;
+            }
+        }
+    }
+
     for (const SceneAnimation& animation : animations)
     {
         if (animation.samplers.empty() ||

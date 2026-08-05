@@ -443,7 +443,10 @@ float3 ReconstructRadiance(float3 filteredSpecular, int2 pixel)
         max(filteredSpecular, 0.0f);
 }
 
-void StoreResult(float3 filteredValue, int2 pixel)
+void StoreResult(
+    float3 filteredValue,
+    int2 pixel,
+    float localStandardDeviation)
 {
     float3 result = filteredValue;
     if (g_finalPass != 0u)
@@ -469,79 +472,38 @@ void StoreResult(float3 filteredValue, int2 pixel)
             }
         }
     }
-    g_destination[pixel] = float4(result, 1.0f);
+    // Intermediate ping/pong alpha carries the first pass local variance
+    // estimate so later A-Trous passes do not repeat the 3x3 calculation.
+    float auxiliary = g_finalPass != 0u
+        ? 1.0f
+        : max(localStandardDeviation, 0.0f);
+    g_destination[pixel] = float4(result, auxiliary);
 }
 
-[numthreads(8, 8, 1)]
-void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
+float LocalStandardDeviation(
+    int2 centerPixel,
+    float3 centerNormal,
+    float centerDepth,
+    float4 centerMaterial,
+    float centerMetallic,
+    float centerRoughness,
+    float normalExponent,
+    float depthScale)
 {
-    uint2 pixel = dispatchThreadId.xy;
-    if (any(pixel >= g_resolution))
-        return;
-
-    int2 centerPixel = int2(pixel);
-    float3 centerColor = LoadFilterValue(centerPixel);
-    float4 centerNormalDepth =
-        g_normalHitDistance.Load(int3(centerPixel, 0));
-    float4 centerMaterial =
-        g_materialGuide.Load(int3(centerPixel, 0));
-
-    // Miss pixels have no surface guides. Their primary environment value is
-    // classified as direct and is therefore reconstructed without filtering.
-    if (centerNormalDepth.w < 0.0f || centerMaterial.a < 0.0f)
-    {
-        StoreResult(centerColor, centerPixel);
-        return;
-    }
-
-    float3 centerNormal = normalize(centerNormalDepth.xyz);
-    float centerDepth = centerNormalDepth.w;
-    float centerRoughness = GuideRoughness(centerMaterial.a);
-    float centerMetallic = saturate(
-        g_metallicGuide.Load(int3(centerPixel, 0)));
-    if (g_adaptiveIterations != 0u &&
-        g_passIndex >= AdaptiveIterationCount(
-            centerPixel,
-            centerMaterial,
-            centerRoughness))
-    {
-        // Keep the result produced by the last required pass. The final
-        // global pass still performs remodulation and display reconstruction.
-        StoreResult(centerColor, centerPixel);
-        return;
-    }
-
-    float centerLuminance = Luminance(centerColor);
-    float standardError = StandardError(centerPixel, centerLuminance);
-    float normalExponent;
-    float edgeDepthSigma;
-    AdaptiveEdgeParameters(
-        centerPixel,
-        centerMaterial,
-        centerRoughness,
-        normalExponent,
-        edgeDepthSigma);
-    float depthScale =
-        max(centerDepth, 0.01f) * max(edgeDepthSigma, 1.0e-5f);
     float localLuminanceSum = 0.0f;
     float localLuminanceSquareSum = 0.0f;
     float localWeightSum = 0.0f;
-    float validNeighborCount = 0.0f;
 
-    // A pixel that has not sampled a rare light path has zero temporal
-    // variance even though it is not converged. Estimate local spatial
-    // variance as a fallback so neighboring valid paths can fill those holes.
+    // This estimate is intentionally evaluated only for the first A-Trous
+    // pass. Later passes reuse it through the ping/pong alpha channel.
     [unroll]
     for (int localY = -1; localY <= 1; ++localY)
     {
         [unroll]
         for (int localX = -1; localX <= 1; ++localX)
         {
-            int2 localPixel =
-                centerPixel +
-                int2(localX, localY) * int(g_stepWidth);
-            localPixel = clamp(
-                localPixel,
+            int2 localPixel = clamp(
+                centerPixel + int2(localX, localY),
                 int2(0, 0),
                 int2(g_resolution) - int2(1, 1));
             float4 localNormalDepth =
@@ -574,19 +536,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             float spatialWeight =
                 c_kernel3x3[localX + 1] *
                 c_kernel3x3[localY + 1];
-            float guideWeight =
-                spatialWeight *
-                normalWeight *
-                depthWeight *
-                materialWeight *
-                roughnessWeight *
-                identityWeight;
-            if (identityWeight > 0.0f &&
-                normalWeight > 0.05f &&
-                depthWeight > 0.05f)
-            {
-                validNeighborCount += 1.0f;
-            }
+            float guideWeight = spatialWeight * normalWeight * depthWeight *
+                materialWeight * roughnessWeight * identityWeight;
             float localLuminance =
                 Luminance(LoadFilterValue(localPixel));
             localLuminanceSum += localLuminance * guideWeight;
@@ -596,26 +547,106 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         }
     }
 
-    if (g_adaptiveIterations != 0u &&
-        g_passIndex >= 2u &&
-        validNeighborCount < 3.0f)
-    {
-        // A large A-Trous step has left too few compatible samples on this
-        // surface. Preserve the previous pass instead of crossing a small
-        // silhouette or spending work on an ineffective wide kernel.
-        StoreResult(centerColor, centerPixel);
-        return;
-    }
-
     float localMean =
         localLuminanceSum / max(localWeightSum, 1.0e-6f);
     float localVariance = max(
         localLuminanceSquareSum / max(localWeightSum, 1.0e-6f) -
         localMean * localMean,
         0.0f);
+    return sqrt(localVariance);
+}
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
+{
+    uint2 pixel = dispatchThreadId.xy;
+    if (any(pixel >= g_resolution))
+        return;
+
+    int2 centerPixel = int2(pixel);
+    float3 centerColor = LoadFilterValue(centerPixel);
+    float4 centerNormalDepth =
+        g_normalHitDistance.Load(int3(centerPixel, 0));
+    float4 centerMaterial =
+        g_materialGuide.Load(int3(centerPixel, 0));
+
+    // Miss pixels have no surface guides. Their primary environment value is
+    // classified as direct and is therefore reconstructed without filtering.
+    if (centerNormalDepth.w < 0.0f || centerMaterial.a < 0.0f)
+    {
+        StoreResult(centerColor, centerPixel, 0.0f);
+        return;
+    }
+
+    float3 centerNormal = normalize(centerNormalDepth.xyz);
+    float centerDepth = centerNormalDepth.w;
+    float centerRoughness = GuideRoughness(centerMaterial.a);
+    float centerMetallic = saturate(
+        g_metallicGuide.Load(int3(centerPixel, 0)));
+    if (g_adaptiveIterations != 0u &&
+        g_passIndex >= AdaptiveIterationCount(
+            centerPixel,
+            centerMaterial,
+            centerRoughness))
+    {
+        // Keep the result produced by the last required pass. The final
+        // global pass still performs remodulation and display reconstruction.
+        StoreResult(
+            centerColor,
+            centerPixel,
+            max(g_source.Load(int3(centerPixel, 0)).a, 0.0f));
+        return;
+    }
+
+    float centerLuminance = Luminance(centerColor);
+    float standardError = StandardError(centerPixel, centerLuminance);
+    float normalExponent;
+    float edgeDepthSigma;
+    AdaptiveEdgeParameters(
+        centerPixel,
+        centerMaterial,
+        centerRoughness,
+        normalExponent,
+        edgeDepthSigma);
+    float depthScale =
+        max(centerDepth, 0.01f) * max(edgeDepthSigma, 1.0e-5f);
+    // A pixel that has not sampled a rare light path has zero temporal
+    // variance even though it is not converged. Compute a local spatial
+    // fallback once, then carry it through intermediate ping/pong alpha.
+    float localStandardDeviation = g_passIndex == 0u
+        ? LocalStandardDeviation(
+            centerPixel,
+            centerNormal,
+            centerDepth,
+            centerMaterial,
+            centerMetallic,
+            centerRoughness,
+            normalExponent,
+            depthScale)
+        : max(g_source.Load(int3(centerPixel, 0)).a, 0.0f);
+
+    if (g_adaptiveIterations != 0u &&
+        g_passIndex >= 2u &&
+        CompatibleNeighborCount(
+            centerPixel,
+            centerMaterial,
+            centerNormal,
+            centerDepth,
+            centerRoughness,
+            g_stepWidth) < 3.0f)
+    {
+        // A large A-Trous step has left too few compatible samples on this
+        // surface. Preserve the previous pass instead of crossing a small
+        // silhouette or spending work on an ineffective wide kernel.
+        StoreResult(
+            centerColor,
+            centerPixel,
+            localStandardDeviation);
+        return;
+    }
     float effectiveError = max(
         standardError,
-        sqrt(localVariance));
+        localStandardDeviation);
     float relativeError =
         effectiveError / max(abs(centerLuminance), 0.05f);
 
@@ -695,5 +726,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         centerColor,
         filteredColor,
         filterStrength);
-    StoreResult(filteredColor, centerPixel);
+    StoreResult(
+        filteredColor,
+        centerPixel,
+        localStandardDeviation);
 }

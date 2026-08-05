@@ -108,6 +108,27 @@ struct SceneNode
     };
 };
 
+// Geometry produced for one glTF primitive while the legacy loader still
+// flattens node transforms into the shared vertex/index buffers. These ranges
+// let the renderer build one representative BLAS per unique glTF mesh and
+// instantiate it for every mesh node through a TLAS transform.
+struct ScenePrimitiveRange
+{
+    std::uint32_t vertexOffset = 0;
+    std::uint32_t vertexCount = 0;
+    std::uint32_t indexOffset = 0;
+    std::uint32_t indexCount = 0;
+    std::uint32_t primitiveOffset = 0;
+    bool containsAlphaMask = false;
+};
+
+struct SceneMeshNodeInstance
+{
+    std::uint32_t nodeIndex = c_invalidSceneNodeIndex;
+    std::uint32_t meshIndex = c_invalidSceneMeshIndex;
+    std::vector<ScenePrimitiveRange> primitives;
+};
+
 struct SceneAnimationSampler
 {
     SceneAnimationInterpolation interpolation =
@@ -162,6 +183,7 @@ struct SceneData
     std::vector<std::uint32_t> primitiveMaterialIndices;
     std::vector<SceneTexture> textures;
     std::vector<SceneNode> nodes;
+    std::vector<SceneMeshNodeInstance> meshNodeInstances;
     std::vector<std::uint32_t> rootNodeIndices;
     std::vector<SceneAnimation> animations;
 

@@ -1759,6 +1759,10 @@ void D3D12Renderer::BuildImGuiFrame()
                 m_rayTracingManager->GetSceneAnimationDuration());
             ImGui::TextDisabled(
                 "Rigid node animation: TLAS transform update");
+            ImGui::TextDisabled(
+                "Unique mesh BLAS: %u, mesh-node TLAS instances: %u",
+                m_rayTracingManager->GetImportedMeshBlasCount(),
+                m_rayTracingManager->GetImportedMeshInstanceCount());
         }
 
         bool restoreGltfMaterial = false;

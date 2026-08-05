@@ -274,6 +274,14 @@ public:
     {
         return m_sceneAnimationName;
     }
+    UINT GetImportedMeshBlasCount() const
+    {
+        return static_cast<UINT>(m_importedMeshBlases.size());
+    }
+    UINT GetImportedMeshInstanceCount() const
+    {
+        return static_cast<UINT>(m_importedMeshInstances.size());
+    }
     void SetDynamicTestSphereMaterialPreset(UINT preset);
     void SetDynamicTestCubeMaterialPreset(UINT preset);
     void SetDynamicSphereDeterministicTimeline(bool enabled);
@@ -315,6 +323,25 @@ private:
         UINT primitiveOffset = 0;
         bool containsAlphaMask = false;
     };
+    struct ImportedMeshBlas
+    {
+        std::uint32_t meshIndex = c_invalidSceneMeshIndex;
+        std::vector<GeometryRange> geometries;
+        std::array<float, 16> referenceWorldInverse = {};
+        Microsoft::WRL::ComPtr<ID3D12Resource> accelerationStructure;
+        Microsoft::WRL::ComPtr<ID3D12Resource> scratchBuffer;
+    };
+    struct ImportedMeshInstance
+    {
+        std::uint32_t nodeIndex = c_invalidSceneNodeIndex;
+        std::uint32_t meshBlasIndex = c_invalidSceneMeshIndex;
+        std::vector<UINT> primitiveOffsets;
+        std::array<float, 12> transform =
+            { 1.0f, 0.0f, 0.0f, 0.0f,
+              0.0f, 1.0f, 0.0f, 0.0f,
+              0.0f, 0.0f, 1.0f, 0.0f };
+        bool animated = false;
+    };
     bool CreateOutputTexture();
     bool CreateStatisticsResources();
     bool CreateEnvironmentMap();
@@ -341,6 +368,9 @@ private:
         Microsoft::WRL::ComPtr<ID3D12Resource>& accelerationStructure,
         Microsoft::WRL::ComPtr<ID3D12Resource>& scratchBuffer);
     bool BuildTopLevelAccelerationStructure();
+    UINT GetStaticInstanceCount() const;
+    UINT PopulateStaticInstanceDescriptors(
+        D3D12_RAYTRACING_INSTANCE_DESC* instanceDescs) const;
     bool UpdateTopLevelAccelerationStructure(
         ID3D12GraphicsCommandList4* commandList);
     bool WriteInstanceDescriptors(
@@ -349,6 +379,8 @@ private:
     void UpdateDynamicObjectMotion();
     bool ConfigureSceneAnimation(const SceneData& scene);
     bool EvaluateSceneAnimation(double elapsedSeconds);
+    bool ConfigureImportedMeshInstances(const SceneData& scene);
+    bool EvaluateImportedSceneAnimation(double elapsedSeconds);
     bool ExecuteBuildCommandListAndWait();
     bool CreateUploadBuffer(const void* data,
         UINT64 sizeInBytes,
@@ -475,16 +507,19 @@ private:
     double m_frameDeltaSeconds = 1.0 / 60.0;
     float m_sceneAnimationDuration = 0.0f;
     float m_sceneAnimationCurrentTime = 0.0f;
-    std::uint32_t m_sceneAnimationMeshNodeIndex =
-        c_invalidSceneNodeIndex;
     std::string m_sceneAnimationName;
     std::vector<SceneNode> m_sceneAnimationNodes;
     SceneAnimation m_sceneAnimationClip;
+    std::uint32_t m_sceneAnimationMeshNodeIndex =
+        c_invalidSceneNodeIndex;
     std::array<float, 16> m_sceneAnimationDefaultWorldInverse = {};
     std::array<float, 12> m_sceneAnimationInstanceTransform =
         { 1.0f, 0.0f, 0.0f, 0.0f,
           0.0f, 1.0f, 0.0f, 0.0f,
           0.0f, 0.0f, 1.0f, 0.0f };
+    bool m_useImportedMeshInstances = false;
+    std::vector<ImportedMeshBlas> m_importedMeshBlases;
+    std::vector<ImportedMeshInstance> m_importedMeshInstances;
     GeometryRange m_staticGeometry;
     GeometryRange m_staticAlphaGeometry;
     GeometryRange m_dynamicSphereGeometry;

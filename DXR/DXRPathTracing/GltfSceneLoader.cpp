@@ -1711,6 +1711,11 @@ namespace
 
         if (node.mesh)
         {
+            SceneMeshNodeInstance meshInstance;
+            meshInstance.nodeIndex = static_cast<std::uint32_t>(
+                cgltf_node_index(&data, &node));
+            meshInstance.meshIndex = static_cast<std::uint32_t>(
+                cgltf_mesh_index(&data, node.mesh));
             NodeTransform transform;
             if (!BuildNodeTransform(node, transform, errorMessage))
                 return false;
@@ -1719,6 +1724,10 @@ namespace
                  primitiveIndex < node.mesh->primitives_count;
                  ++primitiveIndex)
             {
+                const std::size_t vertexOffset = scene.vertices.size();
+                const std::size_t indexOffset = scene.indices.size();
+                const std::size_t primitiveOffset =
+                    scene.primitiveMaterialIndices.size();
                 if (!AppendPrimitive(
                     data,
                     node.mesh->primitives[primitiveIndex],
@@ -1731,8 +1740,30 @@ namespace
                 {
                     return false;
                 }
-            }
 
+                const std::size_t appendedIndexCount =
+                    scene.indices.size() - indexOffset;
+                if (appendedIndexCount == 0)
+                    continue;
+
+                const std::uint32_t materialIndex =
+                    scene.primitiveMaterialIndices[primitiveOffset];
+                ScenePrimitiveRange range;
+                range.vertexOffset = static_cast<std::uint32_t>(
+                    vertexOffset);
+                range.vertexCount = static_cast<std::uint32_t>(
+                    scene.vertices.size() - vertexOffset);
+                range.indexOffset = static_cast<std::uint32_t>(indexOffset);
+                range.indexCount = static_cast<std::uint32_t>(
+                    appendedIndexCount);
+                range.primitiveOffset = static_cast<std::uint32_t>(
+                    primitiveOffset);
+                range.containsAlphaMask =
+                    scene.materials[materialIndex].alphaCutoff >= 0.0f;
+                meshInstance.primitives.push_back(range);
+            }
+            if (!meshInstance.primitives.empty())
+                scene.meshNodeInstances.push_back(std::move(meshInstance));
         }
 
         for (cgltf_size childIndex = 0; childIndex < node.children_count; ++childIndex)
