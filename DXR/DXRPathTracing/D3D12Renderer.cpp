@@ -27,6 +27,10 @@
 namespace
 {
     constexpr std::size_t c_timingHistoryLength = 600;
+    constexpr wchar_t c_sponzaScenePath[] =
+        L"Assets/KhronosGlTFSampleAssets/Models/Sponza/glTF/Sponza.gltf";
+    constexpr wchar_t c_simpleSkinScenePath[] =
+        L"Assets/KhronosGlTFSampleAssets/Models/SimpleSkin/glTF/SimpleSkin.gltf";
 
     double CalculatePercentile(const std::vector<double>& samples, double percentile)
     {
@@ -237,6 +241,11 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     m_hWnd = hWnd;
     m_width = GetClientWidth(hWnd);
     m_height = GetClientHeight(hWnd);
+    if (!m_sponzaLite &&
+        m_sceneFilePath.find(L"SimpleSkin") != std::wstring::npos)
+        m_pbrScenePreset = 1;
+    else
+        m_pbrScenePreset = 0;
 
     if (!CreateDevice())
         return false;
@@ -1686,6 +1695,70 @@ void D3D12Renderer::ShutdownImGui()
     m_imguiDescriptorHeap.Reset();
 }
 
+bool D3D12Renderer::SwitchPbrScenePreset(int preset)
+{
+    if (!m_rayTracingManager || preset < 0 || preset > 1)
+        return false;
+
+    std::wstring sceneFilePath;
+    bool composeModelRoom = false;
+    bool sponzaLite = false;
+    if (preset == 0)
+    {
+        sceneFilePath = c_sponzaScenePath;
+        sponzaLite = true;
+    }
+    else if (preset == 1)
+    {
+        sceneFilePath = c_simpleSkinScenePath;
+    }
+    if (m_cameraPathPlaybackActive)
+        StopCameraPathPlayback();
+    if (m_cameraPathRecordingActive)
+        StopCameraPathRecording();
+    m_captureActive = false;
+    m_saveCurrentRequested = false;
+    m_captureStatus.clear();
+
+    WaitForGpu();
+    const std::wstring previousSceneFilePath = m_sceneFilePath;
+    const bool previousComposeModelRoom = m_composeModelRoom;
+    const bool previousSponzaLite = m_sponzaLite;
+    if (!m_rayTracingManager->ReloadPbrScene(
+            sceneFilePath,
+            composeModelRoom,
+            sponzaLite))
+    {
+        m_rayTracingManager->ReloadPbrScene(
+            previousSceneFilePath,
+            previousComposeModelRoom,
+            previousSponzaLite);
+        m_sceneSwitchStatus = "Scene switch failed; previous scene restored.";
+        return false;
+    }
+
+    m_sceneType =
+        static_cast<int>(RayTracingManager::c_scenePbrGgx);
+    m_sceneFilePath = sceneFilePath;
+    m_composeModelRoom = composeModelRoom;
+    m_sponzaLite = sponzaLite;
+    m_pbrScenePreset = preset;
+    m_animateGltfScene = true;
+    m_rayTracingManager->SetSceneAnimationEnabled(true);
+    m_rayTracingManager->SetDynamicSphereVisible(
+        m_showDynamicSphere);
+    m_rayTracingManager->SetDynamicSphereAnimationEnabled(
+        m_animateDynamicSphere);
+    m_freeCameraInitialized = false;
+    InitializeFreeCamera();
+    m_hasLastRenderTime = false;
+    ResetGpuTimingResults();
+    m_sceneSwitchStatus = preset == 0
+        ? "Loaded PBR Sponza with 12 area lights."
+        : "Loaded SimpleSkin GPU skinning test.";
+    return true;
+}
+
 void D3D12Renderer::BuildImGuiFrame()
 {
     if (!m_imguiInitialized || !m_imguiVisible)
@@ -1717,10 +1790,30 @@ void D3D12Renderer::BuildImGuiFrame()
         m_captureActive = false;
         m_saveCurrentRequested = false;
         m_captureStatus.clear();
+        WaitForGpu();
         m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
+        m_freeCameraInitialized = false;
+        InitializeFreeCamera();
     }
     if (m_sceneType == static_cast<int>(RayTracingManager::c_scenePbrGgx))
     {
+        const char* pbrSceneNames[] =
+        {
+            "Sponza + 12 Area Lights",
+            "SimpleSkin GPU Test"
+        };
+        int requestedPbrScene = m_pbrScenePreset;
+        if (ImGui::Combo(
+                "PBR Test Scene",
+                &requestedPbrScene,
+                pbrSceneNames,
+                _countof(pbrSceneNames)))
+        {
+            SwitchPbrScenePreset(requestedPbrScene);
+        }
+        if (!m_sceneSwitchStatus.empty())
+            ImGui::TextDisabled("%s", m_sceneSwitchStatus.c_str());
+
         const char* pbrDebugNames[] =
         {
             "Beauty",
@@ -1782,7 +1875,9 @@ void D3D12Renderer::BuildImGuiFrame()
                 m_rayTracingManager->GetAnimatedSkinJointCount(),
                 m_rayTracingManager->GetSkinJointTransformDelta());
             ImGui::TextDisabled(
-                "Bind pose only: GPU skinning is not connected yet");
+                m_rayTracingManager->IsGpuSkinningActive()
+                    ? "GPU skinning: active (dynamic BLAS update)"
+                    : "GPU skinning: unavailable");
         }
 
         bool restoreGltfMaterial = false;

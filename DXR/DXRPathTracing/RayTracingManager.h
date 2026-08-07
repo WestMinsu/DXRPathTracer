@@ -201,6 +201,10 @@ public:
     void SetEnableAccumulation(bool enableAccumulation);
     void SetSceneType(UINT sceneType);
     void SetSceneFilePath(const std::wstring& sceneFilePath) { m_sceneFilePath = sceneFilePath; }
+    bool ReloadPbrScene(
+        const std::wstring& sceneFilePath,
+        bool composeModelRoom,
+        bool sponzaLite);
     void SetComposeModelRoom(bool enabled) { m_composeModelRoom = enabled; }
     void SetSponzaLite(bool enabled) { m_sponzaLite = enabled; }
     void SetSponzaLightConfigPath(const std::wstring& path)
@@ -302,6 +306,10 @@ public:
     {
         return m_skinJointTransformDelta;
     }
+    bool IsGpuSkinningActive() const
+    {
+        return m_gpuSkinningActive;
+    }
     void SetDynamicTestSphereMaterialPreset(UINT preset);
     void SetDynamicTestCubeMaterialPreset(UINT preset);
     void SetDynamicSphereDeterministicTimeline(bool enabled);
@@ -346,8 +354,10 @@ private:
     struct ImportedMeshBlas
     {
         std::uint32_t meshIndex = c_invalidSceneMeshIndex;
+        std::uint32_t nodeIndex = c_invalidSceneNodeIndex;
         std::vector<GeometryRange> geometries;
         std::array<float, 16> referenceWorldInverse = {};
+        bool skinned = false;
         Microsoft::WRL::ComPtr<ID3D12Resource> accelerationStructure;
         Microsoft::WRL::ComPtr<ID3D12Resource> scratchBuffer;
     };
@@ -355,7 +365,10 @@ private:
     {
         std::uint32_t nodeIndex = c_invalidSceneNodeIndex;
         std::uint32_t meshBlasIndex = c_invalidSceneMeshIndex;
+        std::uint32_t skinIndex = c_invalidSceneSkinIndex;
+        UINT skinJointMatrixOffset = 0u;
         std::vector<UINT> primitiveOffsets;
+        std::vector<ScenePrimitiveRange> skinVertexRanges;
         std::array<float, 12> transform =
             { 1.0f, 0.0f, 0.0f, 0.0f,
               0.0f, 1.0f, 0.0f, 0.0f,
@@ -368,6 +381,7 @@ private:
     bool CreateGlobalRootSignature();
     bool CreateAtrousPipeline();
     bool CreateTemporalColorClipPipeline();
+    bool CreateSkinningPipeline();
     bool CreateRaytracingPipelineState();
     bool CreateShaderTables();
     bool CreateMissShaderTable();
@@ -386,7 +400,8 @@ private:
         UINT geometryCount,
         const wchar_t* debugName,
         Microsoft::WRL::ComPtr<ID3D12Resource>& accelerationStructure,
-        Microsoft::WRL::ComPtr<ID3D12Resource>& scratchBuffer);
+        Microsoft::WRL::ComPtr<ID3D12Resource>& scratchBuffer,
+        bool allowUpdate = false);
     bool BuildTopLevelAccelerationStructure();
     UINT GetStaticInstanceCount() const;
     UINT PopulateStaticInstanceDescriptors(
@@ -401,6 +416,9 @@ private:
     bool EvaluateSceneAnimation(double elapsedSeconds);
     bool ConfigureImportedMeshInstances(const SceneData& scene);
     bool EvaluateImportedSceneAnimation(double elapsedSeconds);
+    bool DispatchSkinningAndUpdateBlases(
+        ID3D12GraphicsCommandList4* commandList,
+        UINT frameIndex);
     bool ExecuteBuildCommandListAndWait();
     bool CreateUploadBuffer(const void* data,
         UINT64 sizeInBytes,
@@ -417,10 +435,13 @@ private:
         std::vector<std::uint8_t>& shaderBytes) const;
     bool LoadCompiledTemporalColorClipShader(
         std::vector<std::uint8_t>& shaderBytes) const;
+    bool LoadCompiledSkinningShader(
+        std::vector<std::uint8_t>& shaderBytes) const;
     bool ReadBinaryFile(const std::wstring& path, std::vector<std::uint8_t>& bytes) const;
     std::wstring GetCompiledShaderPath() const;
     std::wstring GetCompiledAtrousShaderPath() const;
     std::wstring GetCompiledTemporalColorClipShaderPath() const;
+    std::wstring GetCompiledSkinningShaderPath() const;
     std::wstring GetEnvironmentMapPath() const;
     void DispatchAtrousFilter(
         ID3D12GraphicsCommandList4* commandList,
@@ -546,6 +567,11 @@ private:
     UINT m_animatedSkinJointCount = 0u;
     float m_skinJointTransformDelta = 0.0f;
     std::vector<std::uint32_t> m_sceneSkinJointNodeIndices;
+    std::vector<SceneSkin> m_sceneSkins;
+    std::vector<std::array<float, 16>> m_skinJointMatrices;
+    UINT m_skinJointMatrixCount = 0u;
+    bool m_gpuSkinningActive = false;
+    bool m_skinningUpdatePending = false;
     GeometryRange m_staticGeometry;
     GeometryRange m_staticAlphaGeometry;
     GeometryRange m_dynamicSphereGeometry;
@@ -607,6 +633,8 @@ private:
         m_temporalColorClipRootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState>
         m_temporalColorClipPipelineState;
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> m_skinningRootSignature;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_skinningPipelineState;
     Microsoft::WRL::ComPtr<ID3D12StateObject> m_stateObject;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_rayGenShaderTable;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_missShaderTable;
@@ -616,6 +644,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList4> m_buildCommandList;
     Microsoft::WRL::ComPtr<ID3D12Fence> m_buildFence;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_vertexBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_skinBindPoseVertexBuffer;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_skinInfluenceBuffer;
+    std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,
+        c_tlasFrameCount> m_skinJointMatrixBuffers;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_indexBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_sceneMaterialBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_primitiveMaterialIndexBuffer;

@@ -439,6 +439,8 @@ namespace
     constexpr wchar_t c_compiledTemporalColorClipShaderRelativePath[] =
         L"Shaders\\TemporalColorClip.dxil";
     constexpr wchar_t c_environmentMapRelativePath[] = L"Assets\\Textures\\Cubemaps\\HDRI\\autumn_hill_view_4kSpecularHDR.dds";
+    constexpr wchar_t c_compiledSkinningShaderRelativePath[] =
+        L"Shaders/Skinning.dxil";
     constexpr UINT c_environmentDescriptorIndex = 8;
     constexpr UINT c_materialTextureDescriptorIndex = 9;
     constexpr UINT c_materialTextureDescriptorCount = 256;
@@ -1065,6 +1067,9 @@ bool RayTracingManager::Initialize(HWND hWnd, ID3D12Device5* device, UINT width,
         return false;
 
     if (!CreateTemporalColorClipPipeline())
+        return false;
+
+    if (!CreateSkinningPipeline())
         return false;
 
     if (!CreateRaytracingPipelineState())
@@ -2212,6 +2217,7 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
         return false;
 
     m_sceneAnimationNodes = scene.nodes;
+    m_sceneSkins = scene.skins;
     m_importedSkinCount = static_cast<UINT>(scene.skins.size());
     for (const SceneSkin& skin : scene.skins)
     {
@@ -2244,11 +2250,18 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
             source.primitives.empty())
             return false;
 
+        const std::uint32_t skinIndex =
+            scene.nodes[source.nodeIndex].skinIndex;
+        const bool skinned = skinIndex != c_invalidSceneSkinIndex;
+        if (skinned && skinIndex >= scene.skins.size())
+            return false;
+
         std::uint32_t blasIndex = c_invalidSceneMeshIndex;
         for (std::size_t index = 0;
-             index < m_importedMeshBlases.size(); ++index)
+             !skinned && index < m_importedMeshBlases.size(); ++index)
         {
-            if (m_importedMeshBlases[index].meshIndex == source.meshIndex)
+            if (!m_importedMeshBlases[index].skinned &&
+                m_importedMeshBlases[index].meshIndex == source.meshIndex)
             {
                 blasIndex = static_cast<std::uint32_t>(index);
                 break;
@@ -2259,6 +2272,8 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
         {
             ImportedMeshBlas blas;
             blas.meshIndex = source.meshIndex;
+            blas.nodeIndex = source.nodeIndex;
+            blas.skinned = skinned;
             if (!InvertAffineMatrix(
                     scene.nodes[source.nodeIndex].worldTransform,
                     blas.referenceWorldInverse))
@@ -2294,6 +2309,22 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
         ImportedMeshInstance instance;
         instance.nodeIndex = source.nodeIndex;
         instance.meshBlasIndex = blasIndex;
+        instance.skinIndex = skinIndex;
+        if (skinned)
+        {
+            const std::size_t jointCount =
+                scene.skins[skinIndex].jointNodeIndices.size();
+            if (jointCount >
+                static_cast<std::size_t>(
+                    std::numeric_limits<UINT>::max() -
+                    m_skinJointMatrixCount))
+            {
+                return false;
+            }
+            instance.skinJointMatrixOffset = m_skinJointMatrixCount;
+            m_skinJointMatrixCount += static_cast<UINT>(jointCount);
+            instance.skinVertexRanges = source.primitives;
+        }
         for (const ScenePrimitiveRange& primitive : source.primitives)
             instance.primitiveOffsets.push_back(primitive.primitiveOffset);
         m_importedMeshInstances.push_back(std::move(instance));
@@ -2325,6 +2356,8 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
 
         for (ImportedMeshInstance& instance : m_importedMeshInstances)
         {
+            if (instance.skinIndex != c_invalidSceneSkinIndex)
+                instance.animated = m_hasSceneAnimation;
             for (const SceneAnimationChannel& channel :
                  m_sceneAnimationClip.channels)
             {
@@ -2376,6 +2409,9 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
             }
         }
     }
+    m_skinJointMatrices.assign(
+        m_skinJointMatrixCount,
+        IdentityMatrix());
     return EvaluateImportedSceneAnimation(0.0);
 }
 
@@ -2403,6 +2439,11 @@ bool RayTracingManager::ConfigureSceneAnimation(const SceneData& scene)
     m_animatedSkinJointCount = 0u;
     m_skinJointTransformDelta = 0.0f;
     m_sceneSkinJointNodeIndices.clear();
+    m_sceneSkins.clear();
+    m_skinJointMatrices.clear();
+    m_skinJointMatrixCount = 0u;
+    m_gpuSkinningActive = false;
+    m_skinningUpdatePending = false;
 
     if (!scene.meshNodeInstances.empty())
         return ConfigureImportedMeshInstances(scene);
@@ -2586,18 +2627,68 @@ bool RayTracingManager::EvaluateImportedSceneAnimation(double elapsedSeconds)
         if (instance.meshBlasIndex >= m_importedMeshBlases.size() ||
             !evaluateWorld(instance.nodeIndex))
             return false;
-        const Matrix4 delta = MultiplyMatrix(
-            worldTransforms[instance.nodeIndex],
-            m_importedMeshBlases[instance.meshBlasIndex].
-                referenceWorldInverse);
-        const Matrix4 leftHanded =
-            ConvertRightHandedDeltaToLeftHanded(delta);
-        for (const float value : leftHanded)
+
+        const ImportedMeshBlas& blas =
+            m_importedMeshBlases[instance.meshBlasIndex];
+        if (instance.skinIndex != c_invalidSceneSkinIndex)
         {
-            if (!std::isfinite(value))
+            if (!blas.skinned ||
+                instance.skinIndex >= m_sceneSkins.size())
                 return false;
+            const SceneSkin& skin = m_sceneSkins[instance.skinIndex];
+            if (skin.jointNodeIndices.size() !=
+                    skin.inverseBindMatrices.size() ||
+                instance.skinJointMatrixOffset +
+                    skin.jointNodeIndices.size() >
+                    m_skinJointMatrices.size())
+            {
+                return false;
+            }
+
+            for (std::size_t jointIndex = 0;
+                 jointIndex < skin.jointNodeIndices.size();
+                 ++jointIndex)
+            {
+                const std::uint32_t jointNodeIndex =
+                    skin.jointNodeIndices[jointIndex];
+                if (!evaluateWorld(jointNodeIndex))
+                    return false;
+                const Matrix4 worldFromBindMesh =
+                    MultiplyMatrix(
+                        MultiplyMatrix(
+                            worldTransforms[jointNodeIndex],
+                            skin.inverseBindMatrices[jointIndex]),
+                        blas.referenceWorldInverse);
+                const Matrix4 leftHanded =
+                    ConvertRightHandedDeltaToLeftHanded(
+                        worldFromBindMesh);
+                for (const float value : leftHanded)
+                {
+                    if (!std::isfinite(value))
+                        return false;
+                }
+                m_skinJointMatrices[
+                    instance.skinJointMatrixOffset + jointIndex] =
+                    leftHanded;
+            }
+            WriteInstanceTransform(
+                IdentityMatrix(),
+                instance.transform);
         }
-        WriteInstanceTransform(leftHanded, instance.transform);
+        else
+        {
+            const Matrix4 delta = MultiplyMatrix(
+                worldTransforms[instance.nodeIndex],
+                blas.referenceWorldInverse);
+            const Matrix4 leftHanded =
+                ConvertRightHandedDeltaToLeftHanded(delta);
+            for (const float value : leftHanded)
+            {
+                if (!std::isfinite(value))
+                    return false;
+            }
+            WriteInstanceTransform(leftHanded, instance.transform);
+        }
     }
 
     m_skinJointTransformDelta = 0.0f;
@@ -2616,6 +2707,7 @@ bool RayTracingManager::EvaluateImportedSceneAnimation(double elapsedSeconds)
                         worldTransform[component]));
         }
     }
+    m_skinningUpdatePending = m_skinJointMatrixCount > 0u;
     return true;
 }
 
@@ -2814,6 +2906,19 @@ void RayTracingManager::SetSceneType(UINT sceneType)
     ResetAccumulation();
     if (m_device)
         CreateAccelerationStructures();
+}
+
+bool RayTracingManager::ReloadPbrScene(
+    const std::wstring& sceneFilePath,
+    bool composeModelRoom,
+    bool sponzaLite)
+{
+    m_sceneType = c_scenePbrGgx;
+    m_sceneFilePath = sceneFilePath;
+    m_composeModelRoom = composeModelRoom;
+    m_sponzaLite = sponzaLite;
+    ResetAccumulation();
+    return !m_device || CreateAccelerationStructures();
 }
 
 bool RayTracingManager::CreateOutputTexture()
@@ -4037,6 +4142,68 @@ bool RayTracingManager::CreateTemporalColorClipPipeline()
     return true;
 }
 
+bool RayTracingManager::CreateSkinningPipeline()
+{
+    D3D12_ROOT_PARAMETER rootParameters[5] = {};
+    for (UINT parameterIndex = 0; parameterIndex < 3u; ++parameterIndex)
+    {
+        rootParameters[parameterIndex].ParameterType =
+            D3D12_ROOT_PARAMETER_TYPE_SRV;
+        rootParameters[parameterIndex].Descriptor.ShaderRegister =
+            parameterIndex;
+        rootParameters[parameterIndex].ShaderVisibility =
+            D3D12_SHADER_VISIBILITY_ALL;
+    }
+    rootParameters[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_UAV;
+    rootParameters[3].Descriptor.ShaderRegister = 0u;
+    rootParameters[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+    rootParameters[4].ParameterType =
+        D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+    rootParameters[4].Constants.ShaderRegister = 0u;
+    rootParameters[4].Constants.Num32BitValues = 4u;
+    rootParameters[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+    D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
+    rootSignatureDesc.NumParameters = _countof(rootParameters);
+    rootSignatureDesc.pParameters = rootParameters;
+    rootSignatureDesc.Flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
+
+    Microsoft::WRL::ComPtr<ID3DBlob> signature;
+    Microsoft::WRL::ComPtr<ID3DBlob> error;
+    HRESULT hr = D3D12SerializeRootSignature(
+        &rootSignatureDesc,
+        D3D_ROOT_SIGNATURE_VERSION_1,
+        &signature,
+        &error);
+    if (ReportFailure(hr, L"Skinning root signature serialization failed."))
+        return false;
+
+    hr = m_device->CreateRootSignature(
+        0,
+        signature->GetBufferPointer(),
+        signature->GetBufferSize(),
+        IID_PPV_ARGS(&m_skinningRootSignature));
+    if (ReportFailure(hr, L"Skinning root signature creation failed."))
+        return false;
+    m_skinningRootSignature->SetName(L"Skinning root signature");
+
+    std::vector<std::uint8_t> shaderBytes;
+    if (!LoadCompiledSkinningShader(shaderBytes))
+        return false;
+
+    D3D12_COMPUTE_PIPELINE_STATE_DESC pipelineDesc = {};
+    pipelineDesc.pRootSignature = m_skinningRootSignature.Get();
+    pipelineDesc.CS.pShaderBytecode = shaderBytes.data();
+    pipelineDesc.CS.BytecodeLength = shaderBytes.size();
+    hr = m_device->CreateComputePipelineState(
+        &pipelineDesc,
+        IID_PPV_ARGS(&m_skinningPipelineState));
+    if (ReportFailure(hr, L"Skinning pipeline state creation failed."))
+        return false;
+    m_skinningPipelineState->SetName(L"Skinning pipeline state");
+    return true;
+}
+
 bool RayTracingManager::CreateRaytracingPipelineState()
 {
     std::vector<std::uint8_t> shaderBytes;
@@ -4236,7 +4403,10 @@ bool RayTracingManager::CreateAccelerationStructures()
     const bool buildSucceeded = ExecuteBuildCommandListAndWait();
     m_blasScratchBuffer.Reset();
     for (ImportedMeshBlas& blas : m_importedMeshBlases)
-        blas.scratchBuffer.Reset();
+    {
+        if (!blas.skinned)
+            blas.scratchBuffer.Reset();
+    }
     m_dynamicSphereBlasScratchBuffer.Reset();
     m_dynamicCubeBlasScratchBuffer.Reset();
     if (!m_hasSceneAnimation &&
@@ -4371,6 +4541,11 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     m_dynamicSphereGeometry = {};
     m_dynamicCubeGeometry = {};
     m_hasStaticAlphaGeometry = false;
+    m_skinBindPoseVertexBuffer.Reset();
+    m_skinInfluenceBuffer.Reset();
+    for (auto& jointMatrixBuffer : m_skinJointMatrixBuffers)
+        jointMatrixBuffer.Reset();
+    m_gpuSkinningActive = false;
     if (!ConfigureSceneAnimation(SceneData{}))
         return false;
     const bool isPbrScene = m_sceneType == c_scenePbrGgx ||
@@ -4924,12 +5099,14 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         const void* data,
         UINT64 sizeInBytes,
         const wchar_t* debugName,
-        Microsoft::WRL::ComPtr<ID3D12Resource>& destination) -> bool
+        Microsoft::WRL::ComPtr<ID3D12Resource>& destination,
+        D3D12_RESOURCE_FLAGS resourceFlags =
+            D3D12_RESOURCE_FLAG_NONE) -> bool
     {
         const D3D12_HEAP_PROPERTIES defaultHeap =
             CreateHeapProperties(D3D12_HEAP_TYPE_DEFAULT);
         const D3D12_RESOURCE_DESC bufferDesc =
-            CreateBufferDesc(sizeInBytes);
+            CreateBufferDesc(sizeInBytes, resourceFlags);
         HRESULT createResult = m_device->CreateCommittedResource(
             &defaultHeap,
             D3D12_HEAP_FLAG_NONE,
@@ -4978,7 +5155,10 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             scene.vertices.data(),
             sizeof(SceneVertex) * scene.vertices.size(),
             L"Raytracing scene vertex buffer",
-            m_vertexBuffer) ||
+            m_vertexBuffer,
+            m_skinJointMatrixCount > 0u
+                ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
+                : D3D12_RESOURCE_FLAG_NONE) ||
         !createStaticGpuBuffer(
             scene.indices.data(),
             sizeof(std::uint32_t) * scene.indices.size(),
@@ -5006,6 +5186,39 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             m_emissiveTriangleBuffer))
     {
         return false;
+    }
+    if (m_skinJointMatrixCount > 0u)
+    {
+        if (scene.vertexSkinInfluences.size() != scene.vertices.size() ||
+            m_skinJointMatrices.size() != m_skinJointMatrixCount ||
+            !createStaticGpuBuffer(
+                scene.vertices.data(),
+                sizeof(SceneVertex) * scene.vertices.size(),
+                L"Skin bind-pose vertex buffer",
+                m_skinBindPoseVertexBuffer) ||
+            !createStaticGpuBuffer(
+                scene.vertexSkinInfluences.data(),
+                sizeof(SceneVertexSkinInfluence) *
+                    scene.vertexSkinInfluences.size(),
+                L"Skin influence buffer",
+                m_skinInfluenceBuffer))
+        {
+            return false;
+        }
+        for (UINT frameIndex = 0;
+             frameIndex < c_tlasFrameCount;
+             ++frameIndex)
+        {
+            if (!CreateUploadBuffer(
+                m_skinJointMatrices.data(),
+                sizeof(Matrix4) * m_skinJointMatrices.size(),
+                L"Skin joint matrix palette",
+                m_skinJointMatrixBuffers[frameIndex]))
+            {
+                return false;
+            }
+        }
+        m_gpuSkinningActive = true;
     }
     if (!ExecuteBuildCommandListAndWait())
         return false;
@@ -5282,7 +5495,8 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure()
                     static_cast<UINT>(blas.geometries.size()),
                     L"Imported mesh bottom level acceleration structure",
                     blas.accelerationStructure,
-                    blas.scratchBuffer))
+                    blas.scratchBuffer,
+                    blas.skinned))
                 return false;
         }
     }
@@ -5331,7 +5545,8 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure(
     UINT geometryCount,
     const wchar_t* debugName,
     Microsoft::WRL::ComPtr<ID3D12Resource>& accelerationStructure,
-    Microsoft::WRL::ComPtr<ID3D12Resource>& scratchBuffer)
+    Microsoft::WRL::ComPtr<ID3D12Resource>& scratchBuffer,
+    bool allowUpdate)
 {
     if (!geometries || geometryCount == 0)
     {
@@ -5374,6 +5589,11 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure(
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS inputs = {};
     inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
     inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+    if (allowUpdate)
+    {
+        inputs.Flags |=
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
+    }
     inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
     inputs.NumDescs = geometryCount;
     inputs.pGeometryDescs = geometryDescs.data();
@@ -5387,8 +5607,13 @@ bool RayTracingManager::BuildBottomLevelAccelerationStructure(
     }
 
     scratchBuffer.Reset();
+    const UINT64 scratchSize = allowUpdate
+        ? (std::max)(
+            prebuildInfo.ScratchDataSizeInBytes,
+            prebuildInfo.UpdateScratchDataSizeInBytes)
+        : prebuildInfo.ScratchDataSizeInBytes;
     if (!CreateScratchBuffer(
-        prebuildInfo.ScratchDataSizeInBytes,
+        scratchSize,
         L"BLAS scratch buffer",
         scratchBuffer))
         return false;
@@ -5811,13 +6036,211 @@ void RayTracingManager::UpdateDynamicObjectMotion()
     ++m_dynamicSceneFrameIndex;
 }
 
+bool RayTracingManager::DispatchSkinningAndUpdateBlases(
+    ID3D12GraphicsCommandList4* commandList,
+    UINT frameIndex)
+{
+    if (!m_gpuSkinningActive)
+        return true;
+    if (!commandList ||
+        frameIndex >= c_tlasFrameCount ||
+        !m_skinningRootSignature ||
+        !m_skinningPipelineState ||
+        !m_skinBindPoseVertexBuffer ||
+        !m_skinInfluenceBuffer ||
+        !m_skinJointMatrixBuffers[frameIndex] ||
+        !m_vertexBuffer ||
+        m_skinJointMatrices.empty())
+    {
+        return false;
+    }
+
+    void* mappedMatrices = nullptr;
+    const D3D12_RANGE readRange = { 0, 0 };
+    HRESULT hr = m_skinJointMatrixBuffers[frameIndex]->Map(
+        0,
+        &readRange,
+        &mappedMatrices);
+    if (ReportFailure(hr, L"Skin joint matrix palette mapping failed."))
+        return false;
+    const SIZE_T matrixBytes =
+        sizeof(Matrix4) * m_skinJointMatrices.size();
+    std::memcpy(
+        mappedMatrices,
+        m_skinJointMatrices.data(),
+        matrixBytes);
+    const D3D12_RANGE writtenRange = { 0, matrixBytes };
+    m_skinJointMatrixBuffers[frameIndex]->Unmap(
+        0,
+        &writtenRange);
+
+    D3D12_RESOURCE_BARRIER toUnorderedAccess = {};
+    toUnorderedAccess.Type =
+        D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toUnorderedAccess.Transition.pResource = m_vertexBuffer.Get();
+    toUnorderedAccess.Transition.StateBefore =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    toUnorderedAccess.Transition.StateAfter =
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toUnorderedAccess.Transition.Subresource =
+        D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toUnorderedAccess);
+
+    commandList->SetPipelineState(m_skinningPipelineState.Get());
+    commandList->SetComputeRootSignature(m_skinningRootSignature.Get());
+    commandList->SetComputeRootShaderResourceView(
+        0,
+        m_skinBindPoseVertexBuffer->GetGPUVirtualAddress());
+    commandList->SetComputeRootShaderResourceView(
+        1,
+        m_skinInfluenceBuffer->GetGPUVirtualAddress());
+    commandList->SetComputeRootShaderResourceView(
+        2,
+        m_skinJointMatrixBuffers[frameIndex]->GetGPUVirtualAddress());
+    commandList->SetComputeRootUnorderedAccessView(
+        3,
+        m_vertexBuffer->GetGPUVirtualAddress());
+
+    for (const ImportedMeshInstance& instance :
+         m_importedMeshInstances)
+    {
+        if (instance.skinIndex == c_invalidSceneSkinIndex)
+            continue;
+        for (const ScenePrimitiveRange& range :
+             instance.skinVertexRanges)
+        {
+            if (range.vertexCount == 0u)
+                continue;
+            const UINT constants[4] =
+            {
+                range.vertexOffset,
+                range.vertexCount,
+                instance.skinJointMatrixOffset,
+                0u
+            };
+            commandList->SetComputeRoot32BitConstants(
+                4,
+                _countof(constants),
+                constants,
+                0);
+            commandList->Dispatch(
+                (range.vertexCount + 63u) / 64u,
+                1u,
+                1u);
+        }
+    }
+
+    D3D12_RESOURCE_BARRIER vertexUavBarrier = {};
+    vertexUavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+    vertexUavBarrier.UAV.pResource = m_vertexBuffer.Get();
+    commandList->ResourceBarrier(1, &vertexUavBarrier);
+
+    D3D12_RESOURCE_BARRIER toShaderResource = {};
+    toShaderResource.Type =
+        D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    toShaderResource.Transition.pResource = m_vertexBuffer.Get();
+    toShaderResource.Transition.StateBefore =
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    toShaderResource.Transition.StateAfter =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    toShaderResource.Transition.Subresource =
+        D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    commandList->ResourceBarrier(1, &toShaderResource);
+
+    std::vector<D3D12_RESOURCE_BARRIER> blasBarriers;
+    for (ImportedMeshBlas& blas : m_importedMeshBlases)
+    {
+        if (!blas.skinned)
+            continue;
+        if (!blas.accelerationStructure ||
+            !blas.scratchBuffer ||
+            blas.geometries.empty())
+        {
+            return false;
+        }
+
+        std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geometryDescs(
+            blas.geometries.size());
+        for (std::size_t geometryIndex = 0;
+             geometryIndex < blas.geometries.size();
+             ++geometryIndex)
+        {
+            const GeometryRange& geometry =
+                blas.geometries[geometryIndex];
+            D3D12_RAYTRACING_GEOMETRY_DESC& geometryDesc =
+                geometryDescs[geometryIndex];
+            geometryDesc.Type =
+                D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+            geometryDesc.Flags = geometry.containsAlphaMask
+                ? D3D12_RAYTRACING_GEOMETRY_FLAG_NONE
+                : D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+            geometryDesc.Triangles.VertexBuffer.StartAddress =
+                m_vertexBuffer->GetGPUVirtualAddress() +
+                static_cast<UINT64>(geometry.vertexOffset) *
+                    sizeof(SceneVertex);
+            geometryDesc.Triangles.VertexBuffer.StrideInBytes =
+                sizeof(SceneVertex);
+            geometryDesc.Triangles.VertexCount = geometry.vertexCount;
+            geometryDesc.Triangles.VertexFormat =
+                DXGI_FORMAT_R32G32B32_FLOAT;
+            geometryDesc.Triangles.IndexBuffer =
+                m_indexBuffer->GetGPUVirtualAddress() +
+                static_cast<UINT64>(geometry.indexOffset) *
+                    sizeof(std::uint32_t);
+            geometryDesc.Triangles.IndexCount = geometry.indexCount;
+            geometryDesc.Triangles.IndexFormat = DXGI_FORMAT_R32_UINT;
+        }
+
+        D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC buildDesc = {};
+        buildDesc.Inputs.Type =
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+        buildDesc.Inputs.Flags =
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE |
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE |
+            D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PERFORM_UPDATE;
+        buildDesc.Inputs.DescsLayout =
+            D3D12_ELEMENTS_LAYOUT_ARRAY;
+        buildDesc.Inputs.NumDescs =
+            static_cast<UINT>(geometryDescs.size());
+        buildDesc.Inputs.pGeometryDescs = geometryDescs.data();
+        buildDesc.SourceAccelerationStructureData =
+            blas.accelerationStructure->GetGPUVirtualAddress();
+        buildDesc.DestAccelerationStructureData =
+            blas.accelerationStructure->GetGPUVirtualAddress();
+        buildDesc.ScratchAccelerationStructureData =
+            blas.scratchBuffer->GetGPUVirtualAddress();
+        commandList->BuildRaytracingAccelerationStructure(
+            &buildDesc,
+            0,
+            nullptr);
+
+        D3D12_RESOURCE_BARRIER barrier = {};
+        barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        barrier.UAV.pResource = blas.accelerationStructure.Get();
+        blasBarriers.push_back(barrier);
+    }
+    if (!blasBarriers.empty())
+    {
+        commandList->ResourceBarrier(
+            static_cast<UINT>(blasBarriers.size()),
+            blasBarriers.data());
+    }
+    m_dynamicObjectMovedThisFrame = true;
+    m_skinningUpdatePending = false;
+    return true;
+}
+
 bool RayTracingManager::UpdateTopLevelAccelerationStructure(
     ID3D12GraphicsCommandList4* commandList)
 {
     m_dynamicObjectMovedThisFrame = false;
     const bool updateSceneAnimation =
         m_hasSceneAnimation && m_sceneAnimationEnabled;
+    const bool updateSkinning =
+        m_gpuSkinningActive &&
+        (updateSceneAnimation || m_skinningUpdatePending);
     if (!updateSceneAnimation &&
+        !updateSkinning &&
         !m_hasDynamicSphere &&
         !m_hasDynamicCube)
         return true;
@@ -5844,6 +6267,13 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
 
     const UINT descriptorFrame =
         static_cast<UINT>(m_frameIndex % c_tlasFrameCount);
+    if (updateSkinning &&
+        !DispatchSkinningAndUpdateBlases(
+            commandList,
+            descriptorFrame))
+    {
+        return false;
+    }
     if (!WritePreviousInstanceTransforms(descriptorFrame))
         return false;
 
@@ -6101,6 +6531,19 @@ bool RayTracingManager::LoadCompiledTemporalColorClipShader(
     return false;
 }
 
+bool RayTracingManager::LoadCompiledSkinningShader(
+    std::vector<std::uint8_t>& shaderBytes) const
+{
+    const std::wstring shaderPath = GetCompiledSkinningShaderPath();
+    if (ReadBinaryFile(shaderPath, shaderBytes))
+        return true;
+
+    std::wstring message = L"Compiled skinning shader was not found. Expected: ";
+    message += shaderPath;
+    ReportMessage(message);
+    return false;
+}
+
 bool RayTracingManager::ReadBinaryFile(const std::wstring& path, std::vector<std::uint8_t>& bytes) const
 {
     ScopedFileHandle file(CreateFileW(
@@ -6217,6 +6660,40 @@ std::wstring RayTracingManager::GetCompiledTemporalColorClipShaderPath() const
         ? std::wstring()
         : modulePath.substr(0, slash + 1);
     return executableDir + c_compiledTemporalColorClipShaderRelativePath;
+}
+
+std::wstring RayTracingManager::GetCompiledSkinningShaderPath() const
+{
+    std::wstring modulePath(MAX_PATH, static_cast<wchar_t>(0));
+    DWORD length = GetModuleFileNameW(
+        nullptr,
+        &modulePath[0],
+        static_cast<DWORD>(modulePath.size()));
+    while (length == modulePath.size())
+    {
+        modulePath.resize(modulePath.size() * 2);
+        length = GetModuleFileNameW(
+            nullptr,
+            &modulePath[0],
+            static_cast<DWORD>(modulePath.size()));
+    }
+
+    modulePath.resize(length);
+    const std::wstring::size_type slash =
+        modulePath.find_last_of(L"/");
+    const std::wstring::size_type backslash =
+        modulePath.find_last_of(static_cast<wchar_t>(92));
+    const std::wstring::size_type separator =
+        slash == std::wstring::npos
+            ? backslash
+            : (backslash == std::wstring::npos
+                ? slash
+                : (std::max)(slash, backslash));
+    const std::wstring executableDir =
+        separator == std::wstring::npos
+            ? std::wstring()
+            : modulePath.substr(0, separator + 1);
+    return executableDir + c_compiledSkinningShaderRelativePath;
 }
 
 bool RayTracingManager::ReportFailure(HRESULT hr, const wchar_t* message) const

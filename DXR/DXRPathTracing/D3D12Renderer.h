@@ -264,6 +264,7 @@ private:
     bool InitializeImGui();
     void ShutdownImGui();
     void BuildImGuiFrame();
+    bool SwitchPbrScenePreset(int preset);
     void RenderImGuiDrawData();
     void ReleaseRenderTargets();
     enum class CaptureFormat
@@ -373,6 +374,7 @@ private:
     int m_maxBounce = 8;
     int m_samplesPerPixel = 1;
     int m_sceneType = 0;
+    int m_pbrScenePreset = 0;
     int m_pbrDebugView = 0;
     float m_pbrMetallic = 1.0f;
     float m_pbrRoughness = 0.35f;
@@ -393,6 +395,7 @@ private:
     std::wstring m_cameraPathError;
     bool m_composeModelRoom = false;
     bool m_sponzaLite = false;
+    std::string m_sceneSwitchStatus;
     bool m_benchmarkEnabled = false;
     bool m_benchmarkFinished = false;
     UINT m_benchmarkFrameLimit = 600;
