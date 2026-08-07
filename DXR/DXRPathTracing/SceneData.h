@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -19,6 +20,14 @@ struct SceneVertex
     float normal[3];
     float texCoord[2];
     float tangent[4];
+};
+
+// JOINTS_0 values are indices into the SceneSkin::jointNodeIndices array,
+// not global scene-node indices. Weights are normalized by the loader.
+struct SceneVertexSkinInfluence
+{
+    std::uint32_t jointIndices[4] = {};
+    float jointWeights[4] = {};
 };
 
 // This layout is mirrored by SceneMaterial in RaytracingCommon.hlsli.
@@ -108,6 +117,16 @@ struct SceneNode
     };
 };
 
+// Matrices retain glTF's right-handed, column-major representation. They are
+// converted only when GPU skinning is connected in the following stage.
+struct SceneSkin
+{
+    std::string name;
+    std::uint32_t skeletonRootNodeIndex = c_invalidSceneNodeIndex;
+    std::vector<std::uint32_t> jointNodeIndices;
+    std::vector<std::array<float, 16>> inverseBindMatrices;
+};
+
 // Geometry produced for one glTF primitive while the legacy loader still
 // flattens node transforms into the shared vertex/index buffers. These ranges
 // let the renderer build one representative BLAS per unique glTF mesh and
@@ -158,6 +177,7 @@ struct SceneAnimation
 };
 
 static_assert(sizeof(SceneVertex) == 48);
+static_assert(sizeof(SceneVertexSkinInfluence) == 32);
 static_assert(offsetof(SceneVertex, texCoord) == 24);
 static_assert(offsetof(SceneVertex, tangent) == 32);
 static_assert(sizeof(SceneMaterial) == 60);
@@ -183,6 +203,8 @@ struct SceneData
     std::vector<std::uint32_t> primitiveMaterialIndices;
     std::vector<SceneTexture> textures;
     std::vector<SceneNode> nodes;
+    std::vector<SceneSkin> skins;
+    std::vector<SceneVertexSkinInfluence> vertexSkinInfluences;
     std::vector<SceneMeshNodeInstance> meshNodeInstances;
     std::vector<std::uint32_t> rootNodeIndices;
     std::vector<SceneAnimation> animations;

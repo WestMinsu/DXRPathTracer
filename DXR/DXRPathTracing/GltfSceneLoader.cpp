@@ -949,6 +949,78 @@ namespace
         return vertex;
     }
 
+    bool GenerateNormals(
+        SceneData& scene,
+        std::uint32_t baseVertex,
+        cgltf_size vertexCount,
+        std::size_t indexStart,
+        cgltf_size indexCount)
+    {
+        std::vector<float> normalSums(vertexCount * 3u, 0.0f);
+        for (cgltf_size triangleOffset = 0;
+             triangleOffset < indexCount;
+             triangleOffset += 3)
+        {
+            const std::uint32_t indices[3] =
+            {
+                scene.indices[indexStart + triangleOffset + 0u] - baseVertex,
+                scene.indices[indexStart + triangleOffset + 1u] - baseVertex,
+                scene.indices[indexStart + triangleOffset + 2u] - baseVertex
+            };
+            const SceneVertex& v0 =
+                scene.vertices[baseVertex + indices[0]];
+            const SceneVertex& v1 =
+                scene.vertices[baseVertex + indices[1]];
+            const SceneVertex& v2 =
+                scene.vertices[baseVertex + indices[2]];
+            const float edge1[3] =
+            {
+                v1.position[0] - v0.position[0],
+                v1.position[1] - v0.position[1],
+                v1.position[2] - v0.position[2]
+            };
+            const float edge2[3] =
+            {
+                v2.position[0] - v0.position[0],
+                v2.position[1] - v0.position[1],
+                v2.position[2] - v0.position[2]
+            };
+            const float faceNormal[3] =
+            {
+                edge1[1] * edge2[2] - edge1[2] * edge2[1],
+                edge1[2] * edge2[0] - edge1[0] * edge2[2],
+                edge1[0] * edge2[1] - edge1[1] * edge2[0]
+            };
+            for (const std::uint32_t localIndex : indices)
+            {
+                for (std::size_t component = 0; component < 3; ++component)
+                {
+                    normalSums[localIndex * 3u + component] +=
+                        faceNormal[component];
+                }
+            }
+        }
+
+        for (cgltf_size localIndex = 0;
+             localIndex < vertexCount;
+             ++localIndex)
+        {
+            SceneVertex& vertex = scene.vertices[baseVertex + localIndex];
+            const float* sum = normalSums.data() + localIndex * 3u;
+            const float lengthSquared =
+                sum[0] * sum[0] +
+                sum[1] * sum[1] +
+                sum[2] * sum[2];
+            if (lengthSquared <= c_normalLengthEpsilon)
+                return false;
+            const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+            vertex.normal[0] = sum[0] * inverseLength;
+            vertex.normal[1] = sum[1] * inverseLength;
+            vertex.normal[2] = sum[2] * inverseLength;
+        }
+        return true;
+    }
+
     void GenerateTangents(
         SceneData& scene,
         std::uint32_t baseVertex,
@@ -1070,6 +1142,7 @@ namespace
         const cgltf_data& data,
         const cgltf_primitive& primitive,
         const NodeTransform& transform,
+        std::uint32_t skinIndex,
         std::uint32_t defaultMaterialIndex,
         SceneData& scene,
         std::wstring& errorMessage,
@@ -1135,13 +1208,25 @@ namespace
             &primitive,
             cgltf_attribute_type_tangent,
             0);
-        if (!positions || !normals)
-            return Fail(errorMessage, L"Each primitive must provide POSITION and NORMAL attributes.");
-        if (positions->type != cgltf_type_vec3 ||
-            normals->type != cgltf_type_vec3 ||
-            positions->count != normals->count)
+        const cgltf_accessor* joints = cgltf_find_accessor(
+            &primitive,
+            cgltf_attribute_type_joints,
+            0);
+        const cgltf_accessor* weights = cgltf_find_accessor(
+            &primitive,
+            cgltf_attribute_type_weights,
+            0);
+        if (!positions)
+            return Fail(errorMessage, L"Each primitive must provide POSITION.");
+        if (positions->type != cgltf_type_vec3)
+            return Fail(errorMessage, L"POSITION must be a VEC3 accessor.");
+        if (normals &&
+            (normals->type != cgltf_type_vec3 ||
+             positions->count != normals->count))
         {
-            return Fail(errorMessage, L"POSITION and NORMAL must be matching VEC3 accessors.");
+            return Fail(
+                errorMessage,
+                L"NORMAL must be a VEC3 accessor matching POSITION.");
         }
         if (requiresTexCoord && !texCoords)
             return Fail(errorMessage, L"A textured primitive must provide TEXCOORD_0.");
@@ -1155,6 +1240,44 @@ namespace
         {
             return Fail(errorMessage, L"TANGENT must be a VEC4 accessor matching POSITION.");
         }
+        const bool hasSkin = skinIndex != c_invalidSceneSkinIndex;
+        if (hasSkin)
+        {
+            if (skinIndex >= scene.skins.size())
+                return Fail(errorMessage, L"A mesh node references an invalid skin.");
+            if (!joints || !weights)
+            {
+                return Fail(
+                    errorMessage,
+                    L"A skinned primitive must provide JOINTS_0 and WEIGHTS_0.");
+            }
+            if (joints->type != cgltf_type_vec4 ||
+                joints->count != positions->count ||
+                (joints->component_type != cgltf_component_type_r_8u &&
+                 joints->component_type != cgltf_component_type_r_16u))
+            {
+                return Fail(
+                    errorMessage,
+                    L"JOINTS_0 must be an UNSIGNED_BYTE or "
+                    L"UNSIGNED_SHORT VEC4 matching POSITION.");
+            }
+            const bool validFloatWeights =
+                weights->component_type == cgltf_component_type_r_32f;
+            const bool validNormalizedIntegerWeights =
+                weights->normalized &&
+                (weights->component_type == cgltf_component_type_r_8u ||
+                 weights->component_type == cgltf_component_type_r_16u);
+            if (weights->type != cgltf_type_vec4 ||
+                weights->count != positions->count ||
+                (!validFloatWeights &&
+                 !validNormalizedIntegerWeights))
+            {
+                return Fail(
+                    errorMessage,
+                    L"WEIGHTS_0 must be a FLOAT or normalized unsigned "
+                    L"integer VEC4 matching POSITION.");
+            }
+        }
         if (positions->count == 0 ||
             scene.vertices.size() > std::numeric_limits<std::uint32_t>::max() ||
             positions->count >
@@ -1165,6 +1288,14 @@ namespace
 
         const std::uint32_t baseVertex = static_cast<std::uint32_t>(scene.vertices.size());
         scene.vertices.reserve(scene.vertices.size() + positions->count);
+        const bool storeSkinInfluences = !scene.skins.empty();
+        if (storeSkinInfluences)
+        {
+            scene.vertexSkinInfluences.reserve(
+                scene.vertexSkinInfluences.size() + positions->count);
+        }
+        const bool useSourceTangents =
+            tangents != nullptr && normals != nullptr;
         for (cgltf_size vertexIndex = 0; vertexIndex < positions->count; ++vertexIndex)
         {
             float position[3] = {};
@@ -1172,7 +1303,9 @@ namespace
             float texCoord[2] = {};
             float tangent[4] = { 1.0f, 0.0f, 0.0f, 1.0f };
             if (!cgltf_accessor_read_float(positions, vertexIndex, position, 3) ||
-                !cgltf_accessor_read_float(normals, vertexIndex, normal, 3) ||
+                (normals &&
+                 !cgltf_accessor_read_float(
+                    normals, vertexIndex, normal, 3)) ||
                 (texCoords && !cgltf_accessor_read_float(texCoords, vertexIndex, texCoord, 2)) ||
                 (tangents && !cgltf_accessor_read_float(tangents, vertexIndex, tangent, 4)))
             {
@@ -1184,15 +1317,72 @@ namespace
                 normal,
                 texCoord,
                 tangent,
-                tangents != nullptr,
+                useSourceTangents,
                 transform);
             const float normalLengthSquared =
                 vertex.normal[0] * vertex.normal[0] +
                 vertex.normal[1] * vertex.normal[1] +
                 vertex.normal[2] * vertex.normal[2];
-            if (normalLengthSquared <= c_normalLengthEpsilon)
+            if (normals &&
+                normalLengthSquared <= c_normalLengthEpsilon)
                 return Fail(errorMessage, L"A primitive contains a zero-length normal.");
             scene.vertices.push_back(vertex);
+
+            SceneVertexSkinInfluence influence;
+            if (hasSkin)
+            {
+                cgltf_uint jointValues[4] = {};
+                float weightValues[4] = {};
+                if (!cgltf_accessor_read_uint(
+                        joints,
+                        vertexIndex,
+                        jointValues,
+                        4) ||
+                    !cgltf_accessor_read_float(
+                        weights,
+                        vertexIndex,
+                        weightValues,
+                        4))
+                {
+                    return Fail(
+                        errorMessage,
+                        L"Failed to read JOINTS_0 or WEIGHTS_0.");
+                }
+
+                float weightSum = 0.0f;
+                const std::size_t jointCount =
+                    scene.skins[skinIndex].jointNodeIndices.size();
+                for (std::size_t component = 0; component < 4; ++component)
+                {
+                    if (jointValues[component] >= jointCount ||
+                        !std::isfinite(weightValues[component]) ||
+                        weightValues[component] < 0.0f)
+                    {
+                        return Fail(
+                            errorMessage,
+                            L"A vertex contains an invalid skin influence.");
+                    }
+                    influence.jointIndices[component] =
+                        static_cast<std::uint32_t>(jointValues[component]);
+                    influence.jointWeights[component] =
+                        weightValues[component];
+                    weightSum += weightValues[component];
+                }
+                if (!std::isfinite(weightSum) ||
+                    weightSum <= c_normalLengthEpsilon)
+                {
+                    return Fail(
+                        errorMessage,
+                        L"A skinned vertex has zero total weight.");
+                }
+                const float inverseWeightSum = 1.0f / weightSum;
+                for (float& weight : influence.jointWeights)
+                    weight *= inverseWeightSum;
+                if (report)
+                    ++report->loadedSkinnedVertexCount;
+            }
+            if (storeSkinInfluences)
+                scene.vertexSkinInfluences.push_back(influence);
         }
 
         const cgltf_size indexCount = primitive.indices
@@ -1230,7 +1420,20 @@ namespace
             scene.indices.push_back(baseVertex + static_cast<std::uint32_t>(localIndices[1]));
         }
 
-        if (requiresTangent && !tangents)
+        if (!normals &&
+            !GenerateNormals(
+                scene,
+                baseVertex,
+                positions->count,
+                indexStart,
+                indexCount))
+        {
+            return Fail(
+                errorMessage,
+                L"Failed to generate normals for a primitive.");
+        }
+
+        if (requiresTangent && !useSourceTangents)
             GenerateTangents(scene, baseVertex, positions->count, indexStart, indexCount);
 
         scene.primitiveMaterialIndices.insert(
@@ -1439,7 +1642,7 @@ namespace
             accessor.count >
                 std::numeric_limits<std::size_t>::max() / componentCount)
         {
-            return Fail(errorMessage, L"An animation accessor is too large.");
+            return Fail(errorMessage, L"A glTF accessor is too large.");
         }
 
         const cgltf_size floatCount = accessor.count * componentCount;
@@ -1449,12 +1652,144 @@ namespace
                 values.data(),
                 floatCount) != floatCount)
         {
-            return Fail(errorMessage, L"Failed to unpack an animation accessor.");
+            return Fail(errorMessage, L"Failed to unpack a glTF accessor.");
         }
         for (const float value : values)
         {
             if (!std::isfinite(value))
-                return Fail(errorMessage, L"An animation accessor contains a non-finite value.");
+                return Fail(errorMessage, L"A glTF accessor contains a non-finite value.");
+        }
+        return true;
+    }
+
+    bool ConvertSkins(
+        const cgltf_data& data,
+        SceneData& scene,
+        std::wstring& errorMessage,
+        GltfLoadReport* report)
+    {
+        if (data.skins_count >
+            static_cast<cgltf_size>(
+                std::numeric_limits<std::uint32_t>::max()))
+        {
+            return Fail(errorMessage, L"The glTF contains too many skins.");
+        }
+
+        scene.skins.reserve(data.skins_count);
+        for (cgltf_size skinIndex = 0;
+             skinIndex < data.skins_count;
+             ++skinIndex)
+        {
+            const cgltf_skin& source = data.skins[skinIndex];
+            if (source.joints_count == 0 ||
+                source.joints_count >
+                    static_cast<cgltf_size>(
+                        std::numeric_limits<std::uint32_t>::max()))
+            {
+                return Fail(
+                    errorMessage,
+                    L"A skin has an invalid joint count.");
+            }
+
+            SceneSkin skin;
+            if (source.name)
+                skin.name = source.name;
+            if (source.skeleton)
+            {
+                const cgltf_size skeletonIndex =
+                    cgltf_node_index(&data, source.skeleton);
+                if (skeletonIndex >= data.nodes_count)
+                {
+                    return Fail(
+                        errorMessage,
+                        L"A skin references an invalid skeleton root.");
+                }
+                skin.skeletonRootNodeIndex =
+                    static_cast<std::uint32_t>(skeletonIndex);
+            }
+
+            skin.jointNodeIndices.reserve(source.joints_count);
+            for (cgltf_size jointIndex = 0;
+                 jointIndex < source.joints_count;
+                 ++jointIndex)
+            {
+                if (!source.joints[jointIndex])
+                {
+                    return Fail(
+                        errorMessage,
+                        L"A skin contains a null joint node.");
+                }
+                const cgltf_size nodeIndex =
+                    cgltf_node_index(&data, source.joints[jointIndex]);
+                if (nodeIndex >= data.nodes_count)
+                {
+                    return Fail(
+                        errorMessage,
+                        L"A skin references an invalid joint node.");
+                }
+                skin.jointNodeIndices.push_back(
+                    static_cast<std::uint32_t>(nodeIndex));
+            }
+
+            const std::array<float, 16> identity =
+            {
+                1.0f, 0.0f, 0.0f, 0.0f,
+                0.0f, 1.0f, 0.0f, 0.0f,
+                0.0f, 0.0f, 1.0f, 0.0f,
+                0.0f, 0.0f, 0.0f, 1.0f
+            };
+            skin.inverseBindMatrices.assign(
+                source.joints_count,
+                identity);
+            if (source.inverse_bind_matrices)
+            {
+                const cgltf_accessor& accessor =
+                    *source.inverse_bind_matrices;
+                if (accessor.type != cgltf_type_mat4 ||
+                    accessor.component_type !=
+                        cgltf_component_type_r_32f ||
+                    accessor.count != source.joints_count)
+                {
+                    return Fail(
+                        errorMessage,
+                        L"inverseBindMatrices must be a FLOAT MAT4 "
+                        L"accessor matching the skin joint count.");
+                }
+
+                std::vector<float> matrixValues;
+                if (!UnpackAccessorFloats(
+                        accessor,
+                        matrixValues,
+                        errorMessage))
+                {
+                    return false;
+                }
+                for (cgltf_size jointIndex = 0;
+                     jointIndex < source.joints_count;
+                     ++jointIndex)
+                {
+                    std::copy_n(
+                        matrixValues.data() + jointIndex * 16u,
+                        16u,
+                        skin.inverseBindMatrices[jointIndex].begin());
+                }
+            }
+
+            scene.skins.push_back(std::move(skin));
+            if (report)
+            {
+                ++report->loadedSkinCount;
+                if (source.joints_count >
+                    std::numeric_limits<std::uint32_t>::max() -
+                        report->loadedSkinJointCount)
+                {
+                    return Fail(
+                        errorMessage,
+                        L"The total skin joint count is too large.");
+                }
+                report->loadedSkinJointCount +=
+                    static_cast<std::uint32_t>(source.joints_count);
+            }
         }
         return true;
     }
@@ -1701,8 +2036,6 @@ namespace
         const GltfLoadOptions& loadOptions,
         GltfLoadReport* report)
     {
-        if (node.skin)
-            return Fail(errorMessage, L"Skinned mesh nodes are not supported yet.");
         if (node.has_mesh_gpu_instancing)
             return Fail(errorMessage, L"GPU-instanced mesh nodes are not supported yet.");
 
@@ -1732,6 +2065,7 @@ namespace
                     data,
                     node.mesh->primitives[primitiveIndex],
                     transform,
+                    scene.nodes[meshInstance.nodeIndex].skinIndex,
                     defaultMaterialIndex,
                     scene,
                     errorMessage,
@@ -1868,6 +2202,11 @@ bool LoadGltfSceneData(
     if (!ConvertNodes(
             *data,
             activeScene,
+            loadedScene,
+            errorMessage,
+            report) ||
+        !ConvertSkins(
+            *data,
             loadedScene,
             errorMessage,
             report) ||

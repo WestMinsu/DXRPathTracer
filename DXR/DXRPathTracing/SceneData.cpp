@@ -410,6 +410,8 @@ bool SceneData::IsValid() const
         const SceneNode& node = nodes[nodeIndex];
         if ((node.parentIndex != c_invalidSceneNodeIndex &&
              node.parentIndex >= nodes.size()) ||
+            (node.skinIndex != c_invalidSceneSkinIndex &&
+             node.skinIndex >= skins.size()) ||
             !finiteArray(node.translation, 3) ||
             !finiteArray(node.rotation, 4) ||
             !finiteArray(node.scale, 3) ||
@@ -427,6 +429,46 @@ bool SceneData::IsValid() const
                 return false;
             }
         }
+    }
+
+    for (const SceneSkin& skin : skins)
+    {
+        if (skin.jointNodeIndices.empty() ||
+            skin.inverseBindMatrices.size() !=
+                skin.jointNodeIndices.size() ||
+            (skin.skeletonRootNodeIndex != c_invalidSceneNodeIndex &&
+             skin.skeletonRootNodeIndex >= nodes.size()))
+        {
+            return false;
+        }
+
+        for (std::size_t jointIndex = 0;
+             jointIndex < skin.jointNodeIndices.size();
+             ++jointIndex)
+        {
+            if (skin.jointNodeIndices[jointIndex] >= nodes.size() ||
+                !finiteArray(
+                    skin.inverseBindMatrices[jointIndex].data(), 16))
+            {
+                return false;
+            }
+            for (std::size_t previousIndex = 0;
+                 previousIndex < jointIndex;
+                 ++previousIndex)
+            {
+                if (skin.jointNodeIndices[previousIndex] ==
+                    skin.jointNodeIndices[jointIndex])
+                {
+                    return false;
+                }
+            }
+        }
+    }
+
+    if (!vertexSkinInfluences.empty() &&
+        vertexSkinInfluences.size() != vertices.size())
+    {
+        return false;
     }
 
     for (const std::uint32_t rootNodeIndex : rootNodeIndices)
@@ -464,6 +506,45 @@ bool SceneData::IsValid() const
                     primitiveMaterialIndices.size())
             {
                 return false;
+            }
+
+            const std::uint32_t skinIndex =
+                nodes[instance.nodeIndex].skinIndex;
+            if (skinIndex == c_invalidSceneSkinIndex)
+                continue;
+            if (vertexSkinInfluences.empty())
+                return false;
+
+            const SceneSkin& skin = skins[skinIndex];
+            const std::uint64_t vertexEnd =
+                static_cast<std::uint64_t>(primitive.vertexOffset) +
+                primitive.vertexCount;
+            for (std::uint64_t vertexIndex = primitive.vertexOffset;
+                 vertexIndex < vertexEnd;
+                 ++vertexIndex)
+            {
+                const SceneVertexSkinInfluence& influence =
+                    vertexSkinInfluences[
+                        static_cast<std::size_t>(vertexIndex)];
+                float weightSum = 0.0f;
+                for (std::size_t component = 0; component < 4; ++component)
+                {
+                    const float weight =
+                        influence.jointWeights[component];
+                    if (!std::isfinite(weight) || weight < 0.0f ||
+                        (weight > 0.0f &&
+                         influence.jointIndices[component] >=
+                            skin.jointNodeIndices.size()))
+                    {
+                        return false;
+                    }
+                    weightSum += weight;
+                }
+                if (!std::isfinite(weightSum) ||
+                    std::fabs(weightSum - 1.0f) > 1.0e-4f)
+                {
+                    return false;
+                }
             }
         }
     }

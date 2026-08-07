@@ -19,6 +19,9 @@ struct GltfLoadReport
     std::uint32_t loadedMaterialCount = 0;
     std::uint32_t loadedTextureCount = 0;
     std::uint32_t loadedNodeCount = 0;
+    std::uint32_t loadedSkinCount = 0;
+    std::uint32_t loadedSkinJointCount = 0;
+    std::uint32_t loadedSkinnedVertexCount = 0;
     std::uint32_t loadedAnimationCount = 0;
     std::uint32_t loadedAnimationSamplerCount = 0;
     std::uint32_t loadedAnimationChannelCount = 0;

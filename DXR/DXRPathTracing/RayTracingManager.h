@@ -282,6 +282,26 @@ public:
     {
         return static_cast<UINT>(m_importedMeshInstances.size());
     }
+    UINT GetImportedSkinCount() const
+    {
+        return m_importedSkinCount;
+    }
+    UINT GetImportedSkinJointCount() const
+    {
+        return m_importedSkinJointCount;
+    }
+    UINT GetImportedSkinnedVertexCount() const
+    {
+        return m_importedSkinnedVertexCount;
+    }
+    UINT GetAnimatedSkinJointCount() const
+    {
+        return m_animatedSkinJointCount;
+    }
+    float GetSkinJointTransformDelta() const
+    {
+        return m_skinJointTransformDelta;
+    }
     void SetDynamicTestSphereMaterialPreset(UINT preset);
     void SetDynamicTestCubeMaterialPreset(UINT preset);
     void SetDynamicSphereDeterministicTimeline(bool enabled);
@@ -520,6 +540,12 @@ private:
     bool m_useImportedMeshInstances = false;
     std::vector<ImportedMeshBlas> m_importedMeshBlases;
     std::vector<ImportedMeshInstance> m_importedMeshInstances;
+    UINT m_importedSkinCount = 0u;
+    UINT m_importedSkinJointCount = 0u;
+    UINT m_importedSkinnedVertexCount = 0u;
+    UINT m_animatedSkinJointCount = 0u;
+    float m_skinJointTransformDelta = 0.0f;
+    std::vector<std::uint32_t> m_sceneSkinJointNodeIndices;
     GeometryRange m_staticGeometry;
     GeometryRange m_staticAlphaGeometry;
     GeometryRange m_dynamicSphereGeometry;

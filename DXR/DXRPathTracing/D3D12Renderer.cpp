@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
+#include <limits>
 #include <shlobj.h>
 #include <sstream>
 #include <vector>
@@ -1699,7 +1700,7 @@ void D3D12Renderer::BuildImGuiFrame()
     ImGui::SetNextWindowSizeConstraints(
         ImVec2(300.0f, 200.0f),
         ImVec2(
-            460.0f,
+            1000.0f,
             (std::max)(240.0f, ImGui::GetIO().DisplaySize.y - 32.0f)));
     ImGui::Begin("DXR Debug");
     ImGui::TextDisabled("F1: Toggle ImGui rendering");
@@ -1758,11 +1759,30 @@ void D3D12Renderer::BuildImGuiFrame()
                 m_rayTracingManager->GetSceneAnimationTime(),
                 m_rayTracingManager->GetSceneAnimationDuration());
             ImGui::TextDisabled(
-                "Rigid node animation: TLAS transform update");
+                m_rayTracingManager->GetImportedSkinCount() > 0u
+                    ? "Node/joint animation: CPU transform evaluation"
+                    : "Rigid node animation: TLAS transform update");
             ImGui::TextDisabled(
                 "Unique mesh BLAS: %u, mesh-node TLAS instances: %u",
                 m_rayTracingManager->GetImportedMeshBlasCount(),
                 m_rayTracingManager->GetImportedMeshInstanceCount());
+        }
+
+        if (m_rayTracingManager &&
+            m_rayTracingManager->GetImportedSkinCount() > 0u)
+        {
+            ImGui::SeparatorText("glTF skin import");
+            ImGui::TextDisabled(
+                "Skins: %u, joints: %u, influenced vertices: %u",
+                m_rayTracingManager->GetImportedSkinCount(),
+                m_rayTracingManager->GetImportedSkinJointCount(),
+                m_rayTracingManager->GetImportedSkinnedVertexCount());
+            ImGui::TextDisabled(
+                "Animated joints: %u, max transform delta: %.5f",
+                m_rayTracingManager->GetAnimatedSkinJointCount(),
+                m_rayTracingManager->GetSkinJointTransformDelta());
+            ImGui::TextDisabled(
+                "Bind pose only: GPU skinning is not connected yet");
         }
 
         bool restoreGltfMaterial = false;

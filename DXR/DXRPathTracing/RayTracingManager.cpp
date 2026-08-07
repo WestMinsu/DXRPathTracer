@@ -2212,6 +2212,32 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
         return false;
 
     m_sceneAnimationNodes = scene.nodes;
+    m_importedSkinCount = static_cast<UINT>(scene.skins.size());
+    for (const SceneSkin& skin : scene.skins)
+    {
+        if (skin.jointNodeIndices.size() >
+            static_cast<std::size_t>(
+                std::numeric_limits<UINT>::max() -
+                m_importedSkinJointCount))
+        {
+            return false;
+        }
+        m_importedSkinJointCount +=
+            static_cast<UINT>(skin.jointNodeIndices.size());
+        m_sceneSkinJointNodeIndices.insert(
+            m_sceneSkinJointNodeIndices.end(),
+            skin.jointNodeIndices.begin(),
+            skin.jointNodeIndices.end());
+    }
+    for (const SceneVertexSkinInfluence& influence :
+         scene.vertexSkinInfluences)
+    {
+        float weightSum = 0.0f;
+        for (const float weight : influence.jointWeights)
+            weightSum += weight;
+        if (weightSum > 0.0f)
+            ++m_importedSkinnedVertexCount;
+    }
     for (const SceneMeshNodeInstance& source : scene.meshNodeInstances)
     {
         if (source.nodeIndex >= scene.nodes.size() ||
@@ -2284,6 +2310,19 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
         m_sceneAnimationName = m_sceneAnimationClip.name.empty()
             ? "clip_0"
             : m_sceneAnimationClip.name;
+        for (const SceneAnimationChannel& channel :
+             m_sceneAnimationClip.channels)
+        {
+            if (channel.targetPath == SceneAnimationPath::Weights)
+                continue;
+            if (channel.targetNodeIndex >= scene.nodes.size() ||
+                scene.nodes[channel.targetNodeIndex].hasMatrix)
+            {
+                return false;
+            }
+            m_hasSceneAnimation = true;
+        }
+
         for (ImportedMeshInstance& instance : m_importedMeshInstances)
         {
             for (const SceneAnimationChannel& channel :
@@ -2291,20 +2330,49 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
             {
                 if (channel.targetPath == SceneAnimationPath::Weights)
                     continue;
-                if (channel.targetNodeIndex >= scene.nodes.size() ||
-                    scene.nodes[channel.targetNodeIndex].hasMatrix)
-                    return false;
                 std::uint32_t nodeIndex = instance.nodeIndex;
                 while (nodeIndex != c_invalidSceneNodeIndex)
                 {
                     if (nodeIndex == channel.targetNodeIndex)
                     {
                         instance.animated = true;
-                        m_hasSceneAnimation = true;
                         break;
                     }
                     nodeIndex = scene.nodes[nodeIndex].parentIndex;
                 }
+            }
+        }
+
+        std::vector<std::uint8_t> animatedJointNodes(
+            scene.nodes.size(), 0u);
+        for (const std::uint32_t jointNodeIndex :
+             m_sceneSkinJointNodeIndices)
+        {
+            std::uint32_t nodeIndex = jointNodeIndex;
+            while (nodeIndex != c_invalidSceneNodeIndex)
+            {
+                bool channelTargetsNode = false;
+                for (const SceneAnimationChannel& channel :
+                     m_sceneAnimationClip.channels)
+                {
+                    if (channel.targetPath !=
+                            SceneAnimationPath::Weights &&
+                        channel.targetNodeIndex == nodeIndex)
+                    {
+                        channelTargetsNode = true;
+                        break;
+                    }
+                }
+                if (channelTargetsNode)
+                {
+                    if (!animatedJointNodes[jointNodeIndex])
+                    {
+                        animatedJointNodes[jointNodeIndex] = 1u;
+                        ++m_animatedSkinJointCount;
+                    }
+                    break;
+                }
+                nodeIndex = scene.nodes[nodeIndex].parentIndex;
             }
         }
     }
@@ -2329,6 +2397,12 @@ bool RayTracingManager::ConfigureSceneAnimation(const SceneData& scene)
     m_useImportedMeshInstances = false;
     m_importedMeshBlases.clear();
     m_importedMeshInstances.clear();
+    m_importedSkinCount = 0u;
+    m_importedSkinJointCount = 0u;
+    m_importedSkinnedVertexCount = 0u;
+    m_animatedSkinJointCount = 0u;
+    m_skinJointTransformDelta = 0.0f;
+    m_sceneSkinJointNodeIndices.clear();
 
     if (!scene.meshNodeInstances.empty())
         return ConfigureImportedMeshInstances(scene);
@@ -2524,6 +2598,23 @@ bool RayTracingManager::EvaluateImportedSceneAnimation(double elapsedSeconds)
                 return false;
         }
         WriteInstanceTransform(leftHanded, instance.transform);
+    }
+
+    m_skinJointTransformDelta = 0.0f;
+    for (const std::uint32_t jointNodeIndex :
+         m_sceneSkinJointNodeIndices)
+    {
+        if (!evaluateWorld(jointNodeIndex))
+            return false;
+        for (std::size_t component = 0; component < 16u; ++component)
+        {
+            m_skinJointTransformDelta = (std::max)(
+                m_skinJointTransformDelta,
+                std::fabs(
+                    worldTransforms[jointNodeIndex][component] -
+                    m_sceneAnimationNodes[jointNodeIndex].
+                        worldTransform[component]));
+        }
     }
     return true;
 }
