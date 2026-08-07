@@ -340,6 +340,7 @@ private:
     bool m_enableRussianRoulette = false;
     bool m_enableTemporalReprojection = false;
     bool m_enableDynamicObjectReprojection = true;
+    bool m_enableSkinnedDeformationMotion = true;
     bool m_useCurrentFrameVisibleResidual = true;
     bool m_enableTemporalColorClip = true;
     bool m_enableAtrous = false;

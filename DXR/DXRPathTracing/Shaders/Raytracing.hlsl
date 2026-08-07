@@ -309,7 +309,7 @@ bool GatherValidatedHistory(
             currentMaterial,
             resolution);
 
-        if (g_temporalDebugView == 5u &&
+        if (g_temporalDebugView == 7u &&
             currentHit &&
             all(historyPixel >= int2(0, 0)) &&
             all(historyPixel < int2(resolution)))
@@ -1036,7 +1036,7 @@ void RunRaygen()
 
         if (g_enableTemporalReprojection != 0u &&
             (g_enableAtrous != 0u ||
-             g_temporalDebugView == 6u))
+             g_temporalDebugView == 8u))
         {
             // Preserve the unaccumulated current-frame observations. A later
             // compute pass uses their 5x5 neighborhood to constrain only the
@@ -1307,30 +1307,42 @@ void RunRaygen()
     }
     if (g_temporalDebugView == 3u)
     {
-        // Current-to-previous motion in pixels. Zero motion is neutral gray;
-        // the red/green channels encode signed X/Y and blue grows with
-        // magnitude. Values saturate at 32 pixels.
-        float2 normalizedMotion = clamp(
-            temporalMotionVectorPixels / 32.0f,
-            -1.0f,
-            1.0f);
+        // Current-to-previous motion magnitude in pixels.
         float motionMagnitude = saturate(
-            length(temporalMotionVectorPixels) / 32.0f);
-        float3 debugColor = float3(
-            0.5f + 0.5f * normalizedMotion.x,
-            0.5f + 0.5f * normalizedMotion.y,
-            0.5f + 0.5f * motionMagnitude);
-        g_output[launchIndex] = float4(debugColor, 1.0f);
+            length(temporalMotionVectorPixels) / 16.0f);
+        g_output[launchIndex] = float4(
+            motionMagnitude.xxx,
+            1.0f);
         return;
     }
     if (g_temporalDebugView == 4u)
+    {
+        float normalizedMotionX = clamp(
+            temporalMotionVectorPixels.x / 16.0f,
+            -1.0f,
+            1.0f);
+        float displayValue = 0.5f + 0.5f * normalizedMotionX;
+        g_output[launchIndex] = float4(displayValue.xxx, 1.0f);
+        return;
+    }
+    if (g_temporalDebugView == 5u)
+    {
+        float normalizedMotionY = clamp(
+            temporalMotionVectorPixels.y / 16.0f,
+            -1.0f,
+            1.0f);
+        float displayValue = 0.5f + 0.5f * normalizedMotionY;
+        g_output[launchIndex] = float4(displayValue.xxx, 1.0f);
+        return;
+    }
+    if (g_temporalDebugView == 6u)
     {
         g_output[launchIndex] = float4(
             HistoryRejectionColor(temporalRejectionReason),
             1.0f);
         return;
     }
-    if (g_temporalDebugView == 5u)
+    if (g_temporalDebugView == 7u)
     {
         g_output[launchIndex] = float4(
             ReprojectionSurfaceErrorColor(
@@ -1338,7 +1350,7 @@ void RunRaygen()
             1.0f);
         return;
     }
-    if (g_temporalDebugView == 6u)
+    if (g_temporalDebugView == 8u)
     {
         // The temporal compute pass replaces this placeholder with the
         // edge-aware current-vs-history radiance diagnostic.
@@ -1483,7 +1495,20 @@ void MyClosestHitShader_SurfaceQuery(
         float3 previousWorldPosition =
             WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
         uint instanceIndex = InstanceID();
-        if (instanceIndex < g_previousInstanceTransformCount)
+        if ((instanceFlags & c_instanceFlagSkinned) != 0u &&
+            SkinnedDeformationMotionEnabled())
+        {
+            float barycentric0 =
+                1.0f - attributes.barycentrics.x -
+                attributes.barycentrics.y;
+            previousWorldPosition =
+                barycentric0 * g_previousSkinnedPositions[i0].xyz +
+                attributes.barycentrics.x *
+                    g_previousSkinnedPositions[i1].xyz +
+                attributes.barycentrics.y *
+                    g_previousSkinnedPositions[i2].xyz;
+        }
+        else if (instanceIndex < g_previousInstanceTransformCount)
         {
             float4 objectPosition = float4(
                 ObjectRayOrigin() + ObjectRayDirection() * RayTCurrent(),

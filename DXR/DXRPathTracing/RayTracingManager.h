@@ -75,10 +75,12 @@ public:
     static constexpr UINT c_temporalDebugNone = 0;
     static constexpr UINT c_temporalDebugHistoryLength = 1;
     static constexpr UINT c_temporalDebugRejectionMask = 2;
-    static constexpr UINT c_temporalDebugMotionVector = 3;
-    static constexpr UINT c_temporalDebugRejectionReason = 4;
-    static constexpr UINT c_temporalDebugSurfaceError = 5;
-    static constexpr UINT c_temporalDebugRadianceHistoryDifference = 6;
+    static constexpr UINT c_temporalDebugMotionMagnitude = 3;
+    static constexpr UINT c_temporalDebugMotionX = 4;
+    static constexpr UINT c_temporalDebugMotionY = 5;
+    static constexpr UINT c_temporalDebugRejectionReason = 6;
+    static constexpr UINT c_temporalDebugSurfaceError = 7;
+    static constexpr UINT c_temporalDebugRadianceHistoryDifference = 8;
     static constexpr UINT c_specularMaterialWeightNone = 0;
     static constexpr UINT c_specularMaterialWeightAlbedo = 1;
     static constexpr UINT c_specularMaterialWeightF0 = 2;
@@ -101,6 +103,7 @@ public:
     void SetLightingMode(UINT lightingMode);
     void SetTemporalReprojectionEnabled(bool enabled);
     void SetDynamicObjectReprojectionEnabled(bool enabled);
+    void SetSkinnedDeformationMotionEnabled(bool enabled);
     void SetCurrentFrameVisibleResidualEnabled(bool enabled);
     void SetTemporalColorClipEnabled(bool enabled);
     void SetTemporalDebugView(UINT debugView);
@@ -255,10 +258,7 @@ public:
     {
         return m_sceneAnimationEnabled;
     }
-    void SetSceneAnimationEnabled(bool enabled)
-    {
-        m_sceneAnimationEnabled = enabled;
-    }
+    void SetSceneAnimationEnabled(bool enabled);
     void ResetSceneAnimation();
     void SetFrameDeltaSeconds(double seconds)
     {
@@ -470,6 +470,7 @@ private:
     bool m_enableRussianRoulette = false;
     bool m_enableTemporalReprojection = false;
     bool m_enableDynamicObjectReprojection = true;
+    bool m_enableSkinnedDeformationMotion = true;
     bool m_useCurrentFrameVisibleResidual = true;
     bool m_enableTemporalColorClip = true;
     bool m_enableAtrous = false;
@@ -569,6 +570,7 @@ private:
     std::vector<std::uint32_t> m_sceneSkinJointNodeIndices;
     std::vector<SceneSkin> m_sceneSkins;
     std::vector<std::array<float, 16>> m_skinJointMatrices;
+    std::vector<std::array<float, 16>> m_previousSkinJointMatrices;
     UINT m_skinJointMatrixCount = 0u;
     bool m_gpuSkinningActive = false;
     bool m_skinningUpdatePending = false;
@@ -648,6 +650,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_skinInfluenceBuffer;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,
         c_tlasFrameCount> m_skinJointMatrixBuffers;
+    std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,
+        c_tlasFrameCount> m_previousSkinJointMatrixBuffers;
+    Microsoft::WRL::ComPtr<ID3D12Resource>
+        m_previousSkinnedPositionBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_indexBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_sceneMaterialBuffer;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_primitiveMaterialIndexBuffer;

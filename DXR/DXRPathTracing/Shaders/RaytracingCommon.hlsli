@@ -125,6 +125,7 @@ static const uint c_statisticsHitIndex = 10u;
 static const uint c_statisticsMissIndex = 11u;
 static const uint c_russianRouletteStartBounce = 3u;
 static const uint c_instanceFlagDynamic = 1u;
+static const uint c_instanceFlagSkinned = 2u;
 static const float c_rayTMin = 0.001f;
 static const float c_rayTMax = 1000.0f;
 static const float c_rayOriginBias = 0.001f;
@@ -172,6 +173,7 @@ Texture2D<float2> g_previousDiffuseMoments : register(t270);
 Texture2D<float2> g_previousSpecularMoments : register(t271);
 StructuredBuffer<InstanceTransform>
     g_previousInstanceTransforms : register(t272);
+StructuredBuffer<float4> g_previousSkinnedPositions : register(t273);
 SamplerState g_environmentSampler : register(s0);
 SamplerState g_materialSampler : register(s1);
 
@@ -232,6 +234,11 @@ cbuffer RenderSettings : register(b0)
 bool DynamicObjectReprojectionEnabled()
 {
     return (g_enableDynamicObjectReprojection & 1u) != 0u;
+}
+
+bool SkinnedDeformationMotionEnabled()
+{
+    return (g_enableDynamicObjectReprojection & 4u) != 0u;
 }
 
 bool CurrentFrameVisibleResidualEnabled()

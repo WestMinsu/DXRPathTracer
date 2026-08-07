@@ -432,7 +432,7 @@ void CSMain(
     uint2 pixel = dispatchThreadId.xy;
     if (any(pixel >= g_resolution))
         return;
-    bool showRadianceHistoryDifference = g_debugView == 6u;
+    bool showRadianceHistoryDifference = g_debugView == 8u;
     if (!showRadianceHistoryDifference &&
         !PixelNeedsClipping(groupThreadId.xy))
         return;

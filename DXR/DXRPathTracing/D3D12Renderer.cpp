@@ -282,6 +282,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
+    m_rayTracingManager->SetSkinnedDeformationMotionEnabled(
+        m_enableSkinnedDeformationMotion);
     m_rayTracingManager->SetCurrentFrameVisibleResidualEnabled(
         m_useCurrentFrameVisibleResidual);
     m_rayTracingManager->SetTemporalColorClipEnabled(
@@ -390,6 +392,8 @@ void D3D12Renderer::Render()
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
+    m_rayTracingManager->SetSkinnedDeformationMotionEnabled(
+        m_enableSkinnedDeformationMotion);
     m_rayTracingManager->SetCurrentFrameVisibleResidualEnabled(
         m_useCurrentFrameVisibleResidual);
     m_rayTracingManager->SetTemporalColorClipEnabled(
@@ -1982,13 +1986,22 @@ void D3D12Renderer::BuildImGuiFrame()
     {
         if (m_rayTracingManager &&
             (m_rayTracingManager->HasDynamicSphere() ||
-             m_rayTracingManager->HasDynamicCube()))
+             m_rayTracingManager->HasDynamicCube() ||
+             m_rayTracingManager->HasSceneAnimation()))
         {
             ImGui::Checkbox(
                 "Dynamic Object Reprojection",
                 &m_enableDynamicObjectReprojection);
             ImGui::TextDisabled(
-                "OFF: reject moving-object history, ON: reproject its previous transform.");
+                "ON: reproject rigid transforms or the previous skinned pose.");
+            if (m_rayTracingManager->IsGpuSkinningActive())
+            {
+                ImGui::Checkbox(
+                    "Deformation Motion Vector",
+                    &m_enableSkinnedDeformationMotion);
+                ImGui::TextDisabled(
+                    "OFF: instance-transform baseline, ON: previous skinned vertices.");
+            }
         }
         ImGui::Checkbox(
             "Current-frame Visible Emission / Environment",
@@ -2005,7 +2018,9 @@ void D3D12Renderer::BuildImGuiFrame()
             "None",
             "History Length",
             "History Rejection Mask",
-            "Motion Vector",
+            "Motion Magnitude",
+            "Motion X",
+            "Motion Y",
             "History Rejection Reason",
             "Reprojection Surface Error",
             "Radiance History Difference"
@@ -2026,10 +2041,22 @@ void D3D12Renderer::BuildImGuiFrame()
             ImGui::TextDisabled("History: green = accepted, red = rejected, blue = unavailable.");
         }
         else if (m_temporalDebugView == static_cast<int>(
-            RayTracingManager::c_temporalDebugMotionVector))
+            RayTracingManager::c_temporalDebugMotionMagnitude))
         {
             ImGui::TextDisabled(
-                "Motion: gray = zero, RG = current-to-previous XY, blue = magnitude (32 px max).");
+                "Magnitude: black = zero, white = 16 pixels or more.");
+        }
+        else if (m_temporalDebugView == static_cast<int>(
+            RayTracingManager::c_temporalDebugMotionX))
+        {
+            ImGui::TextDisabled(
+                "Motion X: gray = zero, white = positive, black = negative.");
+        }
+        else if (m_temporalDebugView == static_cast<int>(
+            RayTracingManager::c_temporalDebugMotionY))
+        {
+            ImGui::TextDisabled(
+                "Motion Y: gray = zero, white = positive, black = negative.");
         }
         else if (m_temporalDebugView == static_cast<int>(
             RayTracingManager::c_temporalDebugRejectionReason))

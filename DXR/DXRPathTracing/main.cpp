@@ -255,7 +255,17 @@ namespace
                          debugView == L"motion-vector")
                 {
                     gOptions.temporalDebugView =
-                        RayTracingManager::c_temporalDebugMotionVector;
+                        RayTracingManager::c_temporalDebugMotionMagnitude;
+                }
+                else if (debugView == L"motion-x")
+                {
+                    gOptions.temporalDebugView =
+                        RayTracingManager::c_temporalDebugMotionX;
+                }
+                else if (debugView == L"motion-y")
+                {
+                    gOptions.temporalDebugView =
+                        RayTracingManager::c_temporalDebugMotionY;
                 }
                 else if (debugView == L"reason" ||
                          debugView == L"rejection-reason")

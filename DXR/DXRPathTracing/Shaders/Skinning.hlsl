@@ -15,7 +15,9 @@ struct SkinInfluence
 StructuredBuffer<Vertex> g_bindPoseVertices : register(t0);
 StructuredBuffer<SkinInfluence> g_skinInfluences : register(t1);
 StructuredBuffer<float4x4> g_jointMatrices : register(t2);
+StructuredBuffer<float4x4> g_previousJointMatrices : register(t3);
 RWStructuredBuffer<Vertex> g_skinnedVertices : register(u0);
+RWStructuredBuffer<float4> g_previousSkinnedPositions : register(u1);
 
 cbuffer SkinningConstants : register(b0)
 {
@@ -40,10 +42,13 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     if (weightSum <= 1.0e-8f)
     {
         g_skinnedVertices[vertexIndex] = bindVertex;
+        g_previousSkinnedPositions[vertexIndex] =
+            float4(bindVertex.position, 1.0f);
         return;
     }
 
     float4 skinnedPosition = 0.0f;
+    float4 previousSkinnedPosition = 0.0f;
     float3 skinnedNormal = 0.0f;
     float3 skinnedTangent = 0.0f;
     [unroll]
@@ -55,8 +60,13 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
         const float4x4 jointMatrix = g_jointMatrices[
             g_jointMatrixOffset + influence.jointIndices[component]];
+        const float4x4 previousJointMatrix = g_previousJointMatrices[
+            g_jointMatrixOffset + influence.jointIndices[component]];
         skinnedPosition += weight * mul(
             jointMatrix,
+            float4(bindVertex.position, 1.0f));
+        previousSkinnedPosition += weight * mul(
+            previousJointMatrix,
             float4(bindVertex.position, 1.0f));
         skinnedNormal += weight * mul(
             (float3x3)jointMatrix,
@@ -72,4 +82,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     result.normal = normalize(skinnedNormal);
     result.tangent.xyz = normalize(skinnedTangent);
     g_skinnedVertices[vertexIndex] = result;
+    g_previousSkinnedPositions[vertexIndex] = float4(
+        previousSkinnedPosition.xyz /
+            max(abs(previousSkinnedPosition.w), 1.0e-8f),
+        1.0f);
 }
