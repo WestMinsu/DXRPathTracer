@@ -945,8 +945,61 @@ void RunRaygen()
         float3 cameraRight = normalize(cross(c_cameraUp, cameraForward));
         float3 cameraUp = cross(cameraForward, cameraRight);
 
+        if (updatePrimaryGuides)
+        {
+            float2 guideUv =
+                (float2(launchIndex) + float2(0.5f, 0.5f)) /
+                float2(launchDim);
+            float2 guideScreenPosition = float2(
+                (guideUv.x * 2.0f - 1.0f) *
+                    aspectRatio * tanHalfFov,
+                (1.0f - guideUv.y * 2.0f) * tanHalfFov);
+
+            RayDesc guideRay;
+            guideRay.Origin = g_cameraPosition;
+            guideRay.Direction = normalize(
+                cameraForward +
+                cameraRight * guideScreenPosition.x +
+                cameraUp * guideScreenPosition.y);
+            guideRay.TMin = c_rayTMin;
+            guideRay.TMax = c_rayTMax;
+
+            TracePrimaryGuide(
+                guideRay,
+                previousPrimaryWorldPosition,
+                primaryDynamicInstance,
+                primaryGuideVisibleResidual,
+                primaryVisibilityClass);
+            primaryRayDirection = guideRay.Direction;
+        }
+
+        uint pathSamplesPerPixel = samplesPerPixel;
+        if (DisocclusionAdaptiveSamplingEnabled() &&
+            g_enableTemporalReprojection != 0u &&
+            g_dynamicObjectMoved != 0u &&
+            g_sampleIndex > 0u &&
+            primaryVisibilityClass == c_primaryVisibilitySurface)
+        {
+            float4 currentMaterial = g_materialGuide[launchIndex];
+            float4 previousMaterial =
+                g_previousMaterialGuide.Load(int3(launchIndex, 0));
+            bool newlyRevealedStaticSurface =
+                !IsDynamicGuide(currentMaterial) &&
+                IsDynamicGuide(previousMaterial);
+            if (newlyRevealedStaticSurface)
+            {
+                // History must be rejected at a dynamic-object disocclusion.
+                // Spend extra path samples only on that narrow footprint so
+                // the replacement is current information rather than a stale
+                // temporal trail.
+                pathSamplesPerPixel = max(
+                    pathSamplesPerPixel,
+                    DisocclusionSamplesPerPixel());
+            }
+        }
+
         for (uint subSampleIndex = 0u;
-             subSampleIndex < samplesPerPixel;
+             subSampleIndex < pathSamplesPerPixel;
              ++subSampleIndex)
         {
             float2 pixelOffset = float2(0.5f, 0.5f);
@@ -975,7 +1028,6 @@ void RunRaygen()
                 cameraForward +
                 cameraRight * screenPosition.x +
                 cameraUp * screenPosition.y);
-            primaryRayDirection = ray.Direction;
             ray.TMin = c_rayTMin;
             ray.TMax = c_rayTMax;
 
@@ -995,38 +1047,10 @@ void RunRaygen()
                 subSampleSpecularRadiance;
         }
 
-        float inverseSamplesPerPixel = 1.0f / float(samplesPerPixel);
+        float inverseSamplesPerPixel = 1.0f / float(pathSamplesPerPixel);
         sampleRadiance *= inverseSamplesPerPixel;
         sampleDiffuseDenoisingRadiance *= inverseSamplesPerPixel;
         sampleSpecularDenoisingRadiance *= inverseSamplesPerPixel;
-
-        if (updatePrimaryGuides)
-        {
-            float2 guideUv =
-                (float2(launchIndex) + float2(0.5f, 0.5f)) /
-                float2(launchDim);
-            float2 guideScreenPosition = float2(
-                (guideUv.x * 2.0f - 1.0f) *
-                    aspectRatio * tanHalfFov,
-                (1.0f - guideUv.y * 2.0f) * tanHalfFov);
-
-            RayDesc guideRay;
-            guideRay.Origin = g_cameraPosition;
-            guideRay.Direction = normalize(
-                cameraForward +
-                cameraRight * guideScreenPosition.x +
-                cameraUp * guideScreenPosition.y);
-            guideRay.TMin = c_rayTMin;
-            guideRay.TMax = c_rayTMax;
-
-            TracePrimaryGuide(
-                guideRay,
-                previousPrimaryWorldPosition,
-                primaryDynamicInstance,
-                primaryGuideVisibleResidual,
-                primaryVisibilityClass);
-            primaryRayDirection = guideRay.Direction;
-        }
 
         if (useCurrentFrameVisibleResidual &&
             primaryVisibilityClass != c_primaryVisibilitySurface)

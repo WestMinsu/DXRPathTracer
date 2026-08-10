@@ -294,6 +294,9 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
+    m_rayTracingManager->SetDisocclusionAdaptiveSampling(
+        m_enableDisocclusionAdaptiveSampling,
+        static_cast<UINT>(m_disocclusionSamplesPerPixel));
     m_rayTracingManager->SetSkinnedDeformationMotionEnabled(
         m_enableSkinnedDeformationMotion);
     m_rayTracingManager->SetCurrentFrameVisibleResidualEnabled(
@@ -407,6 +410,9 @@ void D3D12Renderer::Render()
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
+    m_rayTracingManager->SetDisocclusionAdaptiveSampling(
+        m_enableDisocclusionAdaptiveSampling,
+        static_cast<UINT>(m_disocclusionSamplesPerPixel));
     m_rayTracingManager->SetSkinnedDeformationMotionEnabled(
         m_enableSkinnedDeformationMotion);
     m_rayTracingManager->SetCurrentFrameVisibleResidualEnabled(
@@ -2029,8 +2035,75 @@ void D3D12Renderer::BuildImGuiFrame()
                 0.0f,
                 4.0f,
                 "%.2f");
+            const std::array<float, 3>& propagationDirection =
+                m_rayTracingManager->GetDirectionalLightDirection();
+            float directionLengthSquared = 0.0f;
+            for (float component : propagationDirection)
+                directionLengthSquared += component * component;
+            if (directionLengthSquared > 1.0e-8f)
+            {
+                constexpr float radiansToDegrees =
+                    57.29577951308232f;
+                constexpr float degreesToRadians =
+                    0.017453292519943295f;
+                const float inverseDirectionLength =
+                    1.0f / std::sqrt(directionLengthSquared);
+                const std::array<float, 3> sourceDirection =
+                {
+                    -propagationDirection[0] * inverseDirectionLength,
+                    -propagationDirection[1] * inverseDirectionLength,
+                    -propagationDirection[2] * inverseDirectionLength
+                };
+                float sourceAzimuthDegrees =
+                    std::atan2(
+                        sourceDirection[2],
+                        sourceDirection[0]) *
+                    radiansToDegrees;
+                float sourceElevationDegrees =
+                    std::asin((std::max)(
+                        -1.0f,
+                        (std::min)(1.0f, sourceDirection[1]))) *
+                    radiansToDegrees;
+                bool directionChanged = false;
+                directionChanged |= ImGui::SliderFloat(
+                    "Directional Source Azimuth",
+                    &sourceAzimuthDegrees,
+                    -180.0f,
+                    180.0f,
+                    "%.1f deg");
+                directionChanged |= ImGui::SliderFloat(
+                    "Directional Source Elevation",
+                    &sourceElevationDegrees,
+                    -89.0f,
+                    89.0f,
+                    "%.1f deg");
+                if (directionChanged)
+                {
+                    const float azimuthRadians =
+                        sourceAzimuthDegrees * degreesToRadians;
+                    const float elevationRadians =
+                        sourceElevationDegrees * degreesToRadians;
+                    const float horizontalScale =
+                        std::cos(elevationRadians);
+                    const std::array<float, 3> newSourceDirection =
+                    {
+                        horizontalScale * std::cos(azimuthRadians),
+                        std::sin(elevationRadians),
+                        horizontalScale * std::sin(azimuthRadians)
+                    };
+                    m_rayTracingManager->SetDirectionalLightDirection(
+                        {
+                            -newSourceDirection[0],
+                            -newSourceDirection[1],
+                            -newSourceDirection[2]
+                        });
+                    directionalChanged = true;
+                }
+            }
             ImGui::TextDisabled(
                 "Shares one NEE shadow-ray sample with area lights and IBL.");
+            ImGui::TextDisabled(
+                "Directional lights have no finite position; azimuth/elevation rotate the source at infinity.");
             if (directionalChanged)
             {
                 m_captureActive = false;
@@ -2092,6 +2165,19 @@ void D3D12Renderer::BuildImGuiFrame()
                 &m_enableDynamicObjectReprojection);
             ImGui::TextDisabled(
                 "ON: reproject rigid transforms or the previous skinned pose.");
+            ImGui::Checkbox(
+                "Disocclusion Adaptive Sampling",
+                &m_enableDisocclusionAdaptiveSampling);
+            if (m_enableDisocclusionAdaptiveSampling)
+            {
+                ImGui::SliderInt(
+                    "Disocclusion SPP",
+                    &m_disocclusionSamplesPerPixel,
+                    1,
+                    8);
+            }
+            ImGui::TextDisabled(
+                "Uses extra samples only where a moving object reveals static background.");
             if (m_rayTracingManager->IsGpuSkinningActive())
             {
                 ImGui::Checkbox(

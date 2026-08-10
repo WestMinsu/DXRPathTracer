@@ -261,6 +261,19 @@ bool DirectionalLightEnabled()
     return (g_enableDynamicObjectReprojection & 8u) != 0u;
 }
 
+bool DisocclusionAdaptiveSamplingEnabled()
+{
+    return (g_enableDynamicObjectReprojection & 16u) != 0u;
+}
+
+uint DisocclusionSamplesPerPixel()
+{
+    return clamp(
+        (g_enableDynamicObjectReprojection >> 8u) & 0xFu,
+        1u,
+        8u);
+}
+
 bool TemporalLobeHistoryEnabled()
 {
     return g_enableAtrous != 0u ||

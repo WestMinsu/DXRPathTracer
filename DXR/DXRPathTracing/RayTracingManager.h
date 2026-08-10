@@ -104,12 +104,21 @@ public:
     void SetDirectionalLightRuntimeSettings(
         bool enabled,
         float intensityScale);
+    void SetDirectionalLightDirection(
+        const std::array<float, 3>& propagationDirection);
     bool HasDirectionalLight() const
     {
         return m_directionalLightAvailable;
     }
+    const std::array<float, 3>& GetDirectionalLightDirection() const
+    {
+        return m_directionalLightDirection;
+    }
     void SetTemporalReprojectionEnabled(bool enabled);
     void SetDynamicObjectReprojectionEnabled(bool enabled);
+    void SetDisocclusionAdaptiveSampling(
+        bool enabled,
+        UINT samplesPerPixel);
     void SetSkinnedDeformationMotionEnabled(bool enabled);
     void SetCurrentFrameVisibleResidualEnabled(bool enabled);
     void SetTemporalColorClipEnabled(bool enabled);
@@ -493,6 +502,8 @@ private:
     bool m_enableRussianRoulette = false;
     bool m_enableTemporalReprojection = false;
     bool m_enableDynamicObjectReprojection = true;
+    bool m_enableDisocclusionAdaptiveSampling = true;
+    UINT m_disocclusionSamplesPerPixel = 4;
     bool m_enableSkinnedDeformationMotion = true;
     bool m_useCurrentFrameVisibleResidual = true;
     bool m_enableTemporalColorClip = true;

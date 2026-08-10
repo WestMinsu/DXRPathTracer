@@ -1307,7 +1307,9 @@ void RayTracingManager::DispatchRays(
         (m_enableDynamicObjectReprojection ? 1u : 0u) |
         (m_useCurrentFrameVisibleResidual ? 2u : 0u) |
         (m_enableSkinnedDeformationMotion ? 4u : 0u) |
-        (directionalLightActive ? 8u : 0u);
+        (directionalLightActive ? 8u : 0u) |
+        (m_enableDisocclusionAdaptiveSampling ? 16u : 0u) |
+        ((m_disocclusionSamplesPerPixel & 0xFu) << 8u);
     commandList->SetComputeRoot32BitConstants(4, 42, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
@@ -2019,6 +2021,24 @@ void RayTracingManager::SetTemporalReprojectionEnabled(bool enabled)
     ResetAccumulation();
 }
 
+void RayTracingManager::SetDisocclusionAdaptiveSampling(
+    bool enabled,
+    UINT samplesPerPixel)
+{
+    const UINT clampedSamplesPerPixel =
+        samplesPerPixel < 1u ? 1u :
+        (samplesPerPixel > 8u ? 8u : samplesPerPixel);
+    if (m_enableDisocclusionAdaptiveSampling == enabled &&
+        m_disocclusionSamplesPerPixel == clampedSamplesPerPixel)
+    {
+        return;
+    }
+
+    m_enableDisocclusionAdaptiveSampling = enabled;
+    m_disocclusionSamplesPerPixel = clampedSamplesPerPixel;
+    ResetAccumulation();
+}
+
 void RayTracingManager::SetDynamicObjectReprojectionEnabled(bool enabled)
 {
     if (m_enableDynamicObjectReprojection == enabled)
@@ -2092,6 +2112,35 @@ void RayTracingManager::SetDirectionalLightRuntimeSettings(
 
     m_directionalLightEnabled = enabled;
     m_directionalLightIntensityScale = clampedIntensity;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetDirectionalLightDirection(
+    const std::array<float, 3>& propagationDirection)
+{
+    float lengthSquared = 0.0f;
+    for (float component : propagationDirection)
+        lengthSquared += component * component;
+    if (lengthSquared <= 1.0e-8f)
+        return;
+
+    const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+    std::array<float, 3> normalizedDirection = {};
+    bool changed = false;
+    for (std::size_t component = 0;
+         component < normalizedDirection.size();
+         ++component)
+    {
+        normalizedDirection[component] =
+            propagationDirection[component] * inverseLength;
+        changed |= std::abs(
+            normalizedDirection[component] -
+            m_directionalLightDirection[component]) > 1.0e-6f;
+    }
+    if (!changed)
+        return;
+
+    m_directionalLightDirection = normalizedDirection;
     ResetAccumulation();
 }
 
