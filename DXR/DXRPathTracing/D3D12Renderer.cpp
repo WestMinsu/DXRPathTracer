@@ -31,6 +31,8 @@ namespace
         L"Assets/KhronosGlTFSampleAssets/Models/Sponza/glTF/Sponza.gltf";
     constexpr wchar_t c_simpleSkinScenePath[] =
         L"Assets/KhronosGlTFSampleAssets/Models/SimpleSkin/glTF/SimpleSkin.gltf";
+    constexpr wchar_t c_brainStemScenePath[] =
+        L"Assets/NVIDIA-RTX/RTXPT-Assets/Models/glTF-Sample-Models/2.0/BrainStem/glTF-Binary/BrainStem.glb";
 
     double CalculatePercentile(const std::vector<double>& samples, double percentile)
     {
@@ -242,6 +244,9 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     m_width = GetClientWidth(hWnd);
     m_height = GetClientHeight(hWnd);
     if (!m_sponzaLite &&
+        m_sceneFilePath.find(L"BrainStem") != std::wstring::npos)
+        m_pbrScenePreset = 2;
+    else if (!m_sponzaLite &&
         m_sceneFilePath.find(L"SimpleSkin") != std::wstring::npos)
         m_pbrScenePreset = 1;
     else
@@ -1701,7 +1706,7 @@ void D3D12Renderer::ShutdownImGui()
 
 bool D3D12Renderer::SwitchPbrScenePreset(int preset)
 {
-    if (!m_rayTracingManager || preset < 0 || preset > 1)
+    if (!m_rayTracingManager || preset < 0 || preset > 2)
         return false;
 
     std::wstring sceneFilePath;
@@ -1715,6 +1720,10 @@ bool D3D12Renderer::SwitchPbrScenePreset(int preset)
     else if (preset == 1)
     {
         sceneFilePath = c_simpleSkinScenePath;
+    }
+    else if (preset == 2)
+    {
+        sceneFilePath = c_brainStemScenePath;
     }
     if (m_cameraPathPlaybackActive)
         StopCameraPathPlayback();
@@ -1757,9 +1766,12 @@ bool D3D12Renderer::SwitchPbrScenePreset(int preset)
     InitializeFreeCamera();
     m_hasLastRenderTime = false;
     ResetGpuTimingResults();
-    m_sceneSwitchStatus = preset == 0
-        ? "Loaded PBR Sponza with 12 area lights."
-        : "Loaded SimpleSkin GPU skinning test.";
+    if (preset == 0)
+        m_sceneSwitchStatus = "Loaded PBR Sponza with 12 area lights.";
+    else if (preset == 1)
+        m_sceneSwitchStatus = "Loaded SimpleSkin GPU skinning test.";
+    else
+        m_sceneSwitchStatus = "Loaded BrainStem GPU skinning test.";
     return true;
 }
 
@@ -1804,7 +1816,8 @@ void D3D12Renderer::BuildImGuiFrame()
         const char* pbrSceneNames[] =
         {
             "Sponza + 12 Area Lights",
-            "SimpleSkin GPU Test"
+            "SimpleSkin GPU Test",
+            "BrainStem GPU Skinning Test"
         };
         int requestedPbrScene = m_pbrScenePreset;
         if (ImGui::Combo(
@@ -1850,6 +1863,39 @@ void D3D12Renderer::BuildImGuiFrame()
             ImGui::SameLine();
             if (ImGui::Button("Restart animation"))
                 m_rayTracingManager->ResetSceneAnimation();
+            const UINT animationClipCount =
+                m_rayTracingManager->GetSceneAnimationClipCount();
+            if (animationClipCount > 1u)
+            {
+                const UINT selectedClip =
+                    m_rayTracingManager->GetSceneAnimationClipIndex();
+                const std::string selectedClipName =
+                    m_rayTracingManager->GetSceneAnimationClipName(
+                        selectedClip);
+                if (ImGui::BeginCombo(
+                        "Animation clip",
+                        selectedClipName.c_str()))
+                {
+                    for (UINT clipIndex = 0u;
+                         clipIndex < animationClipCount;
+                         ++clipIndex)
+                    {
+                        const std::string clipName =
+                            m_rayTracingManager->
+                                GetSceneAnimationClipName(clipIndex);
+                        const bool selected = clipIndex == selectedClip;
+                        if (ImGui::Selectable(
+                                clipName.c_str(), selected))
+                        {
+                            m_rayTracingManager->
+                                SetSceneAnimationClip(clipIndex);
+                        }
+                        if (selected)
+                            ImGui::SetItemDefaultFocus();
+                    }
+                    ImGui::EndCombo();
+                }
+            }
             ImGui::TextDisabled(
                 "%s: %.2f / %.2f s",
                 m_rayTracingManager->GetSceneAnimationName().c_str(),

@@ -278,6 +278,16 @@ public:
     {
         return m_sceneAnimationName;
     }
+    UINT GetSceneAnimationClipCount() const
+    {
+        return static_cast<UINT>(m_sceneAnimationClips.size());
+    }
+    UINT GetSceneAnimationClipIndex() const
+    {
+        return m_sceneAnimationClipIndex;
+    }
+    std::string GetSceneAnimationClipName(UINT clipIndex) const;
+    bool SetSceneAnimationClip(UINT clipIndex);
     UINT GetImportedMeshBlasCount() const
     {
         return static_cast<UINT>(m_importedMeshBlases.size());
@@ -551,6 +561,8 @@ private:
     float m_sceneAnimationCurrentTime = 0.0f;
     std::string m_sceneAnimationName;
     std::vector<SceneNode> m_sceneAnimationNodes;
+    std::vector<SceneAnimation> m_sceneAnimationClips;
+    UINT m_sceneAnimationClipIndex = 0u;
     SceneAnimation m_sceneAnimationClip;
     std::uint32_t m_sceneAnimationMeshNodeIndex =
         c_invalidSceneNodeIndex;

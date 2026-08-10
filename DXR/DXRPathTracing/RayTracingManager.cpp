@@ -2347,45 +2347,55 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
         return false;
     if (!scene.animations.empty())
     {
-        m_sceneAnimationClip = scene.animations.front();
+        m_sceneAnimationClips = scene.animations;
+        m_sceneAnimationClipIndex = 0u;
+        m_sceneAnimationClip = m_sceneAnimationClips.front();
         m_sceneAnimationDuration = (std::max)(
             m_sceneAnimationClip.endTime - m_sceneAnimationClip.startTime,
             0.0f);
         m_sceneAnimationName = m_sceneAnimationClip.name.empty()
             ? "clip_0"
             : m_sceneAnimationClip.name;
-        for (const SceneAnimationChannel& channel :
-             m_sceneAnimationClip.channels)
+        for (const SceneAnimation& clip : m_sceneAnimationClips)
         {
-            if (channel.targetPath == SceneAnimationPath::Weights)
-                continue;
-            if (channel.targetNodeIndex >= scene.nodes.size() ||
-                scene.nodes[channel.targetNodeIndex].hasMatrix)
+            for (const SceneAnimationChannel& channel : clip.channels)
             {
-                return false;
+                if (channel.targetPath == SceneAnimationPath::Weights)
+                    continue;
+                if (channel.targetNodeIndex >= scene.nodes.size() ||
+                    scene.nodes[channel.targetNodeIndex].hasMatrix)
+                {
+                    return false;
+                }
+                m_hasSceneAnimation = true;
             }
-            m_hasSceneAnimation = true;
         }
 
         for (ImportedMeshInstance& instance : m_importedMeshInstances)
         {
             if (instance.skinIndex != c_invalidSceneSkinIndex)
                 instance.animated = m_hasSceneAnimation;
-            for (const SceneAnimationChannel& channel :
-                 m_sceneAnimationClip.channels)
+            for (const SceneAnimation& clip : m_sceneAnimationClips)
             {
-                if (channel.targetPath == SceneAnimationPath::Weights)
-                    continue;
-                std::uint32_t nodeIndex = instance.nodeIndex;
-                while (nodeIndex != c_invalidSceneNodeIndex)
+                for (const SceneAnimationChannel& channel : clip.channels)
                 {
-                    if (nodeIndex == channel.targetNodeIndex)
+                    if (channel.targetPath == SceneAnimationPath::Weights)
+                        continue;
+                    std::uint32_t nodeIndex = instance.nodeIndex;
+                    while (nodeIndex != c_invalidSceneNodeIndex)
                     {
-                        instance.animated = true;
-                        break;
+                        if (nodeIndex == channel.targetNodeIndex)
+                        {
+                            instance.animated = true;
+                            break;
+                        }
+                        nodeIndex = scene.nodes[nodeIndex].parentIndex;
                     }
-                    nodeIndex = scene.nodes[nodeIndex].parentIndex;
+                    if (instance.animated)
+                        break;
                 }
+                if (instance.animated)
+                    break;
             }
         }
 
@@ -2398,16 +2408,20 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
             while (nodeIndex != c_invalidSceneNodeIndex)
             {
                 bool channelTargetsNode = false;
-                for (const SceneAnimationChannel& channel :
-                     m_sceneAnimationClip.channels)
+                for (const SceneAnimation& clip : m_sceneAnimationClips)
                 {
-                    if (channel.targetPath !=
-                            SceneAnimationPath::Weights &&
-                        channel.targetNodeIndex == nodeIndex)
+                    for (const SceneAnimationChannel& channel : clip.channels)
                     {
-                        channelTargetsNode = true;
-                        break;
+                        if (channel.targetPath !=
+                                SceneAnimationPath::Weights &&
+                            channel.targetNodeIndex == nodeIndex)
+                        {
+                            channelTargetsNode = true;
+                            break;
+                        }
                     }
+                    if (channelTargetsNode)
+                        break;
                 }
                 if (channelTargetsNode)
                 {
@@ -2440,6 +2454,8 @@ bool RayTracingManager::ConfigureSceneAnimation(const SceneData& scene)
     m_sceneAnimationMeshNodeIndex = c_invalidSceneNodeIndex;
     m_sceneAnimationName.clear();
     m_sceneAnimationNodes.clear();
+    m_sceneAnimationClips.clear();
+    m_sceneAnimationClipIndex = 0u;
     m_sceneAnimationClip = {};
     m_sceneAnimationDefaultWorldInverse = IdentityMatrix();
     m_sceneAnimationInstanceTransform =
@@ -2527,6 +2543,8 @@ bool RayTracingManager::ConfigureSceneAnimation(const SceneData& scene)
     }
 
     m_sceneAnimationNodes = scene.nodes;
+    m_sceneAnimationClips = scene.animations;
+    m_sceneAnimationClipIndex = 0u;
     m_sceneAnimationClip = clip;
     m_sceneAnimationMeshNodeIndex = meshNodeIndex;
     m_sceneAnimationDefaultWorldInverse = defaultWorldInverse;
@@ -2888,6 +2906,39 @@ void RayTracingManager::ResetSceneAnimation()
     EvaluateSceneAnimation(0.0);
     m_previousSkinJointMatrices = m_skinJointMatrices;
     ResetAccumulation();
+}
+
+std::string RayTracingManager::GetSceneAnimationClipName(
+    UINT clipIndex) const
+{
+    if (clipIndex >= m_sceneAnimationClips.size())
+        return {};
+    const SceneAnimation& clip = m_sceneAnimationClips[clipIndex];
+    return clip.name.empty()
+        ? "Clip " + std::to_string(clipIndex)
+        : clip.name;
+}
+
+bool RayTracingManager::SetSceneAnimationClip(UINT clipIndex)
+{
+    if (clipIndex >= m_sceneAnimationClips.size())
+        return false;
+    if (clipIndex == m_sceneAnimationClipIndex)
+        return true;
+
+    m_sceneAnimationClipIndex = clipIndex;
+    m_sceneAnimationClip = m_sceneAnimationClips[clipIndex];
+    m_sceneAnimationName = GetSceneAnimationClipName(clipIndex);
+    m_sceneAnimationDuration = (std::max)(
+        m_sceneAnimationClip.endTime - m_sceneAnimationClip.startTime,
+        0.0f);
+    m_sceneAnimationCurrentTime = 0.0f;
+    m_sceneAnimationTimeSeconds = 0.0;
+    if (!EvaluateSceneAnimation(0.0))
+        return false;
+    m_previousSkinJointMatrices = m_skinJointMatrices;
+    ResetAccumulation();
+    return true;
 }
 
 void RayTracingManager::SetSceneAnimationEnabled(bool enabled)
@@ -6452,7 +6503,11 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
                 m_sceneAnimationInstanceTransform[component]) > 1.0e-7f;
         }
     }
+    // A skinned BLAS can change its bounds even though its TLAS instance
+    // transform remains the identity. Refit the TLAS after skinning so it
+    // does not keep culling rays against the bind-pose instance bounds.
     const bool transformChanged =
+        updateSkinning ||
         sceneAnimationTransformChanged ||
         std::abs(
             previousSpherePosition - m_dynamicSpherePositionX) > 1.0e-7f ||
