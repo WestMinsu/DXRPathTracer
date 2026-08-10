@@ -92,6 +92,15 @@ struct EnvironmentAliasEntry
     uint padding;
 };
 
+// Mirrored by GpuDirectionalLight in RayTracingManager.cpp.
+struct DirectionalLight
+{
+    float3 direction;
+    uint enabled;
+    float3 radiance;
+    float samplingProbability;
+};
+
 // A row-major object-to-world transform, mirrored by std::array<float, 12>
 // on the CPU.
 struct InstanceTransform
@@ -174,6 +183,7 @@ Texture2D<float2> g_previousSpecularMoments : register(t271);
 StructuredBuffer<InstanceTransform>
     g_previousInstanceTransforms : register(t272);
 StructuredBuffer<float4> g_previousSkinnedPositions : register(t273);
+StructuredBuffer<DirectionalLight> g_directionalLights : register(t274);
 SamplerState g_environmentSampler : register(s0);
 SamplerState g_materialSampler : register(s1);
 
@@ -244,6 +254,11 @@ bool SkinnedDeformationMotionEnabled()
 bool CurrentFrameVisibleResidualEnabled()
 {
     return (g_enableDynamicObjectReprojection & 2u) != 0u;
+}
+
+bool DirectionalLightEnabled()
+{
+    return (g_enableDynamicObjectReprojection & 8u) != 0u;
 }
 
 bool TemporalLobeHistoryEnabled()
@@ -447,7 +462,8 @@ float PowerHeuristic(float sampledPdf, float otherPdf)
 
 void EmitterSelectionProbabilities(
     out float areaEmitterPdf,
-    out float environmentEmitterPdf)
+    out float environmentEmitterPdf,
+    out float directionalEmitterPdf)
 {
     float areaWeight = g_emissiveTriangleCount > 0u
         ? max(g_areaLightPower, 0.0f)
@@ -458,16 +474,40 @@ void EmitterSelectionProbabilities(
         g_environmentTexelCount > 0u
         ? max(g_environmentPower * g_iblIntensity, 0.0f)
         : 0.0f;
-    float totalWeight = areaWeight + environmentWeight;
-    if (totalWeight <= 0.0f)
+    float finiteEmitterWeight = areaWeight + environmentWeight;
+    areaEmitterPdf = 0.0f;
+    environmentEmitterPdf = 0.0f;
+    directionalEmitterPdf = 0.0f;
+
+    // Check the root-constant flag before touching the light buffer. When the
+    // directional light is disabled, this preserves the previous area/IBL
+    // path without an additional descriptor load.
+    if (DirectionalLightEnabled())
     {
-        areaEmitterPdf = 0.0f;
-        environmentEmitterPdf = 0.0f;
-        return;
+        DirectionalLight light = g_directionalLights[0];
+        if (light.enabled != 0u &&
+            any(light.radiance > 0.0f))
+        {
+            if (finiteEmitterWeight <= 0.0f)
+            {
+                directionalEmitterPdf = 1.0f;
+                return;
+            }
+            directionalEmitterPdf = clamp(
+                light.samplingProbability,
+                0.05f,
+                0.95f);
+        }
     }
 
-    areaEmitterPdf = areaWeight / totalWeight;
-    environmentEmitterPdf = environmentWeight / totalWeight;
+    if (finiteEmitterWeight <= 0.0f)
+        return;
+
+    float finiteEmitterPdf = 1.0f - directionalEmitterPdf;
+    areaEmitterPdf = finiteEmitterPdf *
+        areaWeight / finiteEmitterWeight;
+    environmentEmitterPdf = finiteEmitterPdf *
+        environmentWeight / finiteEmitterWeight;
 }
 
 float EvaluateAreaLightPdf(
@@ -477,9 +517,11 @@ float EvaluateAreaLightPdf(
 {
     float areaEmitterPdf;
     float environmentEmitterPdf;
+    float directionalEmitterPdf;
     EmitterSelectionProbabilities(
         areaEmitterPdf,
-        environmentEmitterPdf);
+        environmentEmitterPdf,
+        directionalEmitterPdf);
     if (areaEmitterPdf <= 0.0f ||
         g_emissiveTriangleCount == 0u ||
         distanceSquared <= 0.0f)
@@ -617,6 +659,71 @@ bool SampleDirectAreaLight(
     return true;
 }
 
+bool SampleDirectionalLight(
+    float3 normal,
+    float3 hitPosition,
+    float directionalEmitterPdf,
+    out float3 lightDirection,
+    out float3 radianceOverPdf,
+    out float lightPdf)
+{
+    lightDirection = normal;
+    radianceOverPdf = float3(0.0f, 0.0f, 0.0f);
+    lightPdf = 0.0f;
+    if (!DirectionalLightEnabled() ||
+        directionalEmitterPdf <= 0.0f ||
+        g_lightingMode == c_lightingModeBsdf)
+    {
+        return false;
+    }
+
+    DirectionalLight light = g_directionalLights[0];
+    if (light.enabled == 0u ||
+        dot(light.direction, light.direction) <=
+            0.00000001f)
+    {
+        return false;
+    }
+
+    // The config stores the propagation direction. Shadow rays travel in the
+    // opposite direction, from the surface toward the source at infinity.
+    lightDirection = normalize(-light.direction);
+    if (dot(normal, lightDirection) <= 0.0f)
+        return false;
+
+    RayDesc shadowRay;
+    shadowRay.Origin = hitPosition + normal * c_rayOriginBias;
+    shadowRay.Direction = lightDirection;
+    shadowRay.TMin = c_rayTMin;
+    shadowRay.TMax = c_rayTMax;
+
+    ShadowPayload shadowPayload;
+    shadowPayload.occluded = 1u;
+    RecordShadowRay();
+    TraceRay(
+        g_scene,
+        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+            RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+        0xFF,
+        0,
+        0,
+        1,
+        shadowRay,
+        shadowPayload);
+    if (shadowPayload.occluded != 0u)
+        return false;
+
+    float3 lightRadiance = max(
+        light.radiance,
+        float3(0.0f, 0.0f, 0.0f));
+    if (!any(lightRadiance > 0.0f))
+        return false;
+
+    lightPdf = directionalEmitterPdf;
+    radianceOverPdf = lightRadiance / lightPdf;
+    return true;
+}
+
 float3 CubemapFaceDirection(
     uint face,
     float faceU,
@@ -708,9 +815,11 @@ float EvaluateEnvironmentLightPdf(float3 direction)
 {
     float areaEmitterPdf;
     float environmentEmitterPdf;
+    float directionalEmitterPdf;
     EmitterSelectionProbabilities(
         areaEmitterPdf,
-        environmentEmitterPdf);
+        environmentEmitterPdf,
+        directionalEmitterPdf);
     if (environmentEmitterPdf <= 0.0f ||
         g_environmentResolution == 0u ||
         g_environmentTexelCount == 0u)
@@ -845,11 +954,13 @@ bool SampleDirectLight(
     inout uint seed,
     out float3 lightDirection,
     out float3 radianceOverPdf,
-    out float lightPdf)
+    out float lightPdf,
+    out bool lightIsDelta)
 {
     lightDirection = normal;
     radianceOverPdf = float3(0.0f, 0.0f, 0.0f);
     lightPdf = 0.0f;
+    lightIsDelta = false;
     if (g_lightingMode != c_lightingModeNee &&
         g_lightingMode != c_lightingModeMis)
     {
@@ -858,15 +969,32 @@ bool SampleDirectLight(
 
     float areaEmitterPdf;
     float environmentEmitterPdf;
+    float directionalEmitterPdf;
     EmitterSelectionProbabilities(
         areaEmitterPdf,
-        environmentEmitterPdf);
-    if (areaEmitterPdf + environmentEmitterPdf <= 0.0f)
+        environmentEmitterPdf,
+        directionalEmitterPdf);
+    if (areaEmitterPdf + environmentEmitterPdf +
+        directionalEmitterPdf <= 0.0f)
     {
         return false;
     }
 
-    if (RandomFloat01(seed) < environmentEmitterPdf)
+    float emitterSample = RandomFloat01(seed);
+    if (emitterSample < directionalEmitterPdf)
+    {
+        lightIsDelta = true;
+        return SampleDirectionalLight(
+            normal,
+            hitPosition,
+            directionalEmitterPdf,
+            lightDirection,
+            radianceOverPdf,
+            lightPdf);
+    }
+
+    if (emitterSample <
+        directionalEmitterPdf + environmentEmitterPdf)
     {
         return SampleDirectEnvironmentLight(
             normal,

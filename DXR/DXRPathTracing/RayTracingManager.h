@@ -101,6 +101,13 @@ public:
     void SetSamplesPerPixel(UINT samplesPerPixel);
     void SetRussianRouletteEnabled(bool enabled);
     void SetLightingMode(UINT lightingMode);
+    void SetDirectionalLightRuntimeSettings(
+        bool enabled,
+        float intensityScale);
+    bool HasDirectionalLight() const
+    {
+        return m_directionalLightAvailable;
+    }
     void SetTemporalReprojectionEnabled(bool enabled);
     void SetDynamicObjectReprojectionEnabled(bool enabled);
     void SetSkinnedDeformationMotionEnabled(bool enabled);
@@ -204,10 +211,15 @@ public:
     void SetEnableAccumulation(bool enableAccumulation);
     void SetSceneType(UINT sceneType);
     void SetSceneFilePath(const std::wstring& sceneFilePath) { m_sceneFilePath = sceneFilePath; }
+    void SetOverlaySceneFilePath(const std::wstring& sceneFilePath)
+    {
+        m_overlaySceneFilePath = sceneFilePath;
+    }
     bool ReloadPbrScene(
         const std::wstring& sceneFilePath,
         bool composeModelRoom,
-        bool sponzaLite);
+        bool sponzaLite,
+        const std::wstring& overlaySceneFilePath = {});
     void SetComposeModelRoom(bool enabled) { m_composeModelRoom = enabled; }
     void SetSponzaLite(bool enabled) { m_sponzaLite = enabled; }
     void SetSponzaLightConfigPath(const std::wstring& path)
@@ -457,6 +469,7 @@ private:
         ID3D12GraphicsCommandList4* commandList,
         const GpuProfileQueries* profileQueries);
     void DispatchTemporalColorClip(ID3D12GraphicsCommandList4* commandList);
+    bool UpdateDirectionalLightBuffer(UINT frameIndex);
     void WriteTemporalHistoryDescriptors();
     bool ReportFailure(HRESULT hr, const wchar_t* message) const;
     void ReportMessage(const std::wstring& message) const;
@@ -519,6 +532,7 @@ private:
     UINT m_validationSeed = 0;
     float m_exposure = 0.0f;
     std::wstring m_sceneFilePath;
+    std::wstring m_overlaySceneFilePath;
     std::wstring m_sceneManifestPath;
     std::wstring m_sponzaLightConfigPath;
     bool m_composeModelRoom = false;
@@ -639,6 +653,14 @@ private:
     UINT m_environmentTexelCount = 0;
     float m_environmentPower = 0.0f;
     float m_areaLightPower = 0.0f;
+    bool m_directionalLightAvailable = false;
+    bool m_directionalLightEnabled = true;
+    float m_directionalLightIntensityScale = 1.0f;
+    float m_directionalLightSamplingProbability = 0.5f;
+    std::array<float, 3> m_directionalLightDirection =
+        { 0.0f, -1.0f, 0.0f };
+    std::array<float, 3> m_directionalLightRadiance =
+        { 0.0f, 0.0f, 0.0f };
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_descriptorHeap;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_globalRootSignature;
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_atrousRootSignature;
@@ -681,6 +703,8 @@ private:
         c_tlasFrameCount> m_instanceDescBuffers;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,
         c_tlasFrameCount> m_previousInstanceTransformBuffers;
+    std::array<Microsoft::WRL::ComPtr<ID3D12Resource>,
+        c_tlasFrameCount> m_directionalLightBuffers;
     std::vector<std::array<float, 12>> m_currentInstanceTransforms;
     std::vector<std::array<float, 12>> m_previousInstanceTransforms;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_blasScratchBuffer;

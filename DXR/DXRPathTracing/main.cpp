@@ -55,6 +55,7 @@ namespace
         float atrousColorSigma = 4.0f;
         UINT lightingMode = RayTracingManager::c_lightingModeBsdf;
         bool enableIbl = true;
+        bool enableDirectionalLight = true;
         float iblIntensity = 2.0f;
         UINT validationSeed = 0;
         bool headless = false;
@@ -72,10 +73,12 @@ namespace
         bool enableGpuPassProfiling = true;
         bool animateDynamicSphere = false;
         bool animateDynamicCube = false;
+        bool animateGltfScene = true;
         std::wstring benchmarkOutput;
         std::wstring cameraPathFilePath;
         std::wstring outputPrefix;
         std::wstring sceneFilePath;
+        std::wstring overlaySceneFilePath;
         std::wstring sceneManifestPath;
         std::wstring sponzaLightConfigPath;
     };
@@ -446,6 +449,12 @@ namespace
                 gOptions.animateDynamicCube =
                     _wtoi(arguments[++index]) != 0;
             }
+            else if (argument == L"--animate-gltf" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.animateGltfScene =
+                    _wtoi(arguments[++index]) != 0;
+            }
             else if (argument == L"--scene" && index + 1 < argumentCount)
             {
                 gOptions.sponzaLite = false;
@@ -553,6 +562,12 @@ namespace
             {
                 gOptions.enableIbl = false;
             }
+            else if (argument == L"--directional-light" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.enableDirectionalLight =
+                    _wtoi(arguments[++index]) != 0;
+            }
             else if (argument == L"--output-prefix" && index + 1 < argumentCount)
             {
                 gOptions.outputPrefix = arguments[++index];
@@ -562,6 +577,11 @@ namespace
             {
                 gOptions.sceneFilePath = arguments[++index];
                 gOptions.sponzaLite = false;
+            }
+            else if (argument == L"--overlay-model" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.overlaySceneFilePath = arguments[++index];
             }
             else if (argument == L"--model-room")
             {
@@ -714,12 +734,16 @@ namespace
             return false;
 
         gRenderer.SetSceneFilePath(gOptions.sceneFilePath);
+        gRenderer.SetOverlaySceneFilePath(
+            gOptions.overlaySceneFilePath);
         gRenderer.SetInitialSceneType(gOptions.sceneType);
         gRenderer.SetInitialMaxBounce(gOptions.maxBounce);
         gRenderer.SetInitialSamplesPerPixel(gOptions.samplesPerPixel);
         gRenderer.SetInitialRussianRouletteEnabled(
             gOptions.enableRussianRoulette);
         gRenderer.SetInitialLightingMode(gOptions.lightingMode);
+        gRenderer.SetInitialDirectionalLightEnabled(
+            gOptions.enableDirectionalLight);
         gRenderer.SetInitialAtrousEnabled(gOptions.enableAtrous);
         gRenderer.SetInitialTemporalReprojectionEnabled(
             gOptions.enableTemporalReprojection);
@@ -761,6 +785,8 @@ namespace
             gOptions.animateDynamicSphere);
         gRenderer.SetInitialDynamicCubeAnimationEnabled(
             gOptions.animateDynamicCube);
+        gRenderer.SetInitialGltfAnimationEnabled(
+            gOptions.animateGltfScene);
         gRenderer.SetComposeModelRoom(gOptions.composeModelRoom);
         gRenderer.SetSponzaLite(gOptions.sponzaLite);
         gRenderer.SetSceneManifestPath(gOptions.sceneManifestPath);

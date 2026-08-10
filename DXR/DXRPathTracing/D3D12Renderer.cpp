@@ -243,7 +243,9 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     m_hWnd = hWnd;
     m_width = GetClientWidth(hWnd);
     m_height = GetClientHeight(hWnd);
-    if (!m_sponzaLite &&
+    if (m_sponzaLite && !m_overlaySceneFilePath.empty())
+        m_pbrScenePreset = 3;
+    else if (!m_sponzaLite &&
         m_sceneFilePath.find(L"BrainStem") != std::wstring::npos)
         m_pbrScenePreset = 2;
     else if (!m_sponzaLite &&
@@ -272,6 +274,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
 
     m_rayTracingManager.reset(new RayTracingManager());
     m_rayTracingManager->SetSceneFilePath(m_sceneFilePath);
+    m_rayTracingManager->SetOverlaySceneFilePath(
+        m_overlaySceneFilePath);
     m_rayTracingManager->SetComposeModelRoom(m_composeModelRoom);
     m_rayTracingManager->SetSponzaLite(m_sponzaLite);
     m_rayTracingManager->SetSponzaLightConfigPath(
@@ -283,6 +287,9 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_enableRussianRoulette);
     m_rayTracingManager->SetLightingMode(
         static_cast<UINT>(m_lightingMode));
+    m_rayTracingManager->SetDirectionalLightRuntimeSettings(
+        m_enableDirectionalLight,
+        m_directionalLightIntensityScale);
     m_rayTracingManager->SetTemporalReprojectionEnabled(
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
@@ -393,6 +400,9 @@ void D3D12Renderer::Render()
         m_enableRussianRoulette);
     m_rayTracingManager->SetLightingMode(
         static_cast<UINT>(m_lightingMode));
+    m_rayTracingManager->SetDirectionalLightRuntimeSettings(
+        m_enableDirectionalLight,
+        m_directionalLightIntensityScale);
     m_rayTracingManager->SetTemporalReprojectionEnabled(
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
@@ -1706,10 +1716,11 @@ void D3D12Renderer::ShutdownImGui()
 
 bool D3D12Renderer::SwitchPbrScenePreset(int preset)
 {
-    if (!m_rayTracingManager || preset < 0 || preset > 2)
+    if (!m_rayTracingManager || preset < 0 || preset > 3)
         return false;
 
     std::wstring sceneFilePath;
+    std::wstring overlaySceneFilePath;
     bool composeModelRoom = false;
     bool sponzaLite = false;
     if (preset == 0)
@@ -1725,6 +1736,12 @@ bool D3D12Renderer::SwitchPbrScenePreset(int preset)
     {
         sceneFilePath = c_brainStemScenePath;
     }
+    else if (preset == 3)
+    {
+        sceneFilePath = c_sponzaScenePath;
+        overlaySceneFilePath = c_brainStemScenePath;
+        sponzaLite = true;
+    }
     if (m_cameraPathPlaybackActive)
         StopCameraPathPlayback();
     if (m_cameraPathRecordingActive)
@@ -1735,17 +1752,21 @@ bool D3D12Renderer::SwitchPbrScenePreset(int preset)
 
     WaitForGpu();
     const std::wstring previousSceneFilePath = m_sceneFilePath;
+    const std::wstring previousOverlaySceneFilePath =
+        m_overlaySceneFilePath;
     const bool previousComposeModelRoom = m_composeModelRoom;
     const bool previousSponzaLite = m_sponzaLite;
     if (!m_rayTracingManager->ReloadPbrScene(
             sceneFilePath,
             composeModelRoom,
-            sponzaLite))
+            sponzaLite,
+            overlaySceneFilePath))
     {
         m_rayTracingManager->ReloadPbrScene(
             previousSceneFilePath,
             previousComposeModelRoom,
-            previousSponzaLite);
+            previousSponzaLite,
+            previousOverlaySceneFilePath);
         m_sceneSwitchStatus = "Scene switch failed; previous scene restored.";
         return false;
     }
@@ -1753,6 +1774,7 @@ bool D3D12Renderer::SwitchPbrScenePreset(int preset)
     m_sceneType =
         static_cast<int>(RayTracingManager::c_scenePbrGgx);
     m_sceneFilePath = sceneFilePath;
+    m_overlaySceneFilePath = overlaySceneFilePath;
     m_composeModelRoom = composeModelRoom;
     m_sponzaLite = sponzaLite;
     m_pbrScenePreset = preset;
@@ -1770,8 +1792,11 @@ bool D3D12Renderer::SwitchPbrScenePreset(int preset)
         m_sceneSwitchStatus = "Loaded PBR Sponza with 12 area lights.";
     else if (preset == 1)
         m_sceneSwitchStatus = "Loaded SimpleSkin GPU skinning test.";
-    else
+    else if (preset == 2)
         m_sceneSwitchStatus = "Loaded BrainStem GPU skinning test.";
+    else
+        m_sceneSwitchStatus =
+            "Loaded Sponza with animated BrainStem and 12 area lights.";
     return true;
 }
 
@@ -1817,7 +1842,8 @@ void D3D12Renderer::BuildImGuiFrame()
         {
             "Sponza + 12 Area Lights",
             "SimpleSkin GPU Test",
-            "BrainStem GPU Skinning Test"
+            "BrainStem GPU Skinning Test",
+            "Sponza + Animated BrainStem"
         };
         int requestedPbrScene = m_pbrScenePreset;
         if (ImGui::Combo(
@@ -1989,6 +2015,32 @@ void D3D12Renderer::BuildImGuiFrame()
             m_captureStatus.clear();
             m_rayTracingManager->SetIblSettings(m_enableIbl, m_iblIntensity);
         }
+
+        if (m_rayTracingManager &&
+            m_rayTracingManager->HasDirectionalLight())
+        {
+            bool directionalChanged = false;
+            directionalChanged |= ImGui::Checkbox(
+                "Enable Directional Light",
+                &m_enableDirectionalLight);
+            directionalChanged |= ImGui::SliderFloat(
+                "Directional Light Intensity",
+                &m_directionalLightIntensityScale,
+                0.0f,
+                4.0f,
+                "%.2f");
+            ImGui::TextDisabled(
+                "Shares one NEE shadow-ray sample with area lights and IBL.");
+            if (directionalChanged)
+            {
+                m_captureActive = false;
+                m_saveCurrentRequested = false;
+                m_captureStatus.clear();
+                m_rayTracingManager->SetDirectionalLightRuntimeSettings(
+                    m_enableDirectionalLight,
+                    m_directionalLightIntensityScale);
+            }
+        }
     }
     ImGui::SliderFloat("Exposure (EV)", &m_exposure, -8.0f, 8.0f, "%.2f");
     ImGui::Checkbox("Show normal color", &m_showNormalColor);
@@ -2000,8 +2052,8 @@ void D3D12Renderer::BuildImGuiFrame()
     const char* lightingModeNames[] =
     {
         "BSDF Only",
-        "NEE (Area + Environment)",
-        "MIS (Area + Environment)"
+        "NEE (Area + Environment + Directional)",
+        "MIS (Area + Environment + Directional)"
     };
     if (ImGui::Combo(
         "Lighting",

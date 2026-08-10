@@ -1,5 +1,10 @@
 {
-  "description": "12 downward-facing rectangle emitters below the main Sponza hall ceiling (model node scale already flattened)",
+  "description": "12 rectangle emitters plus one strong sun-like directional light for the Sponza scene",
+  "directional_light": {
+    "direction": [0.35, -1.0, 0.25],
+    "radiance": [8.0, 7.5, 6.8],
+    "sampling_probability": 0.5
+  },
   "lights": [
     { "position": [-6.0, 6.8, -3.3], "right": [1, 0, 0], "up": [0, 0, 1], "width": 1.4, "height": 0.8, "radiance": [18, 16, 13] },
     { "position": [-2.0, 6.8, -3.3], "right": [1, 0, 0], "up": [0, 0, 1], "width": 1.4, "height": 0.8, "radiance": [18, 16, 13] },

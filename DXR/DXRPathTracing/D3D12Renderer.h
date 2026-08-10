@@ -26,6 +26,10 @@ public:
         if (!m_sceneFilePath.empty())
             m_sceneType = static_cast<int>(RayTracingManager::c_scenePbrGgx);
     }
+    void SetOverlaySceneFilePath(const std::wstring& sceneFilePath)
+    {
+        m_overlaySceneFilePath = sceneFilePath;
+    }
     void SetComposeModelRoom(bool enabled) { m_composeModelRoom = enabled; }
     void SetSponzaLite(bool enabled) { m_sponzaLite = enabled; }
     void SetSponzaLightConfigPath(const std::wstring& path)
@@ -61,6 +65,10 @@ public:
             lightingMode <= RayTracingManager::c_lightingModeMis
             ? lightingMode
             : RayTracingManager::c_lightingModeBsdf);
+    }
+    void SetInitialDirectionalLightEnabled(bool enabled)
+    {
+        m_enableDirectionalLight = enabled;
     }
     void SetInitialAtrousEnabled(bool enabled)
     {
@@ -171,6 +179,10 @@ public:
     void SetInitialDynamicCubeAnimationEnabled(bool enabled)
     {
         m_animateDynamicCube = enabled;
+    }
+    void SetInitialGltfAnimationEnabled(bool enabled)
+    {
+        m_animateGltfScene = enabled;
     }
     void SetCameraPathFilePath(const std::wstring& filePath)
     {
@@ -384,12 +396,15 @@ private:
     float m_textureLodBias = 0.0f;
     bool m_enableIbl = true;
     float m_iblIntensity = 2.0f;
+    bool m_enableDirectionalLight = true;
+    float m_directionalLightIntensityScale = 1.0f;
     UINT m_validationSeed = 0;
     float m_exposure = 0.0f;
     std::string m_captureStatus;
     bool m_exitAfterCapture = false;
     std::wstring m_captureOutputPrefix;
     std::wstring m_sceneFilePath;
+    std::wstring m_overlaySceneFilePath;
     std::wstring m_sceneManifestPath;
     std::wstring m_sponzaLightConfigPath;
     std::wstring m_cameraPathFilePath;

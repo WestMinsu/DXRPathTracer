@@ -156,14 +156,27 @@ namespace
             light.radiance[1] >= 0.0f &&
             light.radiance[2] >= 0.0f;
     }
+
+    bool ValidateDirectionalLight(
+        const SponzaDirectionalLight& light)
+    {
+        return LengthSquared(light.direction) > 1.0e-8f &&
+            light.radiance[0] >= 0.0f &&
+            light.radiance[1] >= 0.0f &&
+            light.radiance[2] >= 0.0f &&
+            light.samplingProbability > 0.0f &&
+            light.samplingProbability < 1.0f;
+    }
 }
 
 bool LoadSponzaLightConfig(
     const std::wstring& filePath,
     std::vector<SceneAreaLight>& lights,
+    SponzaDirectionalLight& directionalLight,
     std::wstring& errorMessage)
 {
     lights.clear();
+    directionalLight = {};
     errorMessage.clear();
     std::string text;
     if (!ReadUtf8File(filePath, text))
@@ -221,6 +234,49 @@ bool LoadSponzaLightConfig(
     {
         errorMessage = L"The light config does not contain any lights.";
         return false;
+    }
+
+    const std::size_t directionalProperty =
+        text.find("directional_light");
+    if (directionalProperty != std::string::npos)
+    {
+        const std::size_t objectBegin =
+            text.find('{', directionalProperty);
+        std::size_t objectEnd = 0;
+        if (objectBegin == std::string::npos ||
+            !FindMatchingDelimiter(
+                text,
+                objectBegin,
+                '{',
+                '}',
+                objectEnd))
+        {
+            errorMessage =
+                L"directional_light must be a valid object.";
+            return false;
+        }
+
+        const std::string object =
+            text.substr(objectBegin, objectEnd - objectBegin + 1);
+        if (!ExtractFloat3(
+                object,
+                "direction",
+                directionalLight.direction) ||
+            !ExtractFloat3(
+                object,
+                "radiance",
+                directionalLight.radiance) ||
+            !ExtractFloat(
+                object,
+                "sampling_probability",
+                directionalLight.samplingProbability) ||
+            !ValidateDirectionalLight(directionalLight))
+        {
+            errorMessage =
+                L"directional_light needs valid direction, radiance, and sampling_probability.";
+            return false;
+        }
+        directionalLight.enabled = true;
     }
     return true;
 }

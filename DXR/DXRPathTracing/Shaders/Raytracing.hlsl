@@ -715,13 +715,15 @@ void TracePath(
         float3 directLightDirection;
         float3 radianceOverPdf;
         float lightPdf;
+        bool directLightIsDelta;
         bool directLightVisible = SampleDirectLight(
             payload.normal,
             hitPosition,
             directSeed,
             directLightDirection,
             radianceOverPdf,
-            lightPdf);
+            lightPdf,
+            directLightIsDelta);
         if (directLightVisible)
         {
             if (IsPbrRenderingScene())
@@ -732,7 +734,9 @@ void TracePath(
                     payload.normal,
                     viewDirection,
                     directLightDirection);
-                float misWeight = g_lightingMode == c_lightingModeMis
+                float misWeight =
+                    g_lightingMode == c_lightingModeMis &&
+                    !directLightIsDelta
                     ? PowerHeuristic(lightPdf, bsdfPdf)
                     : 1.0f;
                 float3 diffuseBrdf;
@@ -754,7 +758,9 @@ void TracePath(
                 float nDotL = saturate(
                     dot(payload.normal, directLightDirection));
                 float bsdfPdf = nDotL * c_invPi;
-                float misWeight = g_lightingMode == c_lightingModeMis
+                float misWeight =
+                    g_lightingMode == c_lightingModeMis &&
+                    !directLightIsDelta
                     ? PowerHeuristic(lightPdf, bsdfPdf)
                     : 1.0f;
                 localDirectDiffuseLighting = payload.baseColor * c_invPi *

@@ -15,8 +15,10 @@
 #include <cstdint>
 #include <functional>
 #include <iomanip>
+#include <iterator>
 #include <limits>
 #include <sstream>
+#include <utility>
 #include <vector>
 
 #pragma comment(lib, "d3d12.lib")
@@ -494,11 +496,13 @@ namespace
         c_temporalPreviousSpecularMomentsSrvIndex + 1;
     constexpr UINT c_previousSkinnedPositionsSrvIndex =
         c_previousInstanceTransformsSrvIndex + 1;
+    constexpr UINT c_directionalLightSrvIndex =
+        c_previousSkinnedPositionsSrvIndex + 1;
     constexpr UINT c_temporalHistorySrvCount = 7;
     constexpr UINT c_temporalDescriptorSrvCount =
-        c_temporalHistorySrvCount + 2;
+        c_temporalHistorySrvCount + 3;
     constexpr UINT c_descriptorCount =
-        c_previousSkinnedPositionsSrvIndex + 1;
+        c_directionalLightSrvIndex + 1;
     constexpr UINT c_atrousFilterChannelDiffuse = 0;
     constexpr UINT c_atrousFilterChannelSpecular = 1;
     constexpr UINT c_statisticsShadowRayIndex =
@@ -561,6 +565,15 @@ namespace
         UINT enableDynamicObjectReprojection;
     };
     static_assert(sizeof(RenderSettingsConstants) == 42 * sizeof(std::uint32_t));
+
+    struct GpuDirectionalLight
+    {
+        float direction[3];
+        UINT enabled;
+        float radiance[3];
+        float samplingProbability;
+    };
+    static_assert(sizeof(GpuDirectionalLight) == 8 * sizeof(std::uint32_t));
 
     struct AtrousSettingsConstants
     {
@@ -1162,6 +1175,13 @@ void RayTracingManager::DispatchRays(
     const bool useAtrousFilter =
         isBeautyFrame && m_enableAtrous;
 
+    const UINT directionalLightFrame =
+        static_cast<UINT>(m_frameIndex % c_tlasFrameCount);
+    if (!UpdateDirectionalLightBuffer(directionalLightFrame))
+    {
+        WriteEmptyGpuProfile(commandList, profileQueries);
+        return;
+    }
     WriteTemporalHistoryDescriptors();
     ID3D12Resource* previousHistoryResources[c_temporalHistorySrvCount] =
     {
@@ -1279,10 +1299,15 @@ void RayTracingManager::DispatchRays(
     renderSettings.enableTemporalReprojection =
         useTemporalHistory ? 1u : 0u;
     renderSettings.temporalDebugView = m_temporalDebugView;
+    const bool directionalLightActive =
+        m_directionalLightAvailable &&
+        m_directionalLightEnabled &&
+        m_directionalLightIntensityScale > 0.0f;
     renderSettings.enableDynamicObjectReprojection =
         (m_enableDynamicObjectReprojection ? 1u : 0u) |
         (m_useCurrentFrameVisibleResidual ? 2u : 0u) |
-        (m_enableSkinnedDeformationMotion ? 4u : 0u);
+        (m_enableSkinnedDeformationMotion ? 4u : 0u) |
+        (directionalLightActive ? 8u : 0u);
     commandList->SetComputeRoot32BitConstants(4, 42, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
@@ -2051,6 +2076,25 @@ void RayTracingManager::SetLightingMode(UINT lightingMode)
     ResetAccumulation();
 }
 
+void RayTracingManager::SetDirectionalLightRuntimeSettings(
+    bool enabled,
+    float intensityScale)
+{
+    const float clampedIntensity =
+        (std::max)(0.0f, (std::min)(intensityScale, 8.0f));
+    if (m_directionalLightEnabled == enabled &&
+        std::abs(
+            m_directionalLightIntensityScale -
+            clampedIntensity) <= 1.0e-6f)
+    {
+        return;
+    }
+
+    m_directionalLightEnabled = enabled;
+    m_directionalLightIntensityScale = clampedIntensity;
+    ResetAccumulation();
+}
+
 void RayTracingManager::SetEnableAccumulation(bool enableAccumulation)
 {
     if (m_enableAccumulation == enableAccumulation)
@@ -2436,6 +2480,7 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
             }
         }
     }
+
     m_skinJointMatrices.assign(
         m_skinJointMatrixCount,
         IdentityMatrix());
@@ -2443,6 +2488,328 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
         return false;
     m_previousSkinJointMatrices = m_skinJointMatrices;
     return true;
+}
+
+namespace
+{
+    bool ApplyUniformScenePlacement(
+        SceneData& scene,
+        const std::array<float, 3>& translationLeftHanded,
+        float uniformScale)
+    {
+        if (!std::isfinite(uniformScale) || uniformScale <= 0.0f)
+            return false;
+        for (const float component : translationLeftHanded)
+        {
+            if (!std::isfinite(component))
+                return false;
+        }
+
+        for (SceneVertex& vertex : scene.vertices)
+        {
+            for (std::size_t component = 0; component < 3u; ++component)
+            {
+                vertex.position[component] =
+                    vertex.position[component] * uniformScale +
+                    translationLeftHanded[component];
+            }
+        }
+
+        // Scene nodes retain glTF's right-handed transforms while flattened
+        // vertices are already left-handed. Reflect only the placement Z.
+        Matrix4 placement = IdentityMatrix();
+        placement[0] = uniformScale;
+        placement[5] = uniformScale;
+        placement[10] = uniformScale;
+        placement[12] = translationLeftHanded[0];
+        placement[13] = translationLeftHanded[1];
+        placement[14] = -translationLeftHanded[2];
+
+        for (SceneNode& node : scene.nodes)
+        {
+            Matrix4 world = {};
+            std::copy_n(node.worldTransform, 16u, world.begin());
+            const Matrix4 placedWorld = MultiplyMatrix(placement, world);
+            std::copy_n(
+                placedWorld.begin(),
+                16u,
+                node.worldTransform);
+        }
+
+        for (const std::uint32_t rootNodeIndex : scene.rootNodeIndices)
+        {
+            if (rootNodeIndex >= scene.nodes.size())
+                return false;
+            SceneNode& root = scene.nodes[rootNodeIndex];
+            Matrix4 local = {};
+            std::copy_n(root.localTransform, 16u, local.begin());
+            const Matrix4 placedLocal = MultiplyMatrix(placement, local);
+            std::copy_n(
+                placedLocal.begin(),
+                16u,
+                root.localTransform);
+
+            root.translation[0] =
+                root.translation[0] * uniformScale +
+                translationLeftHanded[0];
+            root.translation[1] =
+                root.translation[1] * uniformScale +
+                translationLeftHanded[1];
+            root.translation[2] =
+                root.translation[2] * uniformScale -
+                translationLeftHanded[2];
+            for (float& component : root.scale)
+                component *= uniformScale;
+        }
+        return true;
+    }
+
+    bool NextMeshIndex(
+        const SceneData& scene,
+        std::uint32_t& nextMeshIndex)
+    {
+        std::uint32_t maximumMeshIndex = 0u;
+        bool hasMesh = false;
+        for (const SceneNode& node : scene.nodes)
+        {
+            if (node.meshIndex == c_invalidSceneMeshIndex)
+                continue;
+            maximumMeshIndex = hasMesh
+                ? (std::max)(maximumMeshIndex, node.meshIndex)
+                : node.meshIndex;
+            hasMesh = true;
+        }
+        if (!hasMesh)
+        {
+            nextMeshIndex = 0u;
+            return true;
+        }
+        if (maximumMeshIndex >= c_invalidSceneMeshIndex - 1u)
+            return false;
+        nextMeshIndex = maximumMeshIndex + 1u;
+        return true;
+    }
+
+    bool AppendStaticGeometryInstance(
+        SceneData& scene,
+        const char* name,
+        std::uint32_t vertexOffset,
+        std::uint32_t vertexCount,
+        std::uint32_t indexOffset,
+        std::uint32_t indexCount,
+        std::uint32_t primitiveOffset)
+    {
+        if (vertexCount == 0u || indexCount == 0u ||
+            indexCount % 3u != 0u)
+        {
+            return false;
+        }
+        std::uint32_t meshIndex = 0u;
+        if (!NextMeshIndex(scene, meshIndex) ||
+            scene.nodes.size() >= c_invalidSceneNodeIndex)
+        {
+            return false;
+        }
+
+        SceneNode node;
+        node.name = name ? name : "Generated static geometry";
+        node.meshIndex = meshIndex;
+        node.activeInScene = true;
+        const std::uint32_t nodeIndex =
+            static_cast<std::uint32_t>(scene.nodes.size());
+        scene.nodes.push_back(std::move(node));
+        scene.rootNodeIndices.push_back(nodeIndex);
+
+        SceneMeshNodeInstance instance;
+        instance.nodeIndex = nodeIndex;
+        instance.meshIndex = meshIndex;
+        ScenePrimitiveRange range;
+        range.vertexOffset = vertexOffset;
+        range.vertexCount = vertexCount;
+        range.indexOffset = indexOffset;
+        range.indexCount = indexCount;
+        range.primitiveOffset = primitiveOffset;
+        instance.primitives.push_back(range);
+        scene.meshNodeInstances.push_back(std::move(instance));
+        return true;
+    }
+
+    bool AppendSceneData(SceneData& destination, SceneData&& source)
+    {
+        if (!destination.IsValid() || !source.IsValid())
+            return false;
+        const auto fitsOffset = [](std::size_t destinationSize,
+                                   std::size_t sourceSize)
+        {
+            return destinationSize <=
+                    static_cast<std::size_t>(
+                        std::numeric_limits<std::uint32_t>::max()) &&
+                sourceSize <=
+                    static_cast<std::size_t>(
+                        std::numeric_limits<std::uint32_t>::max()) -
+                        destinationSize;
+        };
+        if (!fitsOffset(destination.vertices.size(), source.vertices.size()) ||
+            !fitsOffset(destination.indices.size(), source.indices.size()) ||
+            !fitsOffset(destination.materials.size(), source.materials.size()) ||
+            !fitsOffset(destination.textures.size(), source.textures.size()) ||
+            !fitsOffset(destination.nodes.size(), source.nodes.size()) ||
+            !fitsOffset(destination.skins.size(), source.skins.size()) ||
+            !fitsOffset(
+                destination.primitiveMaterialIndices.size(),
+                source.primitiveMaterialIndices.size()))
+        {
+            return false;
+        }
+
+        const std::uint32_t vertexOffset =
+            static_cast<std::uint32_t>(destination.vertices.size());
+        const std::uint32_t indexOffset =
+            static_cast<std::uint32_t>(destination.indices.size());
+        const std::uint32_t materialOffset =
+            static_cast<std::uint32_t>(destination.materials.size());
+        const std::uint32_t primitiveOffset = static_cast<std::uint32_t>(
+            destination.primitiveMaterialIndices.size());
+        const std::uint32_t textureOffset =
+            static_cast<std::uint32_t>(destination.textures.size());
+        const std::uint32_t nodeOffset =
+            static_cast<std::uint32_t>(destination.nodes.size());
+        const std::uint32_t skinOffset =
+            static_cast<std::uint32_t>(destination.skins.size());
+        std::uint32_t meshOffset = 0u;
+        if (!NextMeshIndex(destination, meshOffset))
+            return false;
+
+        for (std::uint32_t& index : source.indices)
+        {
+            if (index > std::numeric_limits<std::uint32_t>::max() -
+                    vertexOffset)
+                return false;
+            index += vertexOffset;
+        }
+        for (std::uint32_t& materialIndex :
+             source.primitiveMaterialIndices)
+        {
+            if (materialIndex >
+                std::numeric_limits<std::uint32_t>::max() -
+                    materialOffset)
+                return false;
+            materialIndex += materialOffset;
+        }
+        for (SceneMaterial& material : source.materials)
+        {
+            std::uint32_t* textureIndices[] =
+            {
+                &material.baseColorTextureIndex,
+                &material.metallicRoughnessTextureIndex,
+                &material.normalTextureIndex
+            };
+            for (std::uint32_t* textureIndex : textureIndices)
+            {
+                if (*textureIndex == c_invalidSceneTextureIndex)
+                    continue;
+                if (*textureIndex >
+                    std::numeric_limits<std::uint32_t>::max() -
+                        textureOffset)
+                    return false;
+                *textureIndex += textureOffset;
+            }
+        }
+        for (SceneNode& node : source.nodes)
+        {
+            if (node.parentIndex != c_invalidSceneNodeIndex)
+                node.parentIndex += nodeOffset;
+            for (std::uint32_t& childIndex : node.childIndices)
+                childIndex += nodeOffset;
+            if (node.meshIndex != c_invalidSceneMeshIndex)
+                node.meshIndex += meshOffset;
+            if (node.skinIndex != c_invalidSceneSkinIndex)
+                node.skinIndex += skinOffset;
+        }
+        for (SceneSkin& skin : source.skins)
+        {
+            if (skin.skeletonRootNodeIndex != c_invalidSceneNodeIndex)
+                skin.skeletonRootNodeIndex += nodeOffset;
+            for (std::uint32_t& jointNodeIndex : skin.jointNodeIndices)
+                jointNodeIndex += nodeOffset;
+        }
+        for (SceneMeshNodeInstance& instance : source.meshNodeInstances)
+        {
+            instance.nodeIndex += nodeOffset;
+            instance.meshIndex += meshOffset;
+            for (ScenePrimitiveRange& range : instance.primitives)
+            {
+                range.vertexOffset += vertexOffset;
+                range.indexOffset += indexOffset;
+                range.primitiveOffset += primitiveOffset;
+            }
+        }
+        for (std::uint32_t& rootNodeIndex : source.rootNodeIndices)
+            rootNodeIndex += nodeOffset;
+        for (SceneAnimation& animation : source.animations)
+        {
+            for (SceneAnimationChannel& channel : animation.channels)
+                channel.targetNodeIndex += nodeOffset;
+        }
+
+        if (!source.vertexSkinInfluences.empty() &&
+            destination.vertexSkinInfluences.empty())
+        {
+            destination.vertexSkinInfluences.resize(
+                destination.vertices.size());
+        }
+        if (!destination.vertexSkinInfluences.empty() &&
+            source.vertexSkinInfluences.empty())
+        {
+            source.vertexSkinInfluences.resize(source.vertices.size());
+        }
+
+        destination.vertices.insert(
+            destination.vertices.end(),
+            std::make_move_iterator(source.vertices.begin()),
+            std::make_move_iterator(source.vertices.end()));
+        destination.indices.insert(
+            destination.indices.end(),
+            source.indices.begin(),
+            source.indices.end());
+        destination.materials.insert(
+            destination.materials.end(),
+            source.materials.begin(),
+            source.materials.end());
+        destination.primitiveMaterialIndices.insert(
+            destination.primitiveMaterialIndices.end(),
+            source.primitiveMaterialIndices.begin(),
+            source.primitiveMaterialIndices.end());
+        destination.textures.insert(
+            destination.textures.end(),
+            std::make_move_iterator(source.textures.begin()),
+            std::make_move_iterator(source.textures.end()));
+        destination.nodes.insert(
+            destination.nodes.end(),
+            std::make_move_iterator(source.nodes.begin()),
+            std::make_move_iterator(source.nodes.end()));
+        destination.skins.insert(
+            destination.skins.end(),
+            std::make_move_iterator(source.skins.begin()),
+            std::make_move_iterator(source.skins.end()));
+        destination.vertexSkinInfluences.insert(
+            destination.vertexSkinInfluences.end(),
+            source.vertexSkinInfluences.begin(),
+            source.vertexSkinInfluences.end());
+        destination.meshNodeInstances.insert(
+            destination.meshNodeInstances.end(),
+            std::make_move_iterator(source.meshNodeInstances.begin()),
+            std::make_move_iterator(source.meshNodeInstances.end()));
+        destination.rootNodeIndices.insert(
+            destination.rootNodeIndices.end(),
+            source.rootNodeIndices.begin(),
+            source.rootNodeIndices.end());
+        destination.animations.insert(
+            destination.animations.end(),
+            std::make_move_iterator(source.animations.begin()),
+            std::make_move_iterator(source.animations.end()));
+        return destination.IsValid();
+    }
 }
 
 bool RayTracingManager::ConfigureSceneAnimation(const SceneData& scene)
@@ -2992,10 +3359,12 @@ void RayTracingManager::SetSceneType(UINT sceneType)
 bool RayTracingManager::ReloadPbrScene(
     const std::wstring& sceneFilePath,
     bool composeModelRoom,
-    bool sponzaLite)
+    bool sponzaLite,
+    const std::wstring& overlaySceneFilePath)
 {
     m_sceneType = c_scenePbrGgx;
     m_sceneFilePath = sceneFilePath;
+    m_overlaySceneFilePath = overlaySceneFilePath;
     m_composeModelRoom = composeModelRoom;
     m_sponzaLite = sponzaLite;
     ResetAccumulation();
@@ -3448,6 +3817,48 @@ bool RayTracingManager::CreateOutputTexture()
     return true;
 }
 
+bool RayTracingManager::UpdateDirectionalLightBuffer(UINT frameIndex)
+{
+    if (frameIndex >= c_tlasFrameCount ||
+        !m_directionalLightBuffers[frameIndex])
+    {
+        return false;
+    }
+
+    GpuDirectionalLight light = {};
+    std::copy(
+        m_directionalLightDirection.begin(),
+        m_directionalLightDirection.end(),
+        light.direction);
+    light.enabled =
+        m_directionalLightAvailable &&
+        m_directionalLightEnabled &&
+        m_directionalLightIntensityScale > 0.0f
+        ? 1u
+        : 0u;
+    for (UINT component = 0; component < 3u; ++component)
+    {
+        light.radiance[component] =
+            m_directionalLightRadiance[component] *
+            m_directionalLightIntensityScale;
+    }
+    light.samplingProbability =
+        m_directionalLightSamplingProbability;
+
+    void* destination = nullptr;
+    const D3D12_RANGE noReadRange = { 0, 0 };
+    const HRESULT hr = m_directionalLightBuffers[frameIndex]->Map(
+        0,
+        &noReadRange,
+        &destination);
+    if (ReportFailure(hr, L"Directional light buffer mapping failed."))
+        return false;
+    std::memcpy(destination, &light, sizeof(light));
+    const D3D12_RANGE writtenRange = { 0, sizeof(light) };
+    m_directionalLightBuffers[frameIndex]->Unmap(0, &writtenRange);
+    return true;
+}
+
 void RayTracingManager::WriteTemporalHistoryDescriptors()
 {
     if (!m_device || !m_descriptorHeap)
@@ -3577,6 +3988,21 @@ void RayTracingManager::WriteTemporalHistoryDescriptors()
         m_previousSkinnedPositionBuffer.Get(),
         &previousPositionSrvDesc,
         descriptorHandle(c_previousSkinnedPositionsSrvIndex));
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC directionalLightSrvDesc = {};
+    directionalLightSrvDesc.Shader4ComponentMapping =
+        D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    directionalLightSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
+    directionalLightSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+    directionalLightSrvDesc.Buffer.FirstElement = 0;
+    directionalLightSrvDesc.Buffer.NumElements = 1;
+    directionalLightSrvDesc.Buffer.StructureByteStride =
+        sizeof(GpuDirectionalLight);
+    directionalLightSrvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+    m_device->CreateShaderResourceView(
+        m_directionalLightBuffers[transformFrame].Get(),
+        &directionalLightSrvDesc,
+        descriptorHandle(c_directionalLightSrvIndex));
 }
 
 bool RayTracingManager::CreateStatisticsResources()
@@ -4631,6 +5057,10 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     bool hasModelBounds = false;
     bool hasLoadReport = false;
     std::size_t areaLightCount = 0;
+    m_directionalLightAvailable = false;
+    m_directionalLightSamplingProbability = 0.5f;
+    m_directionalLightDirection = { 0.0f, -1.0f, 0.0f };
+    m_directionalLightRadiance = { 0.0f, 0.0f, 0.0f };
     m_hasDynamicSphere = false;
     m_hasDynamicCube = false;
     m_dynamicSceneFrameIndex = 0;
@@ -4646,6 +5076,8 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         jointMatrixBuffer.Reset();
     for (auto& jointMatrixBuffer : m_previousSkinJointMatrixBuffers)
         jointMatrixBuffer.Reset();
+    for (auto& directionalLightBuffer : m_directionalLightBuffers)
+        directionalLightBuffer.Reset();
     m_gpuSkinningActive = false;
     if (!ConfigureSceneAnimation(SceneData{}))
         return false;
@@ -4674,21 +5106,15 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             ReportMessage(L"Loaded glTF scene data or bounds are invalid.");
             return false;
         }
-        if (!m_composeModelRoom &&
-            !m_sponzaLite &&
-            !ConfigureSceneAnimation(scene))
-        {
-            ReportMessage(
-                L"Failed to configure glTF node animation playback.");
-            return false;
-        }
         hasModelBounds = true;
         if (m_sponzaLite)
         {
             std::vector<SceneAreaLight> lights;
+            SponzaDirectionalLight directionalLight;
             if (!LoadSponzaLightConfig(
                 m_sponzaLightConfigPath,
                 lights,
+                directionalLight,
                 errorMessage))
             {
                 ReportMessage(
@@ -4703,13 +5129,107 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
                     L"Sponza-lite requires exactly 12 area lights.");
                 return false;
             }
+            const std::size_t lightVertexOffset = scene.vertices.size();
+            const std::size_t lightIndexOffset = scene.indices.size();
+            const std::size_t lightPrimitiveOffset =
+                scene.primitiveMaterialIndices.size();
             if (!AppendAreaLights(scene, lights))
             {
                 ReportMessage(
                     L"Failed to append the Sponza area-light geometry.");
                 return false;
             }
+            if (!m_overlaySceneFilePath.empty())
+            {
+                const auto validUintRange = [](
+                    std::size_t offset,
+                    std::size_t count)
+                {
+                    return offset <=
+                            std::numeric_limits<std::uint32_t>::max() &&
+                        count <=
+                            std::numeric_limits<std::uint32_t>::max() -
+                                offset;
+                };
+                const std::size_t lightVertexCount =
+                    scene.vertices.size() - lightVertexOffset;
+                const std::size_t lightIndexCount =
+                    scene.indices.size() - lightIndexOffset;
+                if (!validUintRange(lightVertexOffset, lightVertexCount) ||
+                    !validUintRange(lightIndexOffset, lightIndexCount) ||
+                    lightPrimitiveOffset >
+                        std::numeric_limits<std::uint32_t>::max() ||
+                    !AppendStaticGeometryInstance(
+                        scene,
+                        "Sponza area lights",
+                        static_cast<std::uint32_t>(lightVertexOffset),
+                        static_cast<std::uint32_t>(lightVertexCount),
+                        static_cast<std::uint32_t>(lightIndexOffset),
+                        static_cast<std::uint32_t>(lightIndexCount),
+                        static_cast<std::uint32_t>(
+                            lightPrimitiveOffset)))
+                {
+                    ReportMessage(
+                        L"Failed to register Sponza area-light geometry "
+                        L"as a static mesh instance.");
+                    return false;
+                }
+            }
             areaLightCount = lights.size();
+            m_directionalLightAvailable = directionalLight.enabled;
+            m_directionalLightSamplingProbability =
+                directionalLight.samplingProbability;
+            std::copy(
+                std::begin(directionalLight.direction),
+                std::end(directionalLight.direction),
+                m_directionalLightDirection.begin());
+            std::copy(
+                std::begin(directionalLight.radiance),
+                std::end(directionalLight.radiance),
+                m_directionalLightRadiance.begin());
+        }
+        if (!m_overlaySceneFilePath.empty())
+        {
+            SceneData overlayScene;
+            GltfLoadOptions overlayLoadOptions;
+            GltfLoadReport overlayLoadReport;
+            if (!LoadGltfSceneData(
+                    m_overlaySceneFilePath,
+                    overlayScene,
+                    errorMessage,
+                    overlayLoadOptions,
+                    &overlayLoadReport))
+            {
+                ReportMessage(
+                    L"Overlay glTF scene load failed.\nPath: " +
+                    m_overlaySceneFilePath +
+                    L"\nReason: " + errorMessage);
+                return false;
+            }
+            constexpr std::array<float, 3> overlayPosition =
+                { 0.0f, 1.0f, 0.0f };
+            constexpr float overlayScale = 1.0f;
+            if (!ApplyUniformScenePlacement(
+                    overlayScene,
+                    overlayPosition,
+                    overlayScale) ||
+                !AppendSceneData(scene, std::move(overlayScene)))
+            {
+                ReportMessage(
+                    L"Failed to place and merge the animated overlay "
+                    L"scene into Sponza.");
+                return false;
+            }
+        }
+        if ((!m_composeModelRoom && !m_sponzaLite) ||
+            !m_overlaySceneFilePath.empty())
+        {
+            if (!ConfigureSceneAnimation(scene))
+            {
+                ReportMessage(
+                    L"Failed to configure glTF node animation playback.");
+                return false;
+            }
         }
         if (m_composeModelRoom && !AppendPbrModelRoom(scene, modelBounds))
         {
@@ -4887,6 +5407,11 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             scene.vertices.end(),
             sphere.vertices.begin(),
             sphere.vertices.end());
+        if (!scene.vertexSkinInfluences.empty())
+        {
+            scene.vertexSkinInfluences.resize(
+                scene.vertices.size());
+        }
         scene.indices.insert(
             scene.indices.end(),
             sphere.indices.begin(),
@@ -4999,6 +5524,37 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
                 materialOffset + materialIndex);
         }
         m_hasDynamicCube = true;
+    }
+
+    GpuDirectionalLight gpuDirectionalLight = {};
+    std::copy(
+        m_directionalLightDirection.begin(),
+        m_directionalLightDirection.end(),
+        gpuDirectionalLight.direction);
+    gpuDirectionalLight.enabled =
+        m_directionalLightAvailable &&
+        m_directionalLightEnabled &&
+        m_directionalLightIntensityScale > 0.0f
+        ? 1u
+        : 0u;
+    for (UINT component = 0; component < 3u; ++component)
+    {
+        gpuDirectionalLight.radiance[component] =
+            m_directionalLightRadiance[component] *
+            m_directionalLightIntensityScale;
+    }
+    gpuDirectionalLight.samplingProbability =
+        m_directionalLightSamplingProbability;
+    for (UINT frameIndex = 0; frameIndex < c_tlasFrameCount; ++frameIndex)
+    {
+        if (!CreateUploadBuffer(
+                &gpuDirectionalLight,
+                sizeof(gpuDirectionalLight),
+                L"Directional light frame buffer",
+                m_directionalLightBuffers[frameIndex]))
+        {
+            return false;
+        }
     }
 
     if (!scene.IsValid())
