@@ -108,30 +108,39 @@ float3 LoadAverageRadiance(Texture2D<float4> textureResource, int2 pixel)
     return value.rgb / max(abs(value.a), 1.0f);
 }
 
-float3 DemodulateDiffuse(float3 indirectRadiance, int2 pixel)
+float3 DemodulateDiffuse(
+    float3 indirectRadiance,
+    float3 albedo)
 {
     if (g_demodulateDiffuse == 0u)
         return indirectRadiance;
 
-    float3 albedo = g_materialGuide.Load(int3(pixel, 0)).rgb;
     return indirectRadiance / max(albedo, 0.05f);
 }
 
-float3 RemodulateDiffuse(float3 filteredValue, int2 pixel)
+float3 RemodulateDiffuse(
+    float3 filteredValue,
+    float3 albedo)
 {
     if (g_demodulateDiffuse == 0u)
         return filteredValue;
-    return filteredValue * g_materialGuide.Load(int3(pixel, 0)).rgb;
+    return filteredValue * albedo;
 }
 
-float3 LoadFilterValue(int2 pixel)
+float3 LoadFilterValue(
+    int2 pixel,
+    float3 materialBaseColor)
 {
-    float3 value = g_source.Load(int3(pixel, 0)).rgb;
+    // A first A-Trous pass reads an accumulation value including its sample
+    // count. Keep the full texel so the same source is not fetched twice.
+    float4 sourceValue = g_source.Load(int3(pixel, 0));
+    float3 value = sourceValue.rgb;
     if (g_inputIsAccumulation != 0u)
     {
-        float4 accumulation = g_source.Load(int3(pixel, 0));
-        value = accumulation.rgb / max(abs(accumulation.a), 1.0f);
-        value = DemodulateDiffuse(value, pixel);
+        value = sourceValue.rgb / max(abs(sourceValue.a), 1.0f);
+        // Callers already need the material guide for edge stopping. Reuse it
+        // instead of loading the same material texel again for demodulation.
+        value = DemodulateDiffuse(value, materialBaseColor);
     }
     return value;
 }
@@ -141,6 +150,12 @@ float3 GuideF0(float3 baseColor, float metallic)
     // Metallic-roughness workflow: dielectrics use about 4% normal-incidence
     // reflectance, while metals use their base color as colored F0.
     return lerp(0.04f.xxx, baseColor, saturate(metallic));
+}
+
+bool UsesMetallicGuide()
+{
+    return g_filterChannel == c_filterChannelSpecular &&
+        g_specularMaterialWeightMode == c_specularMaterialWeightF0;
 }
 
 float MaterialEdgeWeight(
@@ -378,7 +393,10 @@ float3 IterationCountDebugColor(uint count)
     return 0.0f;
 }
 
-float StandardError(int2 pixel, float centerLuminance)
+float StandardError(
+    int2 pixel,
+    float centerLuminance,
+    float3 materialBaseColor)
 {
     float sampleCount = max(
         abs(g_totalAccumulation.Load(int3(pixel, 0)).a),
@@ -397,7 +415,7 @@ float StandardError(int2 pixel, float centerLuminance)
     if (g_demodulateDiffuse != 0u)
     {
         float albedoLuminance = max(
-            Luminance(g_materialGuide.Load(int3(pixel, 0)).rgb),
+            Luminance(materialBaseColor),
             0.05f);
         standardError /= albedoLuminance;
     }
@@ -446,7 +464,8 @@ float3 ReconstructRadiance(float3 filteredSpecular, int2 pixel)
 void StoreResult(
     float3 filteredValue,
     int2 pixel,
-    float localStandardDeviation)
+    float localStandardDeviation,
+    float3 materialBaseColor)
 {
     float3 result = filteredValue;
     if (g_finalPass != 0u)
@@ -454,7 +473,9 @@ void StoreResult(
         if (g_filterChannel == c_filterChannelDiffuse)
         {
             result = max(
-                RemodulateDiffuse(filteredValue, pixel),
+                RemodulateDiffuse(
+                    filteredValue,
+                    materialBaseColor),
                 0.0f);
         }
         else
@@ -487,6 +508,7 @@ float LocalStandardDeviation(
     float4 centerMaterial,
     float centerMetallic,
     float centerRoughness,
+    bool usesMetallicGuide,
     float normalExponent,
     float depthScale)
 {
@@ -513,8 +535,9 @@ float LocalStandardDeviation(
             if (localNormalDepth.w < 0.0f || localMaterial.a < 0.0f)
                 continue;
 
-            float localMetallic = saturate(
-                g_metallicGuide.Load(int3(localPixel, 0)));
+            float localMetallic = usesMetallicGuide
+                ? saturate(g_metallicGuide.Load(int3(localPixel, 0)))
+                : 0.0f;
             float normalWeight = pow(
                 saturate(dot(
                     centerNormal,
@@ -539,7 +562,9 @@ float LocalStandardDeviation(
             float guideWeight = spatialWeight * normalWeight * depthWeight *
                 materialWeight * roughnessWeight * identityWeight;
             float localLuminance =
-                Luminance(LoadFilterValue(localPixel));
+                Luminance(LoadFilterValue(
+                    localPixel,
+                    localMaterial.rgb));
             localLuminanceSum += localLuminance * guideWeight;
             localLuminanceSquareSum +=
                 localLuminance * localLuminance * guideWeight;
@@ -564,25 +589,33 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         return;
 
     int2 centerPixel = int2(pixel);
-    float3 centerColor = LoadFilterValue(centerPixel);
     float4 centerNormalDepth =
         g_normalHitDistance.Load(int3(centerPixel, 0));
     float4 centerMaterial =
         g_materialGuide.Load(int3(centerPixel, 0));
+    float3 centerColor = LoadFilterValue(
+        centerPixel,
+        centerMaterial.rgb);
 
     // Miss pixels have no surface guides. Their primary environment value is
     // classified as direct and is therefore reconstructed without filtering.
     if (centerNormalDepth.w < 0.0f || centerMaterial.a < 0.0f)
     {
-        StoreResult(centerColor, centerPixel, 0.0f);
+        StoreResult(
+            centerColor,
+            centerPixel,
+            0.0f,
+            centerMaterial.rgb);
         return;
     }
 
     float3 centerNormal = normalize(centerNormalDepth.xyz);
     float centerDepth = centerNormalDepth.w;
     float centerRoughness = GuideRoughness(centerMaterial.a);
-    float centerMetallic = saturate(
-        g_metallicGuide.Load(int3(centerPixel, 0)));
+    bool usesMetallicGuide = UsesMetallicGuide();
+    float centerMetallic = usesMetallicGuide
+        ? saturate(g_metallicGuide.Load(int3(centerPixel, 0)))
+        : 0.0f;
     if (g_adaptiveIterations != 0u &&
         g_passIndex >= AdaptiveIterationCount(
             centerPixel,
@@ -594,12 +627,16 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         StoreResult(
             centerColor,
             centerPixel,
-            max(g_source.Load(int3(centerPixel, 0)).a, 0.0f));
+            max(g_source.Load(int3(centerPixel, 0)).a, 0.0f),
+            centerMaterial.rgb);
         return;
     }
 
     float centerLuminance = Luminance(centerColor);
-    float standardError = StandardError(centerPixel, centerLuminance);
+    float standardError = StandardError(
+        centerPixel,
+        centerLuminance,
+        centerMaterial.rgb);
     float normalExponent;
     float edgeDepthSigma;
     AdaptiveEdgeParameters(
@@ -621,6 +658,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             centerMaterial,
             centerMetallic,
             centerRoughness,
+            usesMetallicGuide,
             normalExponent,
             depthScale)
         : max(g_source.Load(int3(centerPixel, 0)).a, 0.0f);
@@ -641,7 +679,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         StoreResult(
             centerColor,
             centerPixel,
-            localStandardDeviation);
+            localStandardDeviation,
+            centerMaterial.rgb);
         return;
     }
     float effectiveError = max(
@@ -685,10 +724,13 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             if (sampleNormalDepth.w < 0.0f || sampleMaterial.a < 0.0f)
                 continue;
 
-            float3 sampleColor = LoadFilterValue(samplePixel);
+            float3 sampleColor = LoadFilterValue(
+                samplePixel,
+                sampleMaterial.rgb);
             float3 sampleNormal = normalize(sampleNormalDepth.xyz);
-            float sampleMetallic = saturate(
-                g_metallicGuide.Load(int3(samplePixel, 0)));
+            float sampleMetallic = usesMetallicGuide
+                ? saturate(g_metallicGuide.Load(int3(samplePixel, 0)))
+                : 0.0f;
             float normalWeight = pow(
                 saturate(dot(centerNormal, sampleNormal)),
                 normalExponent);
@@ -729,5 +771,6 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     StoreResult(
         filteredColor,
         centerPixel,
-        localStandardDeviation);
+        localStandardDeviation,
+        centerMaterial.rgb);
 }
