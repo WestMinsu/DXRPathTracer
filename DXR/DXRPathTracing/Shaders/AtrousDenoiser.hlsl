@@ -34,6 +34,8 @@ cbuffer AtrousSettings : register(b0)
     uint g_passIndex;
     uint g_adaptiveIterations;
     uint g_debugView;
+    uint g_logLuminanceEdgeStop;
+    float g_logLuminanceSigma;
 };
 
 static const uint c_filterChannelDiffuse = 0u;
@@ -747,9 +749,29 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             float identityWeight = SurfaceIdentityWeight(
                 centerMaterial,
                 sampleMaterial);
-            float colorWeight = exp(
-                -abs(Luminance(sampleColor) - centerLuminance) /
-                colorScale);
+            float sampleLuminance = max(Luminance(sampleColor), 0.0f);
+            float colorWeight;
+            if (g_filterChannel == c_filterChannelDiffuse &&
+                g_logLuminanceEdgeStop != 0u)
+            {
+                // Keep the denoising strength variance-guided, but prevent a
+                // high-variance shadow boundary from widening its own color
+                // acceptance range. Log luminance measures relative exposure
+                // differences and is independent of local variance.
+                float centerLogLuminance = log2(
+                    1.0f + max(centerLuminance, 0.0f));
+                float sampleLogLuminance = log2(
+                    1.0f + sampleLuminance);
+                colorWeight = exp(
+                    -abs(sampleLogLuminance - centerLogLuminance) /
+                    max(g_logLuminanceSigma, 1.0e-4f));
+            }
+            else
+            {
+                colorWeight = exp(
+                    -abs(sampleLuminance - centerLuminance) /
+                    colorScale);
+            }
             float spatialWeight =
                 KernelWeight1D(x) * KernelWeight1D(y);
             float weight = spatialWeight * normalWeight * depthWeight *

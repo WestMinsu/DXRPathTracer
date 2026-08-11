@@ -165,6 +165,13 @@ public:
         m_atrousColorSigma =
             colorSigma < 0.25f ? 0.25f : (colorSigma > 16.0f ? 16.0f : colorSigma);
     }
+    void SetInitialAtrousLogLuminanceEdgeStop(bool enabled, float sigma)
+    {
+        m_enableAtrousLogLuminanceEdgeStop = enabled;
+        m_atrousLogLuminanceSigma = sigma < 1.0f
+            ? 1.0f
+            : (sigma > 10.0f ? 10.0f : sigma);
+    }
     void SetInitialTextureLodSettings(bool enabled, float bias)
     {
         m_enableTextureLod = enabled;
@@ -382,6 +389,8 @@ private:
     float m_atrousAdaptiveStableNormalExponent = 32.0f;
     float m_atrousAdaptiveStableDepthSigma = 0.01f;
     float m_atrousColorSigma = 4.0f;
+    bool m_enableAtrousLogLuminanceEdgeStop = true;
+    float m_atrousLogLuminanceSigma = 2.0f;
     int m_lightingMode = static_cast<int>(
         RayTracingManager::c_lightingModeBsdf);
     bool m_captureActive = false;

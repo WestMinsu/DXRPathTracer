@@ -218,6 +218,13 @@ public:
         m_atrousColorSigma =
             colorSigma < 0.25f ? 0.25f : (colorSigma > 16.0f ? 16.0f : colorSigma);
     }
+    void SetAtrousLogLuminanceEdgeStop(bool enabled, float sigma)
+    {
+        m_enableAtrousLogLuminanceEdgeStop = enabled;
+        m_atrousLogLuminanceSigma = sigma < 1.0f
+            ? 1.0f
+            : (sigma > 10.0f ? 10.0f : sigma);
+    }
     void SetEnableAccumulation(bool enableAccumulation);
     void SetSceneType(UINT sceneType);
     void SetSceneFilePath(const std::wstring& sceneFilePath) { m_sceneFilePath = sceneFilePath; }
@@ -529,6 +536,8 @@ private:
     float m_atrousAdaptiveStableNormalExponent = 32.0f;
     float m_atrousAdaptiveStableDepthSigma = 0.01f;
     float m_atrousColorSigma = 4.0f;
+    bool m_enableAtrousLogLuminanceEdgeStop = true;
+    float m_atrousLogLuminanceSigma = 2.0f;
     UINT m_samplesPerPixel = 1;
     UINT m_lightingMode = c_lightingModeBsdf;
     UINT m_maxBounce = 3;

@@ -230,12 +230,6 @@ bool LoadSponzaLightConfig(
         searchPosition = objectEnd + 1;
     }
 
-    if (lights.empty())
-    {
-        errorMessage = L"The light config does not contain any lights.";
-        return false;
-    }
-
     const std::size_t directionalProperty =
         text.find("directional_light");
     if (directionalProperty != std::string::npos)

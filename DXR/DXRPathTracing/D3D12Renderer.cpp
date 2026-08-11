@@ -338,6 +338,9 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_atrousAdaptiveStableNormalExponent,
         m_atrousAdaptiveStableDepthSigma);
     m_rayTracingManager->SetAtrousColorSigma(m_atrousColorSigma);
+    m_rayTracingManager->SetAtrousLogLuminanceEdgeStop(
+        m_enableAtrousLogLuminanceEdgeStop,
+        m_atrousLogLuminanceSigma);
     m_rayTracingManager->SetTextureLodSettings(
         m_enableTextureLod,
         m_textureLodBias);
@@ -460,6 +463,9 @@ void D3D12Renderer::Render()
         m_atrousAdaptiveStableNormalExponent,
         m_atrousAdaptiveStableDepthSigma);
     m_rayTracingManager->SetAtrousColorSigma(m_atrousColorSigma);
+    m_rayTracingManager->SetAtrousLogLuminanceEdgeStop(
+        m_enableAtrousLogLuminanceEdgeStop,
+        m_atrousLogLuminanceSigma);
     m_rayTracingManager->SetEnableAccumulation(m_enableAccumulation);
     m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
     m_rayTracingManager->SetPbrDebugView(static_cast<UINT>(m_pbrDebugView));
@@ -1799,14 +1805,14 @@ bool D3D12Renderer::SwitchPbrScenePreset(int preset)
     m_hasLastRenderTime = false;
     ResetGpuTimingResults();
     if (preset == 0)
-        m_sceneSwitchStatus = "Loaded PBR Sponza with 12 area lights.";
+        m_sceneSwitchStatus = "Loaded PBR Sponza.";
     else if (preset == 1)
         m_sceneSwitchStatus = "Loaded SimpleSkin GPU skinning test.";
     else if (preset == 2)
         m_sceneSwitchStatus = "Loaded BrainStem GPU skinning test.";
     else
         m_sceneSwitchStatus =
-            "Loaded Sponza with animated BrainStem and 12 area lights.";
+            "Loaded Sponza with animated BrainStem.";
     return true;
 }
 
@@ -1850,7 +1856,7 @@ void D3D12Renderer::BuildImGuiFrame()
     {
         const char* pbrSceneNames[] =
         {
-            "Sponza + 12 Area Lights",
+            "Sponza",
             "SimpleSkin GPU Test",
             "BrainStem GPU Skinning Test",
             "Sponza + Animated BrainStem"
@@ -2354,6 +2360,26 @@ void D3D12Renderer::BuildImGuiFrame()
             0.25f,
             16.0f,
             "%.2f");
+        ImGui::Checkbox(
+            "Diffuse Log-Luminance Edge Stop",
+            &m_enableAtrousLogLuminanceEdgeStop);
+        if (m_enableAtrousLogLuminanceEdgeStop)
+        {
+            ImGui::SliderFloat(
+                "Diffuse Log-Luminance Sigma",
+                &m_atrousLogLuminanceSigma,
+                1.0f,
+                10.0f,
+                "%.3f",
+                ImGuiSliderFlags_Logarithmic);
+            ImGui::TextDisabled(
+                "Fixed relative-brightness edge stop; lower values block shadow-boundary leakage.");
+        }
+        else
+        {
+            ImGui::TextDisabled(
+                "Diffuse color edge stop uses variance-scaled A-Trous Color Sigma.");
+        }
         ImGui::TextDisabled(
             "Diffuse: albedo; Specular guides are independently selectable.");
         ImGui::TextDisabled(

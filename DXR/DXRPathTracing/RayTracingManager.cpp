@@ -604,9 +604,11 @@ namespace
         UINT passIndex;
         UINT adaptiveIterations;
         UINT debugView;
+        UINT logLuminanceEdgeStop;
+        float logLuminanceSigma;
     };
     static_assert(
-        sizeof(AtrousSettingsConstants) == 24 * sizeof(std::uint32_t));
+        sizeof(AtrousSettingsConstants) == 26 * sizeof(std::uint32_t));
 
     struct TemporalColorClipSettingsConstants
     {
@@ -1824,6 +1826,9 @@ void RayTracingManager::DispatchAtrousFilter(
             settings.adaptiveIterations =
                 m_enableAtrousAdaptiveIterations ? 1u : 0u;
             settings.debugView = m_atrousDebugView;
+            settings.logLuminanceEdgeStop =
+                m_enableAtrousLogLuminanceEdgeStop ? 1u : 0u;
+            settings.logLuminanceSigma = m_atrousLogLuminanceSigma;
             commandList->SetComputeRootDescriptorTable(
                 0,
                 gpuDescriptorHandle(sourceDescriptorIndex));
@@ -1859,7 +1864,7 @@ void RayTracingManager::DispatchAtrousFilter(
                 gpuDescriptorHandle(destinationDescriptorIndex));
             commandList->SetComputeRoot32BitConstants(
                 10,
-                24,
+                26,
                 &settings,
                 0);
             commandList->Dispatch(
@@ -4656,7 +4661,7 @@ bool RayTracingManager::CreateAtrousPipeline()
     rootParameters[10].ParameterType =
         D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
     rootParameters[10].Constants.ShaderRegister = 0;
-    rootParameters[10].Constants.Num32BitValues = 24;
+    rootParameters[10].Constants.Num32BitValues = 26;
     rootParameters[10].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     D3D12_ROOT_SIGNATURE_DESC rootSignatureDesc = {};
@@ -5256,23 +5261,17 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
                     L"\nReason: " + errorMessage);
                 return false;
             }
-            if (lights.size() != 12)
-            {
-                ReportMessage(
-                    L"Sponza-lite requires exactly 12 area lights.");
-                return false;
-            }
             const std::size_t lightVertexOffset = scene.vertices.size();
             const std::size_t lightIndexOffset = scene.indices.size();
             const std::size_t lightPrimitiveOffset =
                 scene.primitiveMaterialIndices.size();
-            if (!AppendAreaLights(scene, lights))
+            if (!lights.empty() && !AppendAreaLights(scene, lights))
             {
                 ReportMessage(
                     L"Failed to append the Sponza area-light geometry.");
                 return false;
             }
-            if (!m_overlaySceneFilePath.empty())
+            if (!lights.empty() && !m_overlaySceneFilePath.empty())
             {
                 const auto validUintRange = [](
                     std::size_t offset,
