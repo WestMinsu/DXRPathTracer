@@ -478,8 +478,10 @@ namespace
         c_atrousFilteredDiffuseUavIndex + 1;
     constexpr UINT c_metallicGuideUavIndex =
         c_atrousOutputUavIndex + 1;
-    constexpr UINT c_temporalPreviousAccumulationSrvIndex =
+    constexpr UINT c_directionalShadowGuideUavIndex =
         c_metallicGuideUavIndex + 1;
+    constexpr UINT c_temporalPreviousAccumulationSrvIndex =
+        c_directionalShadowGuideUavIndex + 1;
     constexpr UINT c_temporalPreviousNormalDepthSrvIndex =
         c_temporalPreviousAccumulationSrvIndex + 1;
     constexpr UINT c_temporalPreviousMaterialGuideSrvIndex =
@@ -492,13 +494,15 @@ namespace
         c_temporalPreviousSpecularSrvIndex + 1;
     constexpr UINT c_temporalPreviousSpecularMomentsSrvIndex =
         c_temporalPreviousDiffuseMomentsSrvIndex + 1;
-    constexpr UINT c_previousInstanceTransformsSrvIndex =
+    constexpr UINT c_temporalPreviousDirectionalShadowSrvIndex =
         c_temporalPreviousSpecularMomentsSrvIndex + 1;
+    constexpr UINT c_previousInstanceTransformsSrvIndex =
+        c_temporalPreviousDirectionalShadowSrvIndex + 1;
     constexpr UINT c_previousSkinnedPositionsSrvIndex =
         c_previousInstanceTransformsSrvIndex + 1;
     constexpr UINT c_directionalLightSrvIndex =
         c_previousSkinnedPositionsSrvIndex + 1;
-    constexpr UINT c_temporalHistorySrvCount = 7;
+    constexpr UINT c_temporalHistorySrvCount = 8;
     constexpr UINT c_temporalDescriptorSrvCount =
         c_temporalHistorySrvCount + 3;
     constexpr UINT c_descriptorCount =
@@ -1120,6 +1124,8 @@ void RayTracingManager::DispatchRays(
         !m_previousNormalDepthTexture ||
         !m_previousMaterialGuideTexture ||
         !m_metallicGuideTexture ||
+        !m_directionalShadowGuideTexture ||
+        !m_previousDirectionalShadowGuideTexture ||
         !m_previousDiffuseIndirectAccumulationTexture ||
         !m_previousSpecularIndirectAccumulationTexture ||
         !m_previousDiffuseLuminanceMomentsTexture ||
@@ -1188,6 +1194,7 @@ void RayTracingManager::DispatchRays(
         m_previousAccumulationTexture.Get(),
         m_previousNormalDepthTexture.Get(),
         m_previousMaterialGuideTexture.Get(),
+        m_previousDirectionalShadowGuideTexture.Get(),
         m_previousDiffuseIndirectAccumulationTexture.Get(),
         m_previousSpecularIndirectAccumulationTexture.Get(),
         m_previousDiffuseLuminanceMomentsTexture.Get(),
@@ -1307,7 +1314,8 @@ void RayTracingManager::DispatchRays(
         (m_enableDynamicObjectReprojection ? 1u : 0u) |
         (m_useCurrentFrameVisibleResidual ? 2u : 0u) |
         (m_enableSkinnedDeformationMotion ? 4u : 0u) |
-        (directionalLightActive ? 8u : 0u);
+        (directionalLightActive ? 8u : 0u) |
+        (m_enableDynamicShadowHistoryValidation ? 32u : 0u);
     commandList->SetComputeRoot32BitConstants(4, 42, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
@@ -1483,6 +1491,9 @@ void RayTracingManager::DispatchRays(
         std::swap(
             m_materialGuideTexture,
             m_previousMaterialGuideTexture);
+        std::swap(
+            m_directionalShadowGuideTexture,
+            m_previousDirectionalShadowGuideTexture);
         std::swap(
             m_diffuseIndirectAccumulationTexture,
             m_previousDiffuseIndirectAccumulationTexture);
@@ -2069,6 +2080,16 @@ void RayTracingManager::SetDisocclusionRepairSettings(
 
     m_enableDisocclusionRepair = enabled;
     m_disocclusionRepairSamplesPerPixel = clampedSamplesPerPixel;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetDynamicShadowHistoryValidationEnabled(
+    bool enabled)
+{
+    if (m_enableDynamicShadowHistoryValidation == enabled)
+        return;
+
+    m_enableDynamicShadowHistoryValidation = enabled;
     ResetAccumulation();
 }
 
@@ -3470,6 +3491,8 @@ bool RayTracingManager::CreateOutputTexture()
     m_materialGuideTexture.Reset();
     m_previousMaterialGuideTexture.Reset();
     m_metallicGuideTexture.Reset();
+    m_directionalShadowGuideTexture.Reset();
+    m_previousDirectionalShadowGuideTexture.Reset();
     m_diffuseIndirectAccumulationTexture.Reset();
     m_previousDiffuseIndirectAccumulationTexture.Reset();
     m_specularIndirectAccumulationTexture.Reset();
@@ -3661,6 +3684,22 @@ bool RayTracingManager::CreateOutputTexture()
         return false;
     }
     if (!createFloatTexture(
+        metallicGuideDesc,
+        m_directionalShadowGuideTexture,
+        L"Raytracing directional shadow guide",
+        L"Raytracing directional shadow guide texture creation failed."))
+    {
+        return false;
+    }
+    if (!createFloatTexture(
+        metallicGuideDesc,
+        m_previousDirectionalShadowGuideTexture,
+        L"Raytracing previous directional shadow guide",
+        L"Raytracing previous directional shadow guide texture creation failed."))
+    {
+        return false;
+    }
+    if (!createFloatTexture(
         accumulationDesc,
         m_atrousFilterTextureA,
         L"A-Trous filter ping texture",
@@ -3738,6 +3777,11 @@ bool RayTracingManager::CreateOutputTexture()
         nullptr,
         &metallicGuideUavDesc,
         descriptorHandle(c_metallicGuideUavIndex));
+    m_device->CreateUnorderedAccessView(
+        m_directionalShadowGuideTexture.Get(),
+        nullptr,
+        &metallicGuideUavDesc,
+        descriptorHandle(c_directionalShadowGuideUavIndex));
     m_device->CreateUnorderedAccessView(
         m_diffuseIndirectAccumulationTexture.Get(),
         nullptr,
@@ -3953,6 +3997,8 @@ void RayTracingManager::WriteTemporalHistoryDescriptors()
     materialUavDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
     D3D12_UNORDERED_ACCESS_VIEW_DESC momentsUavDesc = float4UavDesc;
     momentsUavDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
+    D3D12_UNORDERED_ACCESS_VIEW_DESC scalarUavDesc = float4UavDesc;
+    scalarUavDesc.Format = DXGI_FORMAT_R16_FLOAT;
     m_device->CreateUnorderedAccessView(
         m_accumulationTexture.Get(), nullptr, &float4UavDesc,
         descriptorHandle(1));
@@ -3974,6 +4020,9 @@ void RayTracingManager::WriteTemporalHistoryDescriptors()
     m_device->CreateUnorderedAccessView(
         m_specularLuminanceMomentsTexture.Get(), nullptr, &momentsUavDesc,
         descriptorHandle(7));
+    m_device->CreateUnorderedAccessView(
+        m_directionalShadowGuideTexture.Get(), nullptr, &scalarUavDesc,
+        descriptorHandle(c_directionalShadowGuideUavIndex));
     D3D12_SHADER_RESOURCE_VIEW_DESC float4SrvDesc = {};
     float4SrvDesc.Shader4ComponentMapping =
         D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -3986,6 +4035,8 @@ void RayTracingManager::WriteTemporalHistoryDescriptors()
     materialSrvDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
     D3D12_SHADER_RESOURCE_VIEW_DESC momentsSrvDesc = float4SrvDesc;
     momentsSrvDesc.Format = DXGI_FORMAT_R32G32_FLOAT;
+    D3D12_SHADER_RESOURCE_VIEW_DESC scalarSrvDesc = float4SrvDesc;
+    scalarSrvDesc.Format = DXGI_FORMAT_R16_FLOAT;
     m_device->CreateShaderResourceView(
         m_diffuseIndirectAccumulationTexture.Get(), &float4SrvDesc,
         descriptorHandle(c_atrousDiffuseIndirectSrvIndex));
@@ -4029,6 +4080,9 @@ void RayTracingManager::WriteTemporalHistoryDescriptors()
     m_device->CreateShaderResourceView(
         m_previousSpecularLuminanceMomentsTexture.Get(), &momentsSrvDesc,
         descriptorHandle(c_temporalPreviousSpecularMomentsSrvIndex));
+    m_device->CreateShaderResourceView(
+        m_previousDirectionalShadowGuideTexture.Get(), &scalarSrvDesc,
+        descriptorHandle(c_temporalPreviousDirectionalShadowSrvIndex));
     const UINT transformFrame =
         static_cast<UINT>(m_frameIndex % c_tlasFrameCount);
     D3D12_SHADER_RESOURCE_VIEW_DESC transformSrvDesc = {};
@@ -4393,7 +4447,7 @@ bool RayTracingManager::CreateEnvironmentMap()
 
 bool RayTracingManager::CreateGlobalRootSignature()
 {
-    D3D12_DESCRIPTOR_RANGE outputRanges[4] = {};
+    D3D12_DESCRIPTOR_RANGE outputRanges[5] = {};
     outputRanges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
     outputRanges[0].NumDescriptors = 2;
     outputRanges[0].BaseShaderRegister = 0;
@@ -4416,6 +4470,12 @@ bool RayTracingManager::CreateGlobalRootSignature()
     outputRanges[3].RegisterSpace = 0;
     outputRanges[3].OffsetInDescriptorsFromTableStart =
         c_metallicGuideUavIndex;
+    outputRanges[4].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+    outputRanges[4].NumDescriptors = 1;
+    outputRanges[4].BaseShaderRegister = 13;
+    outputRanges[4].RegisterSpace = 0;
+    outputRanges[4].OffsetInDescriptorsFromTableStart =
+        c_directionalShadowGuideUavIndex;
     D3D12_DESCRIPTOR_RANGE environmentRange = {};
     environmentRange.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
     environmentRange.NumDescriptors = 1;

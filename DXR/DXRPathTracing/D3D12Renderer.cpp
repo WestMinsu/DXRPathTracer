@@ -297,6 +297,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     m_rayTracingManager->SetDisocclusionRepairSettings(
         m_enableDisocclusionRepair,
         static_cast<UINT>(m_disocclusionRepairSamplesPerPixel));
+    m_rayTracingManager->SetDynamicShadowHistoryValidationEnabled(
+        m_enableDynamicShadowHistoryValidation);
     m_rayTracingManager->SetSkinnedDeformationMotionEnabled(
         m_enableSkinnedDeformationMotion);
     m_rayTracingManager->SetCurrentFrameVisibleResidualEnabled(
@@ -413,6 +415,8 @@ void D3D12Renderer::Render()
     m_rayTracingManager->SetDisocclusionRepairSettings(
         m_enableDisocclusionRepair,
         static_cast<UINT>(m_disocclusionRepairSamplesPerPixel));
+    m_rayTracingManager->SetDynamicShadowHistoryValidationEnabled(
+        m_enableDynamicShadowHistoryValidation);
     m_rayTracingManager->SetSkinnedDeformationMotionEnabled(
         m_enableSkinnedDeformationMotion);
     m_rayTracingManager->SetCurrentFrameVisibleResidualEnabled(
@@ -2178,6 +2182,14 @@ void D3D12Renderer::BuildImGuiFrame()
             }
             ImGui::TextDisabled(
                 "Adds isolated rays only where moving geometry reveals rejected static history.");
+            if (m_rayTracingManager->HasDirectionalLight())
+            {
+                ImGui::Checkbox(
+                    "Directional Shadow History Validation",
+                    &m_enableDynamicShadowHistoryValidation);
+                ImGui::TextDisabled(
+                    "Rejects history only where deterministic directional shadow visibility changes.");
+            }
             if (m_rayTracingManager->IsGpuSkinningActive())
             {
                 ImGui::Checkbox(

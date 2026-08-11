@@ -54,6 +54,7 @@ static const uint c_historyRejectedMaterial = 7u;
 static const uint c_historyRejectedNoSamples = 8u;
 static const uint c_historyRejectedCoverage = 9u;
 static const uint c_historyNotAttempted = 10u;
+static const uint c_historyRejectedDirectionalShadow = 11u;
 static const uint c_primaryVisibilitySurface = 0u;
 static const uint c_primaryVisibilityEnvironment = 1u;
 static const uint c_primaryVisibilityEmitter = 2u;
@@ -177,6 +178,7 @@ uint ValidateHistoryTap(
     float expectedPreviousDepth,
     float3 currentNormal,
     float4 currentMaterial,
+    float currentDirectionalShadow,
     uint2 resolution)
 {
     if (any(historyPixel < int2(0, 0)) ||
@@ -230,6 +232,21 @@ uint ValidateHistoryTap(
         UnpackGuideRoughness(previousMaterial.a)) > 0.15f)
     {
         return c_historyRejectedMaterial;
+    }
+    if (DynamicShadowHistoryValidationEnabled() &&
+        g_dynamicObjectMoved != 0u &&
+        currentDirectionalShadow >= 0.0f)
+    {
+        float previousDirectionalShadow =
+            g_previousDirectionalShadowGuide.Load(
+                int3(historyPixel, 0));
+        if (previousDirectionalShadow >= 0.0f &&
+            abs(
+                currentDirectionalShadow -
+                previousDirectionalShadow) > 0.5f)
+        {
+            return c_historyRejectedDirectionalShadow;
+        }
     }
     return c_historyAccepted;
 }
@@ -293,6 +310,8 @@ bool GatherValidatedHistory(
     float surfaceErrorSum = 0.0f;
     float surfaceErrorWeight = 0.0f;
     rejectionReason = c_historyRejectedOutsideScreen;
+    float currentDirectionalShadow =
+        g_directionalShadowGuide[currentPixel];
     [unroll]
     for (uint tapIndex = 0u; tapIndex < 4u; ++tapIndex)
     {
@@ -307,6 +326,7 @@ bool GatherValidatedHistory(
             expectedPreviousDepth,
             currentNormalHitDistance.xyz,
             currentMaterial,
+            currentDirectionalShadow,
             resolution);
 
         if (g_temporalDebugView == 7u &&
@@ -437,6 +457,8 @@ float3 HistoryRejectionColor(uint rejectionReason)
         return float3(0.45f, 0.45f, 0.45f);
     case c_historyRejectedCoverage:
         return float3(1.0f, 1.0f, 1.0f);
+    case c_historyRejectedDirectionalShadow:
+        return float3(1.0f, 0.0f, 0.35f);
     default:
         return float3(0.0f, 0.0f, 0.25f);
     }
@@ -526,6 +548,52 @@ void ResetSurfaceQueryPayload(out SurfaceQueryPayload payload)
     payload.hit = 0u;
 }
 
+float EvaluateDirectionalShadowGuide(
+    float3 surfaceNormal,
+    float3 surfacePosition)
+{
+    if (!DynamicShadowHistoryValidationEnabled() ||
+        g_dynamicObjectMoved == 0u ||
+        !DirectionalLightEnabled() ||
+        g_lightingMode == c_lightingModeBsdf)
+    {
+        return -1.0f;
+    }
+
+    DirectionalLight light = g_directionalLights[0];
+    if (light.enabled == 0u ||
+        dot(light.direction, light.direction) <= 1.0e-8f)
+    {
+        return -1.0f;
+    }
+
+    float3 lightDirection = normalize(-light.direction);
+    if (dot(surfaceNormal, lightDirection) <= 0.0f)
+        return -1.0f;
+
+    RayDesc shadowRay;
+    shadowRay.Origin =
+        surfacePosition + surfaceNormal * c_rayOriginBias;
+    shadowRay.Direction = lightDirection;
+    shadowRay.TMin = c_rayTMin;
+    shadowRay.TMax = c_rayTMax;
+
+    ShadowPayload shadowPayload;
+    shadowPayload.occluded = 1u;
+    RecordShadowRay();
+    TraceRay(
+        g_scene,
+        RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
+            RAY_FLAG_SKIP_CLOSEST_HIT_SHADER,
+        0xFF,
+        0,
+        0,
+        1,
+        shadowRay,
+        shadowPayload);
+    return shadowPayload.occluded != 0u ? 0.0f : 1.0f;
+}
+
 void TracePrimaryGuide(
     RayDesc ray,
     out float3 previousWorldPosition,
@@ -574,6 +642,12 @@ void TracePrimaryGuide(
                 ? float(payload.dynamicInstance) * 2.0f
                 : 0.0f));
     g_metallicGuide[launchIndex] = payload.metallic;
+    float3 hitPosition =
+        ray.Origin + ray.Direction * payload.hitT;
+    g_directionalShadowGuide[launchIndex] =
+        EvaluateDirectionalShadowGuide(
+            payload.normal,
+            hitPosition);
 }
 
 void TracePath(
@@ -1046,6 +1120,7 @@ void RunRaygen()
         g_materialGuide[launchIndex] =
             float4(0.0f, 0.0f, 0.0f, -1.0f);
         g_metallicGuide[launchIndex] = -1.0f;
+        g_directionalShadowGuide[launchIndex] = -1.0f;
     }
     float3 sampleRadiance = float3(0.0f, 0.0f, 0.0f);
     float3 sampleDiffuseDenoisingRadiance =
@@ -1291,12 +1366,32 @@ void RunRaygen()
                 float4 previousMaterial =
                     g_previousMaterialGuide.Load(
                         int3(historyPixel, 0));
-                historyValid =
+                bool materialHistoryValid =
                     !IsDynamicGuide(currentMaterial) &&
                     !IsDynamicGuide(previousMaterial);
-                temporalRejectionReason = historyValid
-                    ? c_historyAccepted
-                    : c_historyRejectedInstance;
+                bool shadowHistoryValid = true;
+                if (DynamicShadowHistoryValidationEnabled())
+                {
+                    float currentDirectionalShadow =
+                        g_directionalShadowGuide[launchIndex];
+                    float previousDirectionalShadow =
+                        g_previousDirectionalShadowGuide.Load(
+                            int3(historyPixel, 0));
+                    shadowHistoryValid =
+                        currentDirectionalShadow < 0.0f ||
+                        previousDirectionalShadow < 0.0f ||
+                        abs(
+                            currentDirectionalShadow -
+                            previousDirectionalShadow) <= 0.5f;
+                }
+                historyValid =
+                    materialHistoryValid && shadowHistoryValid;
+                temporalRejectionReason =
+                    !materialHistoryValid
+                    ? c_historyRejectedInstance
+                    : (!shadowHistoryValid
+                        ? c_historyRejectedDirectionalShadow
+                        : c_historyAccepted);
             }
             else
             {

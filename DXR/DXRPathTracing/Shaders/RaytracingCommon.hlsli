@@ -161,6 +161,7 @@ RWTexture2D<float4> g_currentDiffuseRadiance : register(u9);
 RWTexture2D<float4> g_currentSpecularRadiance : register(u10);
 RWTexture2D<float4> g_currentTotalRadiance : register(u11);
 RWTexture2D<float> g_metallicGuide : register(u12);
+RWTexture2D<float> g_directionalShadowGuide : register(u13);
 RWStructuredBuffer<uint> g_statistics : register(u2);
 RaytracingAccelerationStructure g_scene : register(t0);
 StructuredBuffer<Vertex> g_vertices : register(t1);
@@ -180,10 +181,11 @@ Texture2D<float4> g_previousDiffuseIndirect : register(t268);
 Texture2D<float4> g_previousSpecularIndirect : register(t269);
 Texture2D<float2> g_previousDiffuseMoments : register(t270);
 Texture2D<float2> g_previousSpecularMoments : register(t271);
+Texture2D<float> g_previousDirectionalShadowGuide : register(t272);
 StructuredBuffer<InstanceTransform>
-    g_previousInstanceTransforms : register(t272);
-StructuredBuffer<float4> g_previousSkinnedPositions : register(t273);
-StructuredBuffer<DirectionalLight> g_directionalLights : register(t274);
+    g_previousInstanceTransforms : register(t273);
+StructuredBuffer<float4> g_previousSkinnedPositions : register(t274);
+StructuredBuffer<DirectionalLight> g_directionalLights : register(t275);
 SamplerState g_environmentSampler : register(s0);
 SamplerState g_materialSampler : register(s1);
 
@@ -259,6 +261,11 @@ bool CurrentFrameVisibleResidualEnabled()
 bool DirectionalLightEnabled()
 {
     return (g_enableDynamicObjectReprojection & 8u) != 0u;
+}
+
+bool DynamicShadowHistoryValidationEnabled()
+{
+    return (g_enableDynamicObjectReprojection & 32u) != 0u;
 }
 
 bool DisocclusionRepairPassEnabled()

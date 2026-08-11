@@ -354,6 +354,7 @@ private:
     bool m_enableDynamicObjectReprojection = true;
     bool m_enableDisocclusionRepair = true;
     int m_disocclusionRepairSamplesPerPixel = 4;
+    bool m_enableDynamicShadowHistoryValidation = true;
     bool m_enableSkinnedDeformationMotion = true;
     bool m_useCurrentFrameVisibleResidual = true;
     bool m_enableTemporalColorClip = true;

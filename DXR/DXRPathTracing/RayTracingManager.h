@@ -119,6 +119,7 @@ public:
     void SetDisocclusionRepairSettings(
         bool enabled,
         UINT samplesPerPixel);
+    void SetDynamicShadowHistoryValidationEnabled(bool enabled);
     void SetSkinnedDeformationMotionEnabled(bool enabled);
     void SetCurrentFrameVisibleResidualEnabled(bool enabled);
     void SetTemporalColorClipEnabled(bool enabled);
@@ -504,6 +505,7 @@ private:
     bool m_enableDynamicObjectReprojection = true;
     bool m_enableDisocclusionRepair = true;
     UINT m_disocclusionRepairSamplesPerPixel = 4u;
+    bool m_enableDynamicShadowHistoryValidation = true;
     bool m_enableSkinnedDeformationMotion = true;
     bool m_useCurrentFrameVisibleResidual = true;
     bool m_enableTemporalColorClip = true;
@@ -634,6 +636,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_materialGuideTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_previousMaterialGuideTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_metallicGuideTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource>
+        m_directionalShadowGuideTexture;
+    Microsoft::WRL::ComPtr<ID3D12Resource>
+        m_previousDirectionalShadowGuideTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource>
         m_diffuseIndirectAccumulationTexture;
     Microsoft::WRL::ComPtr<ID3D12Resource>
