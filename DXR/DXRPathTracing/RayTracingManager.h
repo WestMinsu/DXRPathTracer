@@ -116,7 +116,7 @@ public:
     }
     void SetTemporalReprojectionEnabled(bool enabled);
     void SetDynamicObjectReprojectionEnabled(bool enabled);
-    void SetDisocclusionAdaptiveSampling(
+    void SetDisocclusionRepairSettings(
         bool enabled,
         UINT samplesPerPixel);
     void SetSkinnedDeformationMotionEnabled(bool enabled);
@@ -502,8 +502,8 @@ private:
     bool m_enableRussianRoulette = false;
     bool m_enableTemporalReprojection = false;
     bool m_enableDynamicObjectReprojection = true;
-    bool m_enableDisocclusionAdaptiveSampling = true;
-    UINT m_disocclusionSamplesPerPixel = 4;
+    bool m_enableDisocclusionRepair = true;
+    UINT m_disocclusionRepairSamplesPerPixel = 4u;
     bool m_enableSkinnedDeformationMotion = true;
     bool m_useCurrentFrameVisibleResidual = true;
     bool m_enableTemporalColorClip = true;

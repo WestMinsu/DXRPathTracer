@@ -883,8 +883,150 @@ void TracePath(
     }
 }
 
+void RunDisocclusionRepairRaygen()
+{
+    uint2 launchIndex = DispatchRaysIndex().xy;
+    uint2 launchDim = DispatchRaysDimensions().xy;
+    float4 currentMaterial = g_materialGuide[launchIndex];
+    float4 previousMaterial =
+        g_previousMaterialGuide.Load(int3(launchIndex, 0));
+    if (currentMaterial.a < 0.0f ||
+        IsDynamicGuide(currentMaterial) ||
+        !IsDynamicGuide(previousMaterial))
+    {
+        return;
+    }
+
+    // If temporal reprojection recovered valid history, more rays are not
+    // needed. A count close to one identifies the newly revealed pixels whose
+    // history was rejected by the main pass.
+    float4 currentAccumulation = g_accumulation[launchIndex];
+    float currentFrameCount = max(abs(currentAccumulation.a), 1.0f);
+    if (currentFrameCount > 1.5f)
+        return;
+
+    uint mainSamplesPerPixel = clamp(g_samplesPerPixel, 1u, 8u);
+    uint repairSamplesPerPixel = DisocclusionRepairSamplesPerPixel();
+    float3 repairRadianceSum = float3(0.0f, 0.0f, 0.0f);
+    float3 repairDiffuseSum = float3(0.0f, 0.0f, 0.0f);
+    float3 repairSpecularSum = float3(0.0f, 0.0f, 0.0f);
+
+    float aspectRatio = float(launchDim.x) / float(launchDim.y);
+    float tanHalfFov = tan(c_verticalFovRadians * 0.5f);
+    float3 cameraForward = normalize(g_cameraTarget - g_cameraPosition);
+    float3 cameraRight = normalize(cross(c_cameraUp, cameraForward));
+    float3 cameraUp = cross(cameraForward, cameraRight);
+
+    for (uint repairIndex = 0u;
+         repairIndex < repairSamplesPerPixel;
+         ++repairIndex)
+    {
+        uint subSampleIndex = mainSamplesPerPixel + repairIndex;
+        uint cameraSeed = CreateRandomSeed(
+            0u,
+            0xD15C0C1u,
+            subSampleIndex);
+        float2 pixelOffset = float2(
+            RandomFloat01(cameraSeed),
+            RandomFloat01(cameraSeed));
+        float2 uv =
+            (float2(launchIndex) + pixelOffset) / float2(launchDim);
+        float2 screenPosition = float2(
+            (uv.x * 2.0f - 1.0f) * aspectRatio * tanHalfFov,
+            (1.0f - uv.y * 2.0f) * tanHalfFov);
+
+        RayDesc ray;
+        ray.Origin = g_cameraPosition;
+        ray.Direction = normalize(
+            cameraForward +
+            cameraRight * screenPosition.x +
+            cameraUp * screenPosition.y);
+        ray.TMin = c_rayTMin;
+        ray.TMax = c_rayTMax;
+
+        float3 repairRadiance;
+        float3 repairDiffuse;
+        float3 repairSpecular;
+        TracePath(
+            ray,
+            subSampleIndex,
+            repairRadiance,
+            repairDiffuse,
+            repairSpecular);
+        repairRadianceSum += repairRadiance;
+        repairDiffuseSum += repairDiffuse;
+        repairSpecularSum += repairSpecular;
+    }
+
+    float mainWeight = float(mainSamplesPerPixel);
+    float totalWeight =
+        mainWeight + float(repairSamplesPerPixel);
+    float4 currentDiffuse =
+        g_diffuseIndirectAccumulation[launchIndex];
+    float4 currentSpecular =
+        g_specularIndirectAccumulation[launchIndex];
+    float diffuseFrameCount = max(abs(currentDiffuse.a), 1.0f);
+    float specularFrameCount = max(abs(currentSpecular.a), 1.0f);
+    float3 mainRadiance =
+        currentAccumulation.rgb / currentFrameCount;
+    float3 mainDiffuse =
+        currentDiffuse.rgb / diffuseFrameCount;
+    float3 mainSpecular =
+        currentSpecular.rgb / specularFrameCount;
+    float3 combinedDiffuse =
+        (mainDiffuse * mainWeight + repairDiffuseSum) / totalWeight;
+    float3 combinedSpecular =
+        (mainSpecular * mainWeight + repairSpecularSum) / totalWeight;
+    float3 combinedRadiance;
+    if (CurrentFrameVisibleResidualEnabled())
+    {
+        float3 visibleResidual = max(
+            mainRadiance - mainDiffuse - mainSpecular,
+            0.0f);
+        combinedRadiance =
+            visibleResidual + combinedDiffuse + combinedSpecular;
+    }
+    else
+    {
+        combinedRadiance =
+            (mainRadiance * mainWeight + repairRadianceSum) /
+            totalWeight;
+    }
+
+    float diffuseLuminance = dot(
+        combinedDiffuse,
+        float3(0.2126f, 0.7152f, 0.0722f));
+    float specularLuminance = dot(
+        combinedSpecular,
+        float3(0.2126f, 0.7152f, 0.0722f));
+    g_accumulation[launchIndex] =
+        float4(combinedRadiance, 1.0f);
+    g_diffuseIndirectAccumulation[launchIndex] =
+        float4(combinedDiffuse, 1.0f);
+    g_specularIndirectAccumulation[launchIndex] =
+        float4(combinedSpecular, 1.0f);
+    g_diffuseLuminanceMoments[launchIndex] =
+        float2(diffuseLuminance, diffuseLuminance * diffuseLuminance);
+    g_specularLuminanceMoments[launchIndex] =
+        float2(specularLuminance, specularLuminance * specularLuminance);
+    g_currentTotalRadiance[launchIndex] =
+        float4(combinedRadiance, 1.0f);
+    g_currentDiffuseRadiance[launchIndex] =
+        float4(combinedDiffuse, 1.0f);
+    g_currentSpecularRadiance[launchIndex] =
+        float4(combinedSpecular, 1.0f);
+    g_output[launchIndex] =
+        float4(ToneMapForDisplay(combinedRadiance), 1.0f);
+}
+
 void RunRaygen()
 {
+    if (DisocclusionRepairPassEnabled())
+    {
+        RunDisocclusionRepairRaygen();
+        return;
+    }
+
     uint2 launchIndex = DispatchRaysIndex().xy;
     uint2 launchDim = DispatchRaysDimensions().xy;
     bool guidesEnabled =
@@ -973,33 +1115,8 @@ void RunRaygen()
             primaryRayDirection = guideRay.Direction;
         }
 
-        uint pathSamplesPerPixel = samplesPerPixel;
-        if (DisocclusionAdaptiveSamplingEnabled() &&
-            g_enableTemporalReprojection != 0u &&
-            g_dynamicObjectMoved != 0u &&
-            g_sampleIndex > 0u &&
-            primaryVisibilityClass == c_primaryVisibilitySurface)
-        {
-            float4 currentMaterial = g_materialGuide[launchIndex];
-            float4 previousMaterial =
-                g_previousMaterialGuide.Load(int3(launchIndex, 0));
-            bool newlyRevealedStaticSurface =
-                !IsDynamicGuide(currentMaterial) &&
-                IsDynamicGuide(previousMaterial);
-            if (newlyRevealedStaticSurface)
-            {
-                // History must be rejected at a dynamic-object disocclusion.
-                // Spend extra path samples only on that narrow footprint so
-                // the replacement is current information rather than a stale
-                // temporal trail.
-                pathSamplesPerPixel = max(
-                    pathSamplesPerPixel,
-                    DisocclusionSamplesPerPixel());
-            }
-        }
-
         for (uint subSampleIndex = 0u;
-             subSampleIndex < pathSamplesPerPixel;
+             subSampleIndex < samplesPerPixel;
              ++subSampleIndex)
         {
             float2 pixelOffset = float2(0.5f, 0.5f);
@@ -1047,7 +1164,7 @@ void RunRaygen()
                 subSampleSpecularRadiance;
         }
 
-        float inverseSamplesPerPixel = 1.0f / float(pathSamplesPerPixel);
+        float inverseSamplesPerPixel = 1.0f / float(samplesPerPixel);
         sampleRadiance *= inverseSamplesPerPixel;
         sampleDiffuseDenoisingRadiance *= inverseSamplesPerPixel;
         sampleSpecularDenoisingRadiance *= inverseSamplesPerPixel;

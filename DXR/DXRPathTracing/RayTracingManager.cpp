@@ -1307,9 +1307,7 @@ void RayTracingManager::DispatchRays(
         (m_enableDynamicObjectReprojection ? 1u : 0u) |
         (m_useCurrentFrameVisibleResidual ? 2u : 0u) |
         (m_enableSkinnedDeformationMotion ? 4u : 0u) |
-        (directionalLightActive ? 8u : 0u) |
-        (m_enableDisocclusionAdaptiveSampling ? 16u : 0u) |
-        ((m_disocclusionSamplesPerPixel & 0xFu) << 8u);
+        (directionalLightActive ? 8u : 0u);
     commandList->SetComputeRoot32BitConstants(4, 42, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
@@ -1362,6 +1360,32 @@ void RayTracingManager::DispatchRays(
         profileQueries,
         profileQueries ? profileQueries->pathTraceBegin : 0u);
     commandList->DispatchRays(&dispatchDesc);
+    const bool runDisocclusionRepair =
+        m_enableDisocclusionRepair &&
+        useTemporalHistory &&
+        useAtrousFilter &&
+        m_dynamicObjectMovedThisFrame &&
+        m_temporalHistoryFrameCount > 0u &&
+        m_temporalDebugView == c_temporalDebugNone;
+    if (runDisocclusionRepair)
+    {
+        D3D12_RESOURCE_BARRIER raygenUavBarrier = {};
+        raygenUavBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+        raygenUavBarrier.UAV.pResource = nullptr;
+        commandList->ResourceBarrier(1, &raygenUavBarrier);
+
+        RenderSettingsConstants repairSettings = renderSettings;
+        repairSettings.enableDynamicObjectReprojection |=
+            16u |
+            ((m_disocclusionRepairSamplesPerPixel & 0xFu) << 8u);
+        commandList->SetComputeRoot32BitConstants(
+            4,
+            42,
+            &repairSettings,
+            0);
+        commandList->DispatchRays(&dispatchDesc);
+        commandList->ResourceBarrier(1, &raygenUavBarrier);
+    }
     WriteGpuTimestamp(
         commandList,
         profileQueries,
@@ -1789,7 +1813,6 @@ void RayTracingManager::DispatchAtrousFilter(
             settings.adaptiveIterations =
                 m_enableAtrousAdaptiveIterations ? 1u : 0u;
             settings.debugView = m_atrousDebugView;
-
             commandList->SetComputeRootDescriptorTable(
                 0,
                 gpuDescriptorHandle(sourceDescriptorIndex));
@@ -2021,30 +2044,31 @@ void RayTracingManager::SetTemporalReprojectionEnabled(bool enabled)
     ResetAccumulation();
 }
 
-void RayTracingManager::SetDisocclusionAdaptiveSampling(
-    bool enabled,
-    UINT samplesPerPixel)
-{
-    const UINT clampedSamplesPerPixel =
-        samplesPerPixel < 1u ? 1u :
-        (samplesPerPixel > 8u ? 8u : samplesPerPixel);
-    if (m_enableDisocclusionAdaptiveSampling == enabled &&
-        m_disocclusionSamplesPerPixel == clampedSamplesPerPixel)
-    {
-        return;
-    }
-
-    m_enableDisocclusionAdaptiveSampling = enabled;
-    m_disocclusionSamplesPerPixel = clampedSamplesPerPixel;
-    ResetAccumulation();
-}
-
 void RayTracingManager::SetDynamicObjectReprojectionEnabled(bool enabled)
 {
     if (m_enableDynamicObjectReprojection == enabled)
         return;
 
     m_enableDynamicObjectReprojection = enabled;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetDisocclusionRepairSettings(
+    bool enabled,
+    UINT samplesPerPixel)
+{
+    const UINT clampedSamplesPerPixel =
+        samplesPerPixel < 1u
+        ? 1u
+        : (samplesPerPixel > 8u ? 8u : samplesPerPixel);
+    if (m_enableDisocclusionRepair == enabled &&
+        m_disocclusionRepairSamplesPerPixel == clampedSamplesPerPixel)
+    {
+        return;
+    }
+
+    m_enableDisocclusionRepair = enabled;
+    m_disocclusionRepairSamplesPerPixel = clampedSamplesPerPixel;
     ResetAccumulation();
 }
 

@@ -294,9 +294,9 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
-    m_rayTracingManager->SetDisocclusionAdaptiveSampling(
-        m_enableDisocclusionAdaptiveSampling,
-        static_cast<UINT>(m_disocclusionSamplesPerPixel));
+    m_rayTracingManager->SetDisocclusionRepairSettings(
+        m_enableDisocclusionRepair,
+        static_cast<UINT>(m_disocclusionRepairSamplesPerPixel));
     m_rayTracingManager->SetSkinnedDeformationMotionEnabled(
         m_enableSkinnedDeformationMotion);
     m_rayTracingManager->SetCurrentFrameVisibleResidualEnabled(
@@ -410,9 +410,9 @@ void D3D12Renderer::Render()
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
-    m_rayTracingManager->SetDisocclusionAdaptiveSampling(
-        m_enableDisocclusionAdaptiveSampling,
-        static_cast<UINT>(m_disocclusionSamplesPerPixel));
+    m_rayTracingManager->SetDisocclusionRepairSettings(
+        m_enableDisocclusionRepair,
+        static_cast<UINT>(m_disocclusionRepairSamplesPerPixel));
     m_rayTracingManager->SetSkinnedDeformationMotionEnabled(
         m_enableSkinnedDeformationMotion);
     m_rayTracingManager->SetCurrentFrameVisibleResidualEnabled(
@@ -2166,18 +2166,18 @@ void D3D12Renderer::BuildImGuiFrame()
             ImGui::TextDisabled(
                 "ON: reproject rigid transforms or the previous skinned pose.");
             ImGui::Checkbox(
-                "Disocclusion Adaptive Sampling",
-                &m_enableDisocclusionAdaptiveSampling);
-            if (m_enableDisocclusionAdaptiveSampling)
+                "Disocclusion Repair Ray Pass",
+                &m_enableDisocclusionRepair);
+            if (m_enableDisocclusionRepair)
             {
                 ImGui::SliderInt(
-                    "Disocclusion SPP",
-                    &m_disocclusionSamplesPerPixel,
+                    "Disocclusion Repair SPP",
+                    &m_disocclusionRepairSamplesPerPixel,
                     1,
                     8);
             }
             ImGui::TextDisabled(
-                "Uses extra samples only where a moving object reveals static background.");
+                "Adds isolated rays only where moving geometry reveals rejected static history.");
             if (m_rayTracingManager->IsGpuSkinningActive())
             {
                 ImGui::Checkbox(

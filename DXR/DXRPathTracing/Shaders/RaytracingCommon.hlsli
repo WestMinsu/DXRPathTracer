@@ -261,12 +261,12 @@ bool DirectionalLightEnabled()
     return (g_enableDynamicObjectReprojection & 8u) != 0u;
 }
 
-bool DisocclusionAdaptiveSamplingEnabled()
+bool DisocclusionRepairPassEnabled()
 {
     return (g_enableDynamicObjectReprojection & 16u) != 0u;
 }
 
-uint DisocclusionSamplesPerPixel()
+uint DisocclusionRepairSamplesPerPixel()
 {
     return clamp(
         (g_enableDynamicObjectReprojection >> 8u) & 0xFu,
