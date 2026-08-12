@@ -119,6 +119,7 @@ public:
         return m_directionalLightDirection;
     }
     void SetTemporalReprojectionEnabled(bool enabled);
+    void SetBestTapHistoryGatherEnabled(bool enabled);
     void SetDynamicObjectReprojectionEnabled(bool enabled);
     void SetStaticBackgroundHistoryFastPathEnabled(bool enabled);
     void SetDisocclusionRepairSettings(
@@ -514,6 +515,7 @@ private:
     bool m_enableAccumulation = true;
     bool m_enableRussianRoulette = false;
     bool m_enableTemporalReprojection = false;
+    bool m_enableBestTapHistoryGather = true;
     bool m_enableDynamicObjectReprojection = true;
     bool m_enableStaticBackgroundHistoryFastPath = true;
     bool m_enableDisocclusionRepair = true;

@@ -272,6 +272,11 @@ bool StaticBackgroundHistoryFastPathEnabled()
     return (g_enableDynamicObjectReprojection & 64u) != 0u;
 }
 
+bool BestTapHistoryGatherEnabled()
+{
+    return (g_enableDynamicObjectReprojection & 128u) != 0u;
+}
+
 
 bool DisocclusionRepairPassEnabled()
 {

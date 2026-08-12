@@ -79,6 +79,100 @@ void ResetTemporalHistorySample(out TemporalHistorySample history)
     history.sampleCount = 0.0f;
 }
 
+bool LoadTemporalHistoryTap(
+    int2 historyPixel,
+    float confidence,
+    out TemporalHistorySample history)
+{
+    ResetTemporalHistorySample(history);
+    float4 previousAccumulation =
+        g_previousAccumulation.Load(int3(historyPixel, 0));
+    if (previousAccumulation.a <= 0.0f)
+        return false;
+
+    float previousSampleCount =
+        max(previousAccumulation.a, 1.0f);
+    history.radianceAverage =
+        previousAccumulation.rgb / previousSampleCount;
+    history.sampleCount = previousSampleCount * confidence;
+
+    if (TemporalLobeHistoryEnabled())
+    {
+        float4 previousDiffuse =
+            g_previousDiffuseIndirect.Load(int3(historyPixel, 0));
+        float4 previousSpecular =
+            g_previousSpecularIndirect.Load(int3(historyPixel, 0));
+        float diffuseSampleCount =
+            max(abs(previousDiffuse.a), 1.0f);
+        float specularSampleCount =
+            max(abs(previousSpecular.a), 1.0f);
+        history.diffuseAverage =
+            previousDiffuse.rgb / diffuseSampleCount;
+        history.specularAverage =
+            previousSpecular.rgb / specularSampleCount;
+        history.diffuseMomentAverage =
+            g_previousDiffuseMoments.Load(int3(historyPixel, 0)) /
+            diffuseSampleCount;
+        history.specularMomentAverage =
+            g_previousSpecularMoments.Load(int3(historyPixel, 0)) /
+            specularSampleCount;
+    }
+    return true;
+}
+
+bool SampleTemporalHistoryBilinear(
+    float2 historyUv,
+    out TemporalHistorySample history)
+{
+    ResetTemporalHistorySample(history);
+    float4 previousAccumulation =
+        g_previousAccumulation.SampleLevel(
+            g_environmentSampler,
+            historyUv,
+            0.0f);
+    if (previousAccumulation.a <= 0.0f)
+        return false;
+
+    float previousSampleCount =
+        max(previousAccumulation.a, 1.0f);
+    history.radianceAverage =
+        previousAccumulation.rgb / previousSampleCount;
+    history.sampleCount = previousSampleCount;
+
+    if (TemporalLobeHistoryEnabled())
+    {
+        float4 previousDiffuse =
+            g_previousDiffuseIndirect.SampleLevel(
+                g_environmentSampler,
+                historyUv,
+                0.0f);
+        float4 previousSpecular =
+            g_previousSpecularIndirect.SampleLevel(
+                g_environmentSampler,
+                historyUv,
+                0.0f);
+        float diffuseSampleCount =
+            max(abs(previousDiffuse.a), 1.0f);
+        float specularSampleCount =
+            max(abs(previousSpecular.a), 1.0f);
+        history.diffuseAverage =
+            previousDiffuse.rgb / diffuseSampleCount;
+        history.specularAverage =
+            previousSpecular.rgb / specularSampleCount;
+        history.diffuseMomentAverage =
+            g_previousDiffuseMoments.SampleLevel(
+                g_environmentSampler,
+                historyUv,
+                0.0f) / diffuseSampleCount;
+        history.specularMomentAverage =
+            g_previousSpecularMoments.SampleLevel(
+                g_environmentSampler,
+                historyUv,
+                0.0f) / specularSampleCount;
+    }
+    return true;
+}
+
 bool ProjectToPreviousFrame(
     float3 worldPosition,
     float3 currentRayDirection,
@@ -304,6 +398,104 @@ bool GatherValidatedHistory(
         (1.0f - fraction.x) * fraction.y,
         fraction.x * fraction.y
     };
+
+    // Normal rendering uses smooth bilinear history only when every tap
+    // participating in the footprint belongs to the validated surface.
+    // At an edge or disocclusion, choose the valid tap closest to the
+    // fractional reprojection position instead of blending across surfaces.
+    // The surface-error debug view retains the original weighted path below.
+    if (BestTapHistoryGatherEnabled() &&
+        g_temporalDebugView != 7u)
+    {
+        uint validMask = 0u;
+        uint validCount = 0u;
+        uint weightedTapCount = 0u;
+        float currentDirectionalShadow =
+            g_directionalShadowGuide[currentPixel];
+        rejectionReason = c_historyRejectedOutsideScreen;
+
+        [unroll]
+        for (uint tapIndex = 0u; tapIndex < 4u; ++tapIndex)
+        {
+            float tapWeight = tapWeights[tapIndex];
+            if (tapWeight <= 0.0f)
+                continue;
+
+            ++weightedTapCount;
+            int2 historyPixel = basePixel + tapOffsets[tapIndex];
+            uint tapRejectionReason = ValidateHistoryTap(
+                historyPixel,
+                currentHit,
+                expectedPreviousDepth,
+                currentNormalHitDistance.xyz,
+                currentMaterial,
+                currentDirectionalShadow,
+                resolution);
+            if (tapRejectionReason == c_historyAccepted)
+            {
+                validMask |= 1u << tapIndex;
+                ++validCount;
+            }
+            else if (
+                rejectionReason == c_historyRejectedOutsideScreen ||
+                tapRejectionReason != c_historyRejectedOutsideScreen)
+            {
+                rejectionReason = tapRejectionReason;
+            }
+        }
+
+        if (validCount == 0u)
+            return false;
+
+        if (validCount == weightedTapCount)
+        {
+            float2 historyUv =
+                (historyPosition + 0.5f) / float2(resolution);
+            if (!SampleTemporalHistoryBilinear(historyUv, history))
+            {
+                rejectionReason = c_historyRejectedNoSamples;
+                return false;
+            }
+            rejectionReason = c_historyAccepted;
+            return true;
+        }
+
+        uint remainingMask = validMask;
+        [unroll]
+        for (uint attempt = 0u; attempt < 4u; ++attempt)
+        {
+            uint bestTapIndex = 0u;
+            float bestTapWeight = -1.0f;
+            [unroll]
+            for (uint tapIndex = 0u; tapIndex < 4u; ++tapIndex)
+            {
+                if ((remainingMask & (1u << tapIndex)) != 0u &&
+                    tapWeights[tapIndex] > bestTapWeight)
+                {
+                    bestTapIndex = tapIndex;
+                    bestTapWeight = tapWeights[tapIndex];
+                }
+            }
+
+            if (bestTapWeight < 0.0f)
+                break;
+
+            remainingMask &= ~(1u << bestTapIndex);
+            int2 historyPixel =
+                basePixel + tapOffsets[bestTapIndex];
+            if (LoadTemporalHistoryTap(
+                    historyPixel,
+                    bestTapWeight,
+                    history))
+            {
+                rejectionReason = c_historyAccepted;
+                return true;
+            }
+        }
+
+        rejectionReason = c_historyRejectedNoSamples;
+        return false;
+    }
 
     float validWeight = 0.0f;
     float weightedSampleCount = 0.0f;

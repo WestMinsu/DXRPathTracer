@@ -706,6 +706,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float totalWeight = 0.0f;
 
     int kernelRadius = KernelRadius();
+    float centerLogLuminance = log2(
+                    1.0f + max(centerLuminance, 0.0f));
     [loop]
     for (int y = -kernelRadius; y <= kernelRadius; ++y)
     {
@@ -758,8 +760,6 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 // high-variance shadow boundary from widening its own color
                 // acceptance range. Log luminance measures relative exposure
                 // differences and is independent of local variance.
-                float centerLogLuminance = log2(
-                    1.0f + max(centerLuminance, 0.0f));
                 float sampleLogLuminance = log2(
                     1.0f + sampleLuminance);
                 colorWeight = exp(

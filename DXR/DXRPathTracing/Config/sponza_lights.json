@@ -1,7 +1,7 @@
 {
   "description": "12 rectangle emitters plus one strong sun-like directional light for the Sponza scene",
   "directional_light": {
-    "direction": [0.35, -1.0, 0.25],
+  "direction": [-0.330366, -0.939693, -0.088521],
     "radiance": [8.0, 7.5, 6.8],
     "sampling_probability": 0.5
   },

@@ -1326,7 +1326,8 @@ void RayTracingManager::DispatchRays(
         (m_enableSkinnedDeformationMotion ? 4u : 0u) |
         (directionalLightActive ? 8u : 0u) |
         (m_enableDynamicShadowHistoryValidation ? 32u : 0u) |
-        (m_enableStaticBackgroundHistoryFastPath ? 64u : 0u);
+        (m_enableStaticBackgroundHistoryFastPath ? 64u : 0u) |
+        (m_enableBestTapHistoryGather ? 128u : 0u);
     commandList->SetComputeRoot32BitConstants(4, 42, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
@@ -2082,6 +2083,15 @@ void RayTracingManager::SetTemporalReprojectionEnabled(bool enabled)
         return;
 
     m_enableTemporalReprojection = enabled;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetBestTapHistoryGatherEnabled(bool enabled)
+{
+    if (m_enableBestTapHistoryGather == enabled)
+        return;
+
+    m_enableBestTapHistoryGather = enabled;
     ResetAccumulation();
 }
 

@@ -292,6 +292,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_directionalLightIntensityScale);
     m_rayTracingManager->SetTemporalReprojectionEnabled(
         m_enableTemporalReprojection);
+    m_rayTracingManager->SetBestTapHistoryGatherEnabled(
+        m_enableBestTapHistoryGather);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
     m_rayTracingManager->SetStaticBackgroundHistoryFastPathEnabled(
@@ -415,6 +417,8 @@ void D3D12Renderer::Render()
         m_directionalLightIntensityScale);
     m_rayTracingManager->SetTemporalReprojectionEnabled(
         m_enableTemporalReprojection);
+    m_rayTracingManager->SetBestTapHistoryGatherEnabled(
+        m_enableBestTapHistoryGather);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
     m_rayTracingManager->SetStaticBackgroundHistoryFastPathEnabled(
@@ -2186,6 +2190,11 @@ void D3D12Renderer::BuildImGuiFrame()
         &m_enableTemporalReprojection);
     if (m_enableTemporalReprojection)
     {
+        ImGui::Checkbox(
+            "Bilinear / Best-Tap History Gather",
+            &m_enableBestTapHistoryGather);
+        ImGui::TextDisabled(
+            "All valid: bilinear. Partial valid: highest-weight tap only.");
         if (m_rayTracingManager &&
             (m_rayTracingManager->HasDynamicSphere() ||
              m_rayTracingManager->HasDynamicCube() ||

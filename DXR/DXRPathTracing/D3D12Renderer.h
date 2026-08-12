@@ -78,6 +78,10 @@ public:
     {
         m_enableTemporalReprojection = enabled;
     }
+    void SetInitialBestTapHistoryGatherEnabled(bool enabled)
+    {
+        m_enableBestTapHistoryGather = enabled;
+    }
     void SetInitialTemporalDebugView(UINT debugView)
     {
         m_temporalDebugView = static_cast<int>(
@@ -362,6 +366,7 @@ private:
     bool m_enableAccumulation = true;
     bool m_enableRussianRoulette = false;
     bool m_enableTemporalReprojection = false;
+    bool m_enableBestTapHistoryGather = true;
     bool m_enableDynamicObjectReprojection = true;
     bool m_enableStaticBackgroundHistoryFastPath = true;
     bool m_enableDisocclusionRepair = true;
@@ -373,7 +378,7 @@ private:
     bool m_enableAtrous = false;
     int m_temporalDebugView = static_cast<int>(
         RayTracingManager::c_temporalDebugNone);
-    int m_atrousIterations = 5;
+    int m_atrousIterations = 4;
     int m_atrousSpecularIterations = 4;
     bool m_enableAtrousAdaptiveIterations = false;
     int m_atrousDebugView = static_cast<int>(
@@ -383,7 +388,7 @@ private:
     int m_atrousSpecularRoughnessWeightMode = static_cast<int>(
         RayTracingManager::c_specularRoughnessWeightRoughness);
     int m_atrousKernelMode = static_cast<int>(
-        RayTracingManager::c_atrousKernel3x3);
+        RayTracingManager::c_atrousKernel5x5);
     float m_atrousNormalExponent = 32.0f;
     float m_atrousDepthSigma = 0.01f;
     bool m_enableAtrousAdaptiveEdgeWeights = false;
@@ -412,7 +417,7 @@ private:
     bool m_enableTextureLod = true;
     float m_textureLodBias = 0.0f;
     bool m_enableIbl = true;
-    float m_iblIntensity = 2.0f;
+    float m_iblIntensity = 1.0f;
     bool m_enableDirectionalLight = true;
     float m_directionalLightIntensityScale = 1.0f;
     UINT m_validationSeed = 0;

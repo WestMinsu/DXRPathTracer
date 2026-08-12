@@ -22,7 +22,7 @@ namespace
         UINT width = 1920;
         UINT height = 1080;
         UINT captureSamples = 0;
-        UINT maxBounce = 8;
+        UINT maxBounce = 3;
         UINT samplesPerPixel = 1;
         UINT sceneType = RayTracingManager::c_scenePbrGgx;
         UINT pbrDebugView = RayTracingManager::c_pbrDebugBeauty;
@@ -31,21 +31,22 @@ namespace
         bool overridePbrMaterial = false;
         bool enableTextureLod = true;
         float textureLodBias = 0.0f;
-        bool enableRussianRoulette = false;
-        bool enableTemporalReprojection = false;
-        bool enableAtrous = false;
+        bool enableRussianRoulette = true;
+        bool enableTemporalReprojection = true;
+        bool enableBestTapHistoryGather = true;
+        bool enableAtrous = true;
         UINT temporalDebugView = RayTracingManager::c_temporalDebugNone;
-        UINT atrousIterations = 5;
+        UINT atrousIterations = 4;
         bool enableAtrousAdaptiveIterations = false;
         UINT atrousDebugView = RayTracingManager::c_atrousDebugNone;
         UINT atrousSpecularMaterialWeightMode =
             RayTracingManager::c_specularMaterialWeightF0;
         UINT atrousSpecularRoughnessWeightMode =
             RayTracingManager::c_specularRoughnessWeightRoughness;
-        UINT atrousKernelMode = RayTracingManager::c_atrousKernel3x3;
+        UINT atrousKernelMode = RayTracingManager::c_atrousKernel5x5;
         float atrousNormalExponent = 32.0f;
         float atrousDepthSigma = 0.01f;
-        bool enableAtrousAdaptiveEdgeWeights = false;
+        bool enableAtrousAdaptiveEdgeWeights = true;
         float atrousAdaptiveDynamicNormalExponent = 1.0f;
         float atrousAdaptiveDynamicDepthSigma = 0.1f;
         float atrousAdaptiveLowHistoryNormalExponent = 8.0f;
@@ -53,10 +54,10 @@ namespace
         float atrousAdaptiveStableNormalExponent = 32.0f;
         float atrousAdaptiveStableDepthSigma = 0.01f;
         float atrousColorSigma = 4.0f;
-        UINT lightingMode = RayTracingManager::c_lightingModeBsdf;
+        UINT lightingMode = RayTracingManager::c_lightingModeMis;
         bool enableIbl = true;
         bool enableDirectionalLight = true;
-        float iblIntensity = 2.0f;
+        float iblIntensity = 1.0f;
         UINT validationSeed = 0;
         bool headless = false;
         bool composeModelRoom = false;
@@ -236,6 +237,12 @@ namespace
                      index + 1 < argumentCount)
             {
                 gOptions.enableTemporalReprojection =
+                    _wtoi(arguments[++index]) != 0;
+            }
+            else if (argument == L"--best-tap-history-gather" &&
+                     index + 1 < argumentCount)
+            {
+                gOptions.enableBestTapHistoryGather =
                     _wtoi(arguments[++index]) != 0;
             }
             else if (argument == L"--temporal-debug" &&
@@ -747,6 +754,8 @@ namespace
         gRenderer.SetInitialAtrousEnabled(gOptions.enableAtrous);
         gRenderer.SetInitialTemporalReprojectionEnabled(
             gOptions.enableTemporalReprojection);
+        gRenderer.SetInitialBestTapHistoryGatherEnabled(
+            gOptions.enableBestTapHistoryGather);
         gRenderer.SetInitialTemporalDebugView(
             gOptions.temporalDebugView);
         gRenderer.SetInitialAtrousIterationCount(
