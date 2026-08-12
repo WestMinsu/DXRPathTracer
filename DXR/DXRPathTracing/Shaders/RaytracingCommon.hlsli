@@ -267,6 +267,11 @@ bool DynamicShadowHistoryValidationEnabled()
 {
     return (g_enableDynamicObjectReprojection & 32u) != 0u;
 }
+bool StaticBackgroundHistoryFastPathEnabled()
+{
+    return (g_enableDynamicObjectReprojection & 64u) != 0u;
+}
+
 
 bool DisocclusionRepairPassEnabled()
 {

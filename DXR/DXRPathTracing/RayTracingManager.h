@@ -22,6 +22,10 @@ public:
         UINT tlasEnd = 0;
         UINT pathTraceBegin = 0;
         UINT pathTraceEnd = 0;
+        UINT mainPathBegin = 0;
+        UINT mainPathEnd = 0;
+        UINT disocclusionRepairBegin = 0;
+        UINT disocclusionRepairEnd = 0;
         UINT temporalColorClipBegin = 0;
         UINT temporalColorClipEnd = 0;
         UINT atrousDiffuseBegin = 0;
@@ -116,6 +120,7 @@ public:
     }
     void SetTemporalReprojectionEnabled(bool enabled);
     void SetDynamicObjectReprojectionEnabled(bool enabled);
+    void SetStaticBackgroundHistoryFastPathEnabled(bool enabled);
     void SetDisocclusionRepairSettings(
         bool enabled,
         UINT samplesPerPixel);
@@ -510,6 +515,7 @@ private:
     bool m_enableRussianRoulette = false;
     bool m_enableTemporalReprojection = false;
     bool m_enableDynamicObjectReprojection = true;
+    bool m_enableStaticBackgroundHistoryFastPath = true;
     bool m_enableDisocclusionRepair = true;
     UINT m_disocclusionRepairSamplesPerPixel = 4u;
     bool m_enableDynamicShadowHistoryValidation = true;

@@ -414,6 +414,10 @@ namespace
             profileQueries->tlasEnd,
             profileQueries->pathTraceBegin,
             profileQueries->pathTraceEnd,
+            profileQueries->mainPathBegin,
+            profileQueries->mainPathEnd,
+            profileQueries->disocclusionRepairBegin,
+            profileQueries->disocclusionRepairEnd,
             profileQueries->temporalColorClipBegin,
             profileQueries->temporalColorClipEnd,
             profileQueries->atrousDiffuseBegin,
@@ -1157,6 +1161,10 @@ void RayTracingManager::DispatchRays(
             {
                 profileQueries->pathTraceBegin,
                 profileQueries->pathTraceEnd,
+                profileQueries->mainPathBegin,
+                profileQueries->mainPathEnd,
+                profileQueries->disocclusionRepairBegin,
+                profileQueries->disocclusionRepairEnd,
                 profileQueries->temporalColorClipBegin,
                 profileQueries->temporalColorClipEnd,
                 profileQueries->atrousDiffuseBegin,
@@ -1317,7 +1325,8 @@ void RayTracingManager::DispatchRays(
         (m_useCurrentFrameVisibleResidual ? 2u : 0u) |
         (m_enableSkinnedDeformationMotion ? 4u : 0u) |
         (directionalLightActive ? 8u : 0u) |
-        (m_enableDynamicShadowHistoryValidation ? 32u : 0u);
+        (m_enableDynamicShadowHistoryValidation ? 32u : 0u) |
+        (m_enableStaticBackgroundHistoryFastPath ? 64u : 0u);
     commandList->SetComputeRoot32BitConstants(4, 42, &renderSettings, 0);
     D3D12_GPU_DESCRIPTOR_HANDLE environmentHandle = m_descriptorHeap->GetGPUDescriptorHandleForHeapStart();
     environmentHandle.ptr += static_cast<SIZE_T>(c_environmentDescriptorIndex) * m_descriptorSize;
@@ -1369,7 +1378,15 @@ void RayTracingManager::DispatchRays(
         commandList,
         profileQueries,
         profileQueries ? profileQueries->pathTraceBegin : 0u);
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->mainPathBegin : 0u);
     commandList->DispatchRays(&dispatchDesc);
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->mainPathEnd : 0u);
     const bool runDisocclusionRepair =
         m_enableDisocclusionRepair &&
         useTemporalHistory &&
@@ -1377,6 +1394,10 @@ void RayTracingManager::DispatchRays(
         m_dynamicObjectMovedThisFrame &&
         m_temporalHistoryFrameCount > 0u &&
         m_temporalDebugView == c_temporalDebugNone;
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->disocclusionRepairBegin : 0u);
     if (runDisocclusionRepair)
     {
         D3D12_RESOURCE_BARRIER raygenUavBarrier = {};
@@ -1396,6 +1417,10 @@ void RayTracingManager::DispatchRays(
         commandList->DispatchRays(&dispatchDesc);
         commandList->ResourceBarrier(1, &raygenUavBarrier);
     }
+    WriteGpuTimestamp(
+        commandList,
+        profileQueries,
+        profileQueries ? profileQueries->disocclusionRepairEnd : 0u);
     WriteGpuTimestamp(
         commandList,
         profileQueries,
@@ -2068,6 +2093,15 @@ void RayTracingManager::SetDynamicObjectReprojectionEnabled(bool enabled)
     m_enableDynamicObjectReprojection = enabled;
     ResetAccumulation();
 }
+void RayTracingManager::SetStaticBackgroundHistoryFastPathEnabled(bool enabled)
+{
+    if (m_enableStaticBackgroundHistoryFastPath == enabled)
+        return;
+
+    m_enableStaticBackgroundHistoryFastPath = enabled;
+    ResetAccumulation();
+}
+
 
 void RayTracingManager::SetDisocclusionRepairSettings(
     bool enabled,

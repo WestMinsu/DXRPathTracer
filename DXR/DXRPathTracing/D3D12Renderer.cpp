@@ -294,6 +294,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
+    m_rayTracingManager->SetStaticBackgroundHistoryFastPathEnabled(
+        m_enableStaticBackgroundHistoryFastPath);
     m_rayTracingManager->SetDisocclusionRepairSettings(
         m_enableDisocclusionRepair,
         static_cast<UINT>(m_disocclusionRepairSamplesPerPixel));
@@ -415,6 +417,8 @@ void D3D12Renderer::Render()
         m_enableTemporalReprojection);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
         m_enableDynamicObjectReprojection);
+    m_rayTracingManager->SetStaticBackgroundHistoryFastPathEnabled(
+        m_enableStaticBackgroundHistoryFastPath);
     m_rayTracingManager->SetDisocclusionRepairSettings(
         m_enableDisocclusionRepair,
         static_cast<UINT>(m_disocclusionRepairSamplesPerPixel));
@@ -497,6 +501,12 @@ void D3D12Renderer::Render()
     profileQueries.tlasEnd = c_gpuTlasEnd;
     profileQueries.pathTraceBegin = c_gpuPathTraceBegin;
     profileQueries.pathTraceEnd = c_gpuPathTraceEnd;
+    profileQueries.mainPathBegin = c_gpuMainPathBegin;
+    profileQueries.mainPathEnd = c_gpuMainPathEnd;
+    profileQueries.disocclusionRepairBegin =
+        c_gpuDisocclusionRepairBegin;
+    profileQueries.disocclusionRepairEnd =
+        c_gpuDisocclusionRepairEnd;
     profileQueries.temporalColorClipBegin =
         c_gpuTemporalColorClipBegin;
     profileQueries.temporalColorClipEnd =
@@ -1441,6 +1451,8 @@ void D3D12Renderer::ResetGpuTimingResults()
     m_gpuDispatchMs = 0.0;
     m_gpuTlasMs = 0.0;
     m_gpuPathTraceMs = 0.0;
+    m_gpuMainPathMs = 0.0;
+    m_gpuDisocclusionRepairMs = 0.0;
     m_gpuTemporalColorClipMs = 0.0;
     m_gpuAtrousDiffuseMs = 0.0;
     m_gpuAtrousSpecularMs = 0.0;
@@ -1487,6 +1499,12 @@ void D3D12Renderer::ReadGpuTimingResults()
     m_gpuPathTraceMs = elapsedMilliseconds(
         c_gpuPathTraceBegin,
         c_gpuPathTraceEnd);
+    m_gpuMainPathMs = elapsedMilliseconds(
+        c_gpuMainPathBegin,
+        c_gpuMainPathEnd);
+    m_gpuDisocclusionRepairMs = elapsedMilliseconds(
+        c_gpuDisocclusionRepairBegin,
+        c_gpuDisocclusionRepairEnd);
     m_gpuTemporalColorClipMs = elapsedMilliseconds(
         c_gpuTemporalColorClipBegin,
         c_gpuTemporalColorClipEnd);
@@ -1561,7 +1579,8 @@ bool D3D12Renderer::OpenBenchmarkCsv()
     std::fprintf(
         m_benchmarkCsv,
         "frame,cpu_ms,gpu_dispatch_ms,gpu_tlas_ms,"
-        "gpu_path_trace_temporal_ms,gpu_temporal_color_clip_ms,"
+        "gpu_path_trace_temporal_ms,gpu_main_path_ms,"
+        "gpu_disocclusion_repair_ms,gpu_temporal_color_clip_ms,"
         "gpu_atrous_diffuse_ms,gpu_atrous_specular_ms,"
         "gpu_upscale_ms,gpu_output_copy_ms,gpu_ui_ms,gpu_total_ms,"
         "profile,internal_scale,max_bounce,russian_roulette,lighting_mode,"
@@ -1607,7 +1626,7 @@ void D3D12Renderer::RecordFrameMetrics(double cpuFrameMs)
         : 0u;
     std::fprintf(
         m_benchmarkCsv,
-        "%llu,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,"
+        "%llu,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,"
         "%.6f,%.6f,%.6f,%.6f,fixed,1.000000,%d,%d,%d,"
         "%.6f,%.6f,%.6f,%.6f,%llu,%llu,%llu,"
         "%.6f,%llu,%llu,%u",
@@ -1616,6 +1635,8 @@ void D3D12Renderer::RecordFrameMetrics(double cpuFrameMs)
         m_gpuDispatchMs,
         m_gpuTlasMs,
         m_gpuPathTraceMs,
+        m_gpuMainPathMs,
+        m_gpuDisocclusionRepairMs,
         m_gpuTemporalColorClipMs,
         m_gpuAtrousDiffuseMs,
         m_gpuAtrousSpecularMs,
@@ -2176,6 +2197,11 @@ void D3D12Renderer::BuildImGuiFrame()
             ImGui::TextDisabled(
                 "ON: reproject rigid transforms or the previous skinned pose.");
             ImGui::Checkbox(
+                "Static Background History Fast Path",
+                &m_enableStaticBackgroundHistoryFastPath);
+            ImGui::TextDisabled(
+                "ON: use same-pixel history validation for static background while objects move.");
+            ImGui::Checkbox(
                 "Disocclusion Repair Ray Pass",
                 &m_enableDisocclusionRepair);
             if (m_enableDisocclusionRepair)
@@ -2713,6 +2739,10 @@ void D3D12Renderer::BuildImGuiFrame()
             m_gpuTlasMs,
             m_gpuPathTraceMs,
             m_gpuTemporalColorClipMs);
+        ImGui::Text(
+            "GPU Main Path / Disocclusion Repair: %.2f / %.2f ms",
+            m_gpuMainPathMs,
+            m_gpuDisocclusionRepairMs);
         ImGui::Text(
             "GPU A-Trous diffuse/specular: %.2f / %.2f ms",
             m_gpuAtrousDiffuseMs,

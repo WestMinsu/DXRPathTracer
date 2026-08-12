@@ -252,7 +252,11 @@ private:
         c_gpuUiBegin = 17,
         c_gpuUiEnd = 18,
         c_gpuTotalEnd = 19,
-        c_gpuTimestampCount = 20
+        c_gpuMainPathBegin = 20,
+        c_gpuMainPathEnd = 21,
+        c_gpuDisocclusionRepairBegin = 22,
+        c_gpuDisocclusionRepairEnd = 23,
+        c_gpuTimestampCount = 24
     };
 
     bool CreateDevice();
@@ -359,6 +363,7 @@ private:
     bool m_enableRussianRoulette = false;
     bool m_enableTemporalReprojection = false;
     bool m_enableDynamicObjectReprojection = true;
+    bool m_enableStaticBackgroundHistoryFastPath = true;
     bool m_enableDisocclusionRepair = true;
     int m_disocclusionRepairSamplesPerPixel = 4;
     bool m_enableDynamicShadowHistoryValidation = true;
@@ -435,6 +440,8 @@ private:
     double m_gpuTlasMs = 0.0;
     double m_gpuPathTraceMs = 0.0;
     double m_gpuTemporalColorClipMs = 0.0;
+    double m_gpuMainPathMs = 0.0;
+    double m_gpuDisocclusionRepairMs = 0.0;
     double m_gpuAtrousDiffuseMs = 0.0;
     double m_gpuAtrousSpecularMs = 0.0;
     double m_gpuUpscaleMs = 0.0;

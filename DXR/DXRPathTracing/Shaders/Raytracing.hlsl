@@ -1329,22 +1329,25 @@ void RunRaygen()
         {
             temporalHistoryAttempted = true;
             float4 currentMaterial = g_materialGuide[launchIndex];
-            if (TemporalCameraIsMoving() ||
+            float4 currentNormalHitDistance =
+                g_normalHitDistance[launchIndex];
+            bool currentHit =
+                currentNormalHitDistance.w >= 0.0f &&
+                currentMaterial.a >= 0.0f;
+            bool currentDynamic =
+                currentHit &&
+                primaryDynamicInstance != 0u &&
+                IsDynamicGuide(currentMaterial);
+            if (cameraTemporalMotion ||
                 (g_dynamicObjectMoved != 0u &&
-                 DynamicObjectReprojectionEnabled()))
+                 DynamicObjectReprojectionEnabled() &&
+                 (!StaticBackgroundHistoryFastPathEnabled() ||
+                  currentDynamic)))
             {
-                float4 currentNormalHitDistance = g_normalHitDistance[launchIndex];
-                bool currentHit =
-                    currentNormalHitDistance.w >= 0.0f &&
-                    currentMaterial.a >= 0.0f;
                 float3 currentWorldPosition = currentHit
                     ? g_cameraPosition +
                         primaryRayDirection * currentNormalHitDistance.w
                     : float3(0.0f, 0.0f, 0.0f);
-                bool currentDynamic =
-                    currentHit &&
-                    primaryDynamicInstance != 0u &&
-                    IsDynamicGuide(currentMaterial);
                 float3 reprojectionWorldPosition = currentDynamic
                     ? previousPrimaryWorldPosition
                     : currentWorldPosition;
