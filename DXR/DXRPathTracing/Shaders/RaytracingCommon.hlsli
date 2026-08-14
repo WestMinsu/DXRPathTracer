@@ -404,7 +404,7 @@ uint NextRandom(inout uint seed)
 
 float RandomFloat01(inout uint seed)
 {
-    return float(NextRandom(seed) & 0x00FFFFFFu) / 16777216.0f;
+    return float(NextRandom(seed) >> 8u) / 16777216.0f;
 }
 
 bool SurvivesRussianRoulette(
