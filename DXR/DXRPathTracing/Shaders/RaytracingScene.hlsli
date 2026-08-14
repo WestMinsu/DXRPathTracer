@@ -8,24 +8,30 @@ SceneMaterial GetSceneMaterial(uint primitiveIndex)
     return g_sceneMaterials[g_primitiveMaterialIndices[primitiveIndex]];
 }
 
-float TextureMipLevel(uint textureIndex, float uvFootprint)
+static const uint c_sceneTextureIndexMask = 0x000000FFu;
+static const uint c_sceneTextureMaxDimensionMask = 0x0000FFFFu;
+static const uint c_sceneTextureMaxDimensionShift = 8u;
+static const uint c_sceneTextureLastMipShift = 24u;
+
+uint SceneTextureDescriptorIndex(uint metadata)
+{
+    return metadata & c_sceneTextureIndexMask;
+}
+
+float TextureMipLevel(uint textureMetadata, float uvFootprint)
 {
     if (g_textureLodBiasOrDisabled < -16.0f)
         return 0.0f;
 
-    uint textureWidth;
-    uint textureHeight;
-    uint mipLevelCount;
-    g_materialTextures[textureIndex].GetDimensions(
-        0u,
-        textureWidth,
-        textureHeight,
-        mipLevelCount);
+    uint maxDimension =
+        (textureMetadata >> c_sceneTextureMaxDimensionShift) &
+        c_sceneTextureMaxDimensionMask;
+    uint lastMip = textureMetadata >> c_sceneTextureLastMipShift;
     float texelFootprint = uvFootprint *
-        float(max(textureWidth, textureHeight));
+        float(maxDimension);
     float mipLevel = log2(max(texelFootprint, 1.0f)) +
         g_textureLodBiasOrDisabled;
-    return clamp(mipLevel, 0.0f, float(max(mipLevelCount, 1u) - 1u));
+    return clamp(mipLevel, 0.0f, float(lastMip));
 }
 
 float EdgeUvPerWorld(
@@ -109,9 +115,10 @@ bool PassesSceneAlphaMask(
     float alpha = material.baseColorAlpha;
     if (material.baseColorTextureIndex != c_invalidSceneTextureIndex)
     {
+        uint textureMetadata = material.baseColorTextureIndex;
         uint textureIndex = NonUniformResourceIndex(
-            material.baseColorTextureIndex);
-        float mipLevel = TextureMipLevel(textureIndex, uvFootprint);
+            SceneTextureDescriptorIndex(textureMetadata));
+        float mipLevel = TextureMipLevel(textureMetadata, uvFootprint);
         alpha *= g_materialTextures[textureIndex].SampleLevel(
                 g_materialSampler, texCoord, mipLevel).a;
     }
@@ -140,17 +147,19 @@ PbrMaterial GetPbrMaterial(
     material.emission = sceneMaterial.emission;
     if (sceneMaterial.baseColorTextureIndex != c_invalidSceneTextureIndex)
     {
+        uint textureMetadata = sceneMaterial.baseColorTextureIndex;
         uint textureIndex = NonUniformResourceIndex(
-            sceneMaterial.baseColorTextureIndex);
-        float mipLevel = TextureMipLevel(textureIndex, uvFootprint);
+            SceneTextureDescriptorIndex(textureMetadata));
+        float mipLevel = TextureMipLevel(textureMetadata, uvFootprint);
         material.baseColor *= g_materialTextures[textureIndex].SampleLevel(
                 g_materialSampler, texCoord, mipLevel).rgb;
     }
     if (sceneMaterial.metallicRoughnessTextureIndex != c_invalidSceneTextureIndex)
     {
+        uint textureMetadata = sceneMaterial.metallicRoughnessTextureIndex;
         uint textureIndex = NonUniformResourceIndex(
-            sceneMaterial.metallicRoughnessTextureIndex);
-        float mipLevel = TextureMipLevel(textureIndex, uvFootprint);
+            SceneTextureDescriptorIndex(textureMetadata));
+        float mipLevel = TextureMipLevel(textureMetadata, uvFootprint);
         float4 metallicRoughness = g_materialTextures[textureIndex].SampleLevel(
                 g_materialSampler, texCoord, mipLevel);
         material.roughness *= metallicRoughness.g;
@@ -190,9 +199,10 @@ float3 ApplySceneNormalMap(
     tangent *= rsqrt(tangentLengthSquared);
     float3 bitangent = cross(normal, tangent) * interpolatedTangent.w;
 
+    uint textureMetadata = sceneMaterial.normalTextureIndex;
     uint textureIndex = NonUniformResourceIndex(
-        sceneMaterial.normalTextureIndex);
-    float mipLevel = TextureMipLevel(textureIndex, uvFootprint);
+        SceneTextureDescriptorIndex(textureMetadata));
+    float mipLevel = TextureMipLevel(textureMetadata, uvFootprint);
     float3 tangentNormal = g_materialTextures[textureIndex].SampleLevel(
             g_materialSampler, texCoord, mipLevel).xyz * 2.0f - 1.0f;
     tangentNormal.xy *= sceneMaterial.normalTextureScale;

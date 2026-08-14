@@ -376,16 +376,30 @@ bool SceneData::IsValid() const
         }
     }
 
-    const auto validTextureIndex = [this](std::uint32_t textureIndex)
+    const auto validTextureMetadata = [this](std::uint32_t textureMetadata)
     {
-        return textureIndex == c_invalidSceneTextureIndex ||
-            textureIndex < textures.size();
+        if (textureMetadata == c_invalidSceneTextureIndex)
+            return true;
+
+        const std::uint32_t textureIndex =
+            SceneTextureDescriptorIndex(textureMetadata);
+        if (textureIndex >= textures.size())
+            return false;
+
+        const SceneTexture& texture = textures[textureIndex];
+        if (texture.mips.empty())
+            return false;
+
+        const SceneTextureMip& topMip = texture.mips.front();
+        return SceneTextureMaxDimension(textureMetadata) ==
+                (std::max)(topMip.width, topMip.height) &&
+            SceneTextureLastMip(textureMetadata) == texture.mips.size() - 1u;
     };
     for (const SceneMaterial& material : materials)
     {
-        if (!validTextureIndex(material.baseColorTextureIndex) ||
-            !validTextureIndex(material.metallicRoughnessTextureIndex) ||
-            !validTextureIndex(material.normalTextureIndex) ||
+        if (!validTextureMetadata(material.baseColorTextureIndex) ||
+            !validTextureMetadata(material.metallicRoughnessTextureIndex) ||
+            !validTextureMetadata(material.normalTextureIndex) ||
             !std::isfinite(material.baseColorAlpha) ||
             !std::isfinite(material.alphaCutoff) ||
             material.baseColorAlpha < 0.0f ||

@@ -7,12 +7,32 @@
 #include <vector>
 
 constexpr std::uint32_t c_invalidSceneTextureIndex = 0xFFFFFFFFu;
+constexpr std::uint32_t c_sceneTextureIndexMask = 0x000000FFu;
+constexpr std::uint32_t c_sceneTextureMaxDimensionMask = 0x0000FFFFu;
+constexpr std::uint32_t c_sceneTextureMaxDimensionShift = 8u;
+constexpr std::uint32_t c_sceneTextureLastMipShift = 24u;
 constexpr std::uint32_t c_invalidSceneNodeIndex = 0xFFFFFFFFu;
 constexpr std::uint32_t c_invalidSceneMeshIndex = 0xFFFFFFFFu;
 constexpr std::uint32_t c_invalidSceneSkinIndex = 0xFFFFFFFFu;
 constexpr std::uint32_t c_pbrParameterModeFixed = 0u;
 constexpr std::uint32_t c_pbrParameterModeGlobal = 1u;
 constexpr std::uint32_t c_pbrParameterModeFixedNoOverride = 2u;
+
+constexpr std::uint32_t SceneTextureDescriptorIndex(std::uint32_t metadata)
+{
+    return metadata & c_sceneTextureIndexMask;
+}
+
+constexpr std::uint32_t SceneTextureMaxDimension(std::uint32_t metadata)
+{
+    return (metadata >> c_sceneTextureMaxDimensionShift) &
+        c_sceneTextureMaxDimensionMask;
+}
+
+constexpr std::uint32_t SceneTextureLastMip(std::uint32_t metadata)
+{
+    return metadata >> c_sceneTextureLastMipShift;
+}
 
 struct SceneVertex
 {
@@ -38,6 +58,8 @@ struct SceneMaterial
     float roughness;
     float emission[3];
     std::uint32_t pbrParameterMode;
+    // Texture fields pack descriptor index [7:0], maximum dimension [23:8],
+    // and last mip level [31:24]. All ones still marks an unused texture.
     std::uint32_t baseColorTextureIndex;
     std::uint32_t metallicRoughnessTextureIndex;
     std::uint32_t normalTextureIndex;

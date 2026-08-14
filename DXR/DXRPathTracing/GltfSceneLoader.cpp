@@ -674,6 +674,33 @@ namespace
         return true;
     }
 
+    bool PackMaterialTextureMetadata(
+        const SceneData& scene,
+        std::uint32_t& metadata,
+        std::wstring& errorMessage)
+    {
+        if (metadata == c_invalidSceneTextureIndex)
+            return true;
+        const std::uint32_t textureIndex = metadata;
+        if (textureIndex > c_sceneTextureIndexMask ||
+            textureIndex >= scene.textures.size())
+            return Fail(errorMessage, L"Too many material textures.");
+        const SceneTexture& texture = scene.textures[textureIndex];
+        if (texture.mips.empty())
+            return Fail(errorMessage, L"Material texture has no mip levels.");
+        const SceneTextureMip& topMip = texture.mips.front();
+        const std::uint32_t maxDimension =
+            (std::max)(topMip.width, topMip.height);
+        const std::size_t lastMip = texture.mips.size() - 1u;
+        if (maxDimension == 0u ||
+            maxDimension > c_sceneTextureMaxDimensionMask || lastMip > 0xFFu)
+            return Fail(errorMessage, L"Material texture metadata is out of range.");
+        metadata = textureIndex |
+            (maxDimension << c_sceneTextureMaxDimensionShift) |
+            (static_cast<std::uint32_t>(lastMip) << c_sceneTextureLastMipShift);
+        return true;
+    }
+
     SceneMaterial MakeDefaultMaterial()
     {
         SceneMaterial material = {};
@@ -811,6 +838,21 @@ namespace
             material.normalTextureScale = source.normal_texture.texture
                 ? source.normal_texture.scale
                 : 1.0f;
+            if (!PackMaterialTextureMetadata(
+                    scene,
+                    material.baseColorTextureIndex,
+                    errorMessage) ||
+                !PackMaterialTextureMetadata(
+                    scene,
+                    material.metallicRoughnessTextureIndex,
+                    errorMessage) ||
+                !PackMaterialTextureMetadata(
+                    scene,
+                    material.normalTextureIndex,
+                    errorMessage))
+            {
+                return false;
+            }
             const float emissiveStrength = source.has_emissive_strength
                 ? std::max(source.emissive_strength.emissive_strength, 0.0f)
                 : 1.0f;

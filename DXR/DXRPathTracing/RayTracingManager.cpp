@@ -2856,11 +2856,14 @@ namespace
             {
                 if (*textureIndex == c_invalidSceneTextureIndex)
                     continue;
-                if (*textureIndex >
-                    std::numeric_limits<std::uint32_t>::max() -
-                        textureOffset)
+                const std::uint32_t localTextureIndex =
+                    SceneTextureDescriptorIndex(*textureIndex);
+                if (textureOffset >
+                    c_sceneTextureIndexMask - localTextureIndex)
                     return false;
-                *textureIndex += textureOffset;
+                *textureIndex =
+                    (*textureIndex & ~c_sceneTextureIndexMask) |
+                    (localTextureIndex + textureOffset);
             }
         }
         for (SceneNode& node : source.nodes)
