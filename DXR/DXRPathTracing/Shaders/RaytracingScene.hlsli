@@ -129,11 +129,10 @@ float3 CornellSurfaceAlbedo(uint primitiveIndex)
 }
 
 PbrMaterial GetPbrMaterial(
-    uint primitiveIndex,
+    SceneMaterial sceneMaterial,
     float2 texCoord,
     float uvFootprint)
 {
-    SceneMaterial sceneMaterial = GetSceneMaterial(primitiveIndex);
     PbrMaterial material;
     material.baseColor = sceneMaterial.baseColor;
     material.metallic = sceneMaterial.metallic;
@@ -170,13 +169,12 @@ PbrMaterial GetPbrMaterial(
 }
 
 float3 ApplySceneNormalMap(
-    uint primitiveIndex,
+    SceneMaterial sceneMaterial,
     float2 texCoord,
     float uvFootprint,
     float4 interpolatedTangent,
     float3 normal)
 {
-    SceneMaterial sceneMaterial = GetSceneMaterial(primitiveIndex);
     if (sceneMaterial.normalTextureIndex == c_invalidSceneTextureIndex)
     {
         return normal;
@@ -210,7 +208,7 @@ float3 PbrMaterialDebugColor(
     float uvFootprint)
 {
     PbrMaterial material = GetPbrMaterial(
-        primitiveIndex,
+        GetSceneMaterial(primitiveIndex),
         texCoord,
         uvFootprint);
 

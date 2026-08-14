@@ -1860,6 +1860,8 @@ void MyClosestHitShader_SurfaceQuery(
         GetHitGeometryMetadata(instanceFlags);
     uint globalPrimitiveIndex =
         hitGeometry.primitiveOffset + PrimitiveIndex();
+    SceneMaterial sceneMaterial =
+        GetSceneMaterial(globalPrimitiveIndex);
     uint indexOffset =
         hitGeometry.indexOffset + PrimitiveIndex() * 3u;
     uint i0 = hitGeometry.vertexOffset + g_indices[indexOffset + 0u];
@@ -1886,7 +1888,7 @@ void MyClosestHitShader_SurfaceQuery(
     if (IsPbrRenderingScene())
     {
         normal = ApplySceneNormalMap(
-            globalPrimitiveIndex,
+            sceneMaterial,
             texCoord,
             uvFootprint,
             tangent,
@@ -1897,16 +1899,16 @@ void MyClosestHitShader_SurfaceQuery(
     if (IsPbrRenderingScene())
     {
         material = GetPbrMaterial(
-            globalPrimitiveIndex,
+            sceneMaterial,
             texCoord,
             uvFootprint);
     }
     else
     {
-        material.baseColor = CornellSurfaceAlbedo(globalPrimitiveIndex);
+        material.baseColor = sceneMaterial.baseColor;
         material.metallic = 0.0f;
         material.roughness = 1.0f;
-        material.emission = SurfaceEmission(globalPrimitiveIndex);
+        material.emission = sceneMaterial.emission;
     }
 
     payload.normal = normal;
