@@ -50,7 +50,8 @@ float EstimateTriangleUvFootprint(
     uint i1,
     uint i2,
     float3x4 objectToWorldTransform,
-    float3 worldNormal)
+    float3 worldNormal,
+    bool useGeometricNormal)
 {
     if (g_textureLodBiasOrDisabled < -16.0f)
         return 0.0f;
@@ -66,6 +67,9 @@ float EstimateTriangleUvFootprint(
     float2 texCoord0 = g_vertices[i0].texCoord;
     float2 texCoord1 = g_vertices[i1].texCoord;
     float2 texCoord2 = g_vertices[i2].texCoord;
+
+    if (useGeometricNormal)
+        worldNormal = cross(worldPosition1, worldPosition2);
 
     float uvPerWorld = max(
         EdgeUvPerWorld(

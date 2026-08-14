@@ -1825,15 +1825,13 @@ bool PassesCurrentAlphaMask(
     uint i2 = hitGeometry.vertexOffset + g_indices[indexOffset + 2u];
     float2 texCoord = InterpolateTexCoord(i0, i1, i2, attributes);
     float3x4 objectToWorldTransform = ObjectToWorld3x4();
-    float3 worldNormal = normalize(mul(
-        (float3x3)objectToWorldTransform,
-        InterpolateNormal(i0, i1, i2, attributes)));
     float uvFootprint = EstimateTriangleUvFootprint(
         i0,
         i1,
         i2,
         objectToWorldTransform,
-        worldNormal);
+        float3(0.0f, 0.0f, 0.0f),
+        true);
     return PassesSceneAlphaMask(
         material,
         texCoord,
@@ -1884,7 +1882,8 @@ void MyClosestHitShader_SurfaceQuery(
         i1,
         i2,
         objectToWorldTransform,
-        normal);
+        normal,
+        false);
     if (IsPbrRenderingScene())
     {
         normal = ApplySceneNormalMap(
