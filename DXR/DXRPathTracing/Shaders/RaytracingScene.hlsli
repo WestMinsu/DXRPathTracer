@@ -55,15 +55,14 @@ float EstimateTriangleUvFootprint(
     if (g_textureLodBiasOrDisabled < -16.0f)
         return 0.0f;
 
-    float3 worldPosition0 = mul(
-        objectToWorldTransform,
-        float4(g_vertices[i0].position, 1.0f));
+    float3 objectPosition0 = g_vertices[i0].position;
+    float3 worldPosition0 = float3(0.0f, 0.0f, 0.0f);
     float3 worldPosition1 = mul(
         objectToWorldTransform,
-        float4(g_vertices[i1].position, 1.0f));
+        float4(g_vertices[i1].position - objectPosition0, 0.0f));
     float3 worldPosition2 = mul(
         objectToWorldTransform,
-        float4(g_vertices[i2].position, 1.0f));
+        float4(g_vertices[i2].position - objectPosition0, 0.0f));
     float2 texCoord0 = g_vertices[i0].texCoord;
     float2 texCoord1 = g_vertices[i1].texCoord;
     float2 texCoord2 = g_vertices[i2].texCoord;
