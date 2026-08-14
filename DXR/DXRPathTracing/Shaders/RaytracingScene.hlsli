@@ -50,6 +50,8 @@ float EstimateTriangleUvFootprint(
     uint i1,
     uint i2,
     float3x4 objectToWorldTransform,
+    float rayConeWidthAtOrigin,
+    float rayConeSpread,
     float3 worldNormal,
     bool useGeometricNormal)
 {
@@ -89,19 +91,15 @@ float EstimateTriangleUvFootprint(
                 texCoord1,
                 texCoord2)));
 
-    float3 hitPosition =
-        WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
-    float cameraDistance = length(hitPosition - g_cameraPosition);
-    float pixelConeDiameter =
-        2.0f * tan(c_verticalFovRadians * 0.5f) /
-        max(float(DispatchRaysDimensions().y), 1.0f);
+    float rayConeWidth =
+        rayConeWidthAtOrigin + rayConeSpread * RayTCurrent();
     float viewAgreement = abs(dot(
         normalize(worldNormal),
         normalize(-WorldRayDirection())));
     float grazingScale = min(
         1.0f / max(viewAgreement, 0.25f),
         4.0f);
-    return cameraDistance * pixelConeDiameter *
+    return max(rayConeWidth, 0.0f) *
         uvPerWorld * grazingScale;
 }
 

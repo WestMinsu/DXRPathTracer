@@ -792,6 +792,7 @@ float EvaluateDirectionalShadowGuide(
 
 void TracePrimaryGuide(
     RayDesc ray,
+    float primaryRayConeSpread,
     out float3 previousWorldPosition,
     out uint dynamicInstance,
     out float3 visibleResidual,
@@ -803,6 +804,8 @@ void TracePrimaryGuide(
     visibilityClass = c_primaryVisibilitySurface;
     SurfaceQueryPayload payload;
     ResetSurfaceQueryPayload(payload);
+    payload.hitT = 0.0f;
+    payload.roughness = primaryRayConeSpread;
     // The guide query does not consume emission. Mark it before TraceRay so
     // closest-hit can return the previous rigid-body position in that slot
     // without increasing the payload carried by every radiance bounce.
@@ -850,6 +853,7 @@ void TracePrimaryGuide(
 void TracePath(
     RayDesc ray,
     uint subSampleIndex,
+    float primaryRayConeSpread,
     out float3 sampleRadiance,
     out float3 primaryDiffuseDenoisingRadiance,
     out float3 primarySpecularDenoisingRadiance)
@@ -867,11 +871,17 @@ void TracePath(
     bool primarySurfaceHit = false;
     float previousBsdfPdf = 0.0f;
     uint previousWasDelta = 1u;
+    float rayConeWidth = 0.0f;
+    float rayConeSpread = primaryRayConeSpread;
 
     for (uint depth = 0u; depth <= g_maxBounce; ++depth)
     {
         SurfaceQueryPayload payload;
         ResetSurfaceQueryPayload(payload);
+        // hitT and roughness are unused before traversal. Carry the cone to
+        // any-hit/closest-hit without increasing the 64-byte payload.
+        payload.hitT = rayConeWidth;
+        payload.roughness = rayConeSpread;
         RecordRadianceRay(depth);
         TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
 
@@ -912,6 +922,7 @@ void TracePath(
         }
 
         RecordSurfaceHit();
+        rayConeWidth += rayConeSpread * payload.hitT;
         float3 normalColor = payload.normal * 0.5f + 0.5f;
         if (g_showNormalColor != 0u)
         {
@@ -1173,6 +1184,8 @@ void RunDisocclusionRepairRaygen()
 
     float aspectRatio = float(launchDim.x) / float(launchDim.y);
     float tanHalfFov = tan(c_verticalFovRadians * 0.5f);
+    float primaryRayConeSpread =
+        2.0f * tanHalfFov / max(float(launchDim.y), 1.0f);
     float3 cameraForward = normalize(g_cameraTarget - g_cameraPosition);
     float3 cameraRight = normalize(cross(c_cameraUp, cameraForward));
     float3 cameraUp = cross(cameraForward, cameraRight);
@@ -1210,6 +1223,7 @@ void RunDisocclusionRepairRaygen()
         TracePath(
             ray,
             subSampleIndex,
+            primaryRayConeSpread,
             repairRadiance,
             repairDiffuse,
             repairSpecular);
@@ -1344,6 +1358,8 @@ void RunRaygen()
     {
         float aspectRatio = float(launchDim.x) / float(launchDim.y);
         float tanHalfFov = tan(c_verticalFovRadians * 0.5f);
+        float primaryRayConeSpread =
+            2.0f * tanHalfFov / max(float(launchDim.y), 1.0f);
         float3 cameraForward = normalize(g_cameraTarget - g_cameraPosition);
         float3 cameraRight = normalize(cross(c_cameraUp, cameraForward));
         float3 cameraUp = cross(cameraForward, cameraRight);
@@ -1369,6 +1385,7 @@ void RunRaygen()
 
             TracePrimaryGuide(
                 guideRay,
+                primaryRayConeSpread,
                 previousPrimaryWorldPosition,
                 primaryDynamicInstance,
                 primaryGuideVisibleResidual,
@@ -1415,6 +1432,7 @@ void RunRaygen()
             TracePath(
                 ray,
                 subSampleIndex,
+                primaryRayConeSpread,
                 subSampleRadiance,
                 subSampleDiffuseRadiance,
                 subSampleSpecularRadiance);
@@ -1807,7 +1825,9 @@ void MyMissShader_ShadowRay(inout ShadowPayload payload)
 }
 
 bool PassesCurrentAlphaMask(
-    in BuiltInTriangleIntersectionAttributes attributes)
+    in BuiltInTriangleIntersectionAttributes attributes,
+    float rayConeWidthAtOrigin,
+    float rayConeSpread)
 {
     uint ignoredInstanceFlags;
     HitGeometryMetadata hitGeometry =
@@ -1830,6 +1850,8 @@ bool PassesCurrentAlphaMask(
         i1,
         i2,
         objectToWorldTransform,
+        rayConeWidthAtOrigin,
+        rayConeSpread,
         float3(0.0f, 0.0f, 0.0f),
         true);
     return PassesSceneAlphaMask(
@@ -1843,7 +1865,10 @@ void MyAnyHitShader_AlphaMask(
     inout SurfaceQueryPayload payload,
     in BuiltInTriangleIntersectionAttributes attributes)
 {
-    if (!PassesCurrentAlphaMask(attributes))
+    if (!PassesCurrentAlphaMask(
+        attributes,
+        payload.hitT,
+        payload.roughness))
         IgnoreHit();
 }
 
@@ -1853,6 +1878,8 @@ void MyClosestHitShader_SurfaceQuery(
     in BuiltInTriangleIntersectionAttributes attributes)
 {
     bool motionGuideQuery = payload.hit == 2u;
+    float rayConeWidthAtOrigin = payload.hitT;
+    float rayConeSpread = payload.roughness;
     uint instanceFlags;
     HitGeometryMetadata hitGeometry =
         GetHitGeometryMetadata(instanceFlags);
@@ -1882,6 +1909,8 @@ void MyClosestHitShader_SurfaceQuery(
         i1,
         i2,
         objectToWorldTransform,
+        rayConeWidthAtOrigin,
+        rayConeSpread,
         normal,
         false);
     if (IsPbrRenderingScene())
