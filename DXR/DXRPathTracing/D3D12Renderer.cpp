@@ -1590,7 +1590,8 @@ bool D3D12Renderer::OpenBenchmarkCsv()
         "profile,internal_scale,max_bounce,russian_roulette,lighting_mode,"
         "camera_linear_speed,"
         "camera_angular_speed,object_linear_speed,object_angular_speed,"
-        "primary_rays,shadow_rays,bounce_rays,average_path_length,"
+        "primary_rays,primary_guide_rays,shadow_rays,nee_shadow_rays,"
+        "history_validation_shadow_rays,bounce_rays,average_path_length,"
         "hit_count,miss_count,accumulated_samples,ray_depth_0,ray_depth_1,"
         "ray_depth_2,ray_depth_3,ray_depth_4,ray_depth_5,ray_depth_6,"
         "ray_depth_7,ray_depth_8\n");
@@ -1632,7 +1633,7 @@ void D3D12Renderer::RecordFrameMetrics(double cpuFrameMs)
         m_benchmarkCsv,
         "%llu,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,"
         "%.6f,%.6f,%.6f,%.6f,fixed,1.000000,%d,%d,%d,"
-        "%.6f,%.6f,%.6f,%.6f,%llu,%llu,%llu,"
+        "%.6f,%.6f,%.6f,%.6f,%llu,%llu,%llu,%llu,%llu,%llu,"
         "%.6f,%llu,%llu,%u",
         static_cast<unsigned long long>(m_benchmarkFramesWritten),
         m_cpuFrameMs,
@@ -1656,7 +1657,11 @@ void D3D12Renderer::RecordFrameMetrics(double cpuFrameMs)
         m_objectLinearSpeed,
         m_objectAngularSpeed,
         static_cast<unsigned long long>(statistics.GetPrimaryRayCount()),
+        static_cast<unsigned long long>(statistics.primaryGuideRays),
         static_cast<unsigned long long>(statistics.shadowRays),
+        static_cast<unsigned long long>(statistics.neeShadowRays),
+        static_cast<unsigned long long>(
+            statistics.historyValidationShadowRays),
         static_cast<unsigned long long>(statistics.GetBounceRayCount()),
         statistics.GetAveragePathLength(),
         static_cast<unsigned long long>(statistics.hitCount),
@@ -2791,10 +2796,16 @@ void D3D12Renderer::BuildImGuiFrame()
         const RayTracingManager::FrameStatistics& statistics =
             m_rayTracingManager->GetFrameStatistics();
         ImGui::Text(
-            "Rays primary/bounce/shadow: %llu / %llu / %llu",
+            "Rays path primary/guide/bounce: %llu / %llu / %llu",
             static_cast<unsigned long long>(statistics.GetPrimaryRayCount()),
-            static_cast<unsigned long long>(statistics.GetBounceRayCount()),
-            static_cast<unsigned long long>(statistics.shadowRays));
+            static_cast<unsigned long long>(statistics.primaryGuideRays),
+            static_cast<unsigned long long>(statistics.GetBounceRayCount()));
+        ImGui::Text(
+            "Shadow rays total/NEE/history: %llu / %llu / %llu",
+            static_cast<unsigned long long>(statistics.shadowRays),
+            static_cast<unsigned long long>(statistics.neeShadowRays),
+            static_cast<unsigned long long>(
+                statistics.historyValidationShadowRays));
         ImGui::Text(
             "Path avg/hit/miss: %.2f / %llu / %llu",
             statistics.GetAveragePathLength(),

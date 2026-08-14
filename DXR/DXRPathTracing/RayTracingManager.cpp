@@ -513,9 +513,14 @@ namespace
         c_directionalLightSrvIndex + 1;
     constexpr UINT c_atrousFilterChannelDiffuse = 0;
     constexpr UINT c_atrousFilterChannelSpecular = 1;
-    constexpr UINT c_statisticsShadowRayIndex =
+    constexpr UINT c_statisticsPrimaryGuideRayIndex =
         RayTracingManager::c_statisticsRayDepthCount;
-    constexpr UINT c_statisticsHitIndex = c_statisticsShadowRayIndex + 1;
+    constexpr UINT c_statisticsNeeShadowRayIndex =
+        c_statisticsPrimaryGuideRayIndex + 1;
+    constexpr UINT c_statisticsHistoryValidationShadowRayIndex =
+        c_statisticsNeeShadowRayIndex + 1;
+    constexpr UINT c_statisticsHitIndex =
+        c_statisticsHistoryValidationShadowRayIndex + 1;
     constexpr UINT c_statisticsMissIndex = c_statisticsHitIndex + 1;
     constexpr UINT c_statisticsCounterCount = c_statisticsMissIndex + 1;
     constexpr UINT c_cubeFaceCount = 6;
@@ -4262,7 +4267,15 @@ void RayTracingManager::ReadFrameStatistics()
 
     for (UINT depth = 0; depth < c_statisticsRayDepthCount; ++depth)
         m_frameStatistics.raysByDepth[depth] = counters[depth];
-    m_frameStatistics.shadowRays = counters[c_statisticsShadowRayIndex];
+    m_frameStatistics.primaryGuideRays =
+        counters[c_statisticsPrimaryGuideRayIndex];
+    m_frameStatistics.neeShadowRays =
+        counters[c_statisticsNeeShadowRayIndex];
+    m_frameStatistics.historyValidationShadowRays =
+        counters[c_statisticsHistoryValidationShadowRayIndex];
+    m_frameStatistics.shadowRays =
+        m_frameStatistics.neeShadowRays +
+        m_frameStatistics.historyValidationShadowRays;
     m_frameStatistics.hitCount = counters[c_statisticsHitIndex];
     m_frameStatistics.missCount = counters[c_statisticsMissIndex];
 

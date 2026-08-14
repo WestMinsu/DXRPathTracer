@@ -129,9 +129,11 @@ static const uint c_pbrParameterModeGlobal = 1u;
 static const uint c_pbrParameterModeFixedNoOverride = 2u;
 static const uint c_maxMaterialTextures = 256u;
 static const uint c_statisticsRayDepthCount = 9u;
-static const uint c_statisticsShadowRayIndex = 9u;
-static const uint c_statisticsHitIndex = 10u;
-static const uint c_statisticsMissIndex = 11u;
+static const uint c_statisticsPrimaryGuideRayIndex = 9u;
+static const uint c_statisticsNeeShadowRayIndex = 10u;
+static const uint c_statisticsHistoryValidationShadowRayIndex = 11u;
+static const uint c_statisticsHitIndex = 12u;
+static const uint c_statisticsMissIndex = 13u;
 static const uint c_russianRouletteStartBounce = 3u;
 static const uint c_instanceFlagDynamic = 1u;
 static const uint c_instanceFlagSkinned = 2u;
@@ -316,12 +318,39 @@ void RecordRadianceRay(uint depth)
     }
 }
 
-void RecordShadowRay()
+void RecordPrimaryGuideRay()
 {
     if (g_enableStatistics != 0)
     {
         uint ignored;
-        InterlockedAdd(g_statistics[c_statisticsShadowRayIndex], 1u, ignored);
+        InterlockedAdd(
+            g_statistics[c_statisticsPrimaryGuideRayIndex],
+            1u,
+            ignored);
+    }
+}
+
+void RecordNeeShadowRay()
+{
+    if (g_enableStatistics != 0)
+    {
+        uint ignored;
+        InterlockedAdd(
+            g_statistics[c_statisticsNeeShadowRayIndex],
+            1u,
+            ignored);
+    }
+}
+
+void RecordHistoryValidationShadowRay()
+{
+    if (g_enableStatistics != 0)
+    {
+        uint ignored;
+        InterlockedAdd(
+            g_statistics[c_statisticsHistoryValidationShadowRayIndex],
+            1u,
+            ignored);
     }
 }
 
@@ -677,7 +706,7 @@ bool SampleDirectAreaLight(
 
     ShadowPayload shadowPayload;
     shadowPayload.occluded = 1u;
-    RecordShadowRay();
+    RecordNeeShadowRay();
     TraceRay(
         g_scene,
         RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
@@ -737,7 +766,7 @@ bool SampleDirectionalLight(
 
     ShadowPayload shadowPayload;
     shadowPayload.occluded = 1u;
-    RecordShadowRay();
+    RecordNeeShadowRay();
     TraceRay(
         g_scene,
         RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
@@ -965,7 +994,7 @@ bool SampleDirectEnvironmentLight(
 
     ShadowPayload shadowPayload;
     shadowPayload.occluded = 1u;
-    RecordShadowRay();
+    RecordNeeShadowRay();
     TraceRay(
         g_scene,
         RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |

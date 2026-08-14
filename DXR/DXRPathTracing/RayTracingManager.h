@@ -37,7 +37,10 @@ public:
     struct FrameStatistics
     {
         std::array<UINT64, c_statisticsRayDepthCount> raysByDepth = {};
+        UINT64 primaryGuideRays = 0;
         UINT64 shadowRays = 0;
+        UINT64 neeShadowRays = 0;
+        UINT64 historyValidationShadowRays = 0;
         UINT64 hitCount = 0;
         UINT64 missCount = 0;
 

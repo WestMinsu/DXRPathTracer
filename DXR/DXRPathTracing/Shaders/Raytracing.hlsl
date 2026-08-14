@@ -772,7 +772,7 @@ float EvaluateDirectionalShadowGuide(
 
     ShadowPayload shadowPayload;
     shadowPayload.occluded = 1u;
-    RecordShadowRay();
+    RecordHistoryValidationShadowRay();
     TraceRay(
         g_scene,
         RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH |
@@ -803,6 +803,7 @@ void TracePrimaryGuide(
     // closest-hit can return the previous rigid-body position in that slot
     // without increasing the payload carried by every radiance bounce.
     payload.hit = DynamicObjectReprojectionEnabled() ? 2u : 0u;
+    RecordPrimaryGuideRay();
     TraceRay(g_scene, RAY_FLAG_NONE, 0xFF, 0, 0, 0, ray, payload);
     if (payload.hit == 0u)
     {
