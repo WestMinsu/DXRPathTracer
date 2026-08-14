@@ -398,8 +398,10 @@ uint CreateRandomSeed(
 
 uint NextRandom(inout uint seed)
 {
-    seed = seed * 1664525u + 1013904223u;
-    return seed;
+    seed = seed * 747796405u + 2891336453u;
+    uint word =
+        ((seed >> ((seed >> 28u) + 4u)) ^ seed) * 277803737u;
+    return (word >> 22u) ^ word;
 }
 
 float RandomFloat01(inout uint seed)
