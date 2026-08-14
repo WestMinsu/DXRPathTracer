@@ -1835,7 +1835,7 @@ bool PassesCurrentAlphaMask(
         objectToWorldTransform,
         worldNormal);
     return PassesSceneAlphaMask(
-        globalPrimitiveIndex,
+        material,
         texCoord,
         uvFootprint);
 }

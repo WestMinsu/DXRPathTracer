@@ -97,11 +97,10 @@ float EstimateTriangleUvFootprint(
 }
 
 bool PassesSceneAlphaMask(
-    uint primitiveIndex,
+    SceneMaterial material,
     float2 texCoord,
     float uvFootprint)
 {
-    SceneMaterial material = GetSceneMaterial(primitiveIndex);
     if (material.alphaCutoff < 0.0f)
     {
         return true;
