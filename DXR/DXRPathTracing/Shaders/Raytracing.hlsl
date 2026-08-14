@@ -712,6 +712,8 @@ float3 EvaluateGpuBrdfValidationSample(uint2 launchIndex, uint2 launchDim)
     float3 sampleDirection;
     float3 weightedBrdf;
     float samplePdf;
+    float3 ignoredDiffuseContribution;
+    float3 ignoredSpecularContribution;
     if (!SamplePbrBrdfWithMixtureSampling(
         material,
         normal,
@@ -719,7 +721,9 @@ float3 EvaluateGpuBrdfValidationSample(uint2 launchIndex, uint2 launchDim)
         seed,
         sampleDirection,
         weightedBrdf,
-        samplePdf))
+        samplePdf,
+        ignoredDiffuseContribution,
+        ignoredSpecularContribution))
     {
         return float3(0.0f, 0.0f, 0.0f);
     }
@@ -996,25 +1000,22 @@ void TracePath(
             if (IsPbrRenderingScene())
             {
                 float3 viewDirection = normalize(-ray.Direction);
-                float bsdfPdf = PbrBrdfSamplingPdf(
-                    material,
-                    payload.normal,
-                    viewDirection,
-                    directLightDirection);
-                float misWeight =
-                    g_lightingMode == c_lightingModeMis &&
-                    !directLightIsDelta
-                    ? PowerHeuristic(lightPdf, bsdfPdf)
-                    : 1.0f;
                 float3 diffuseBrdf;
                 float3 specularBrdf;
-                EvaluateBrdfComponents(
+                float bsdfPdf;
+                EvaluateBrdfComponentsAndPdf(
                     material,
                     payload.normal,
                     viewDirection,
                     directLightDirection,
                     diffuseBrdf,
-                    specularBrdf);
+                    specularBrdf,
+                    bsdfPdf);
+                float misWeight =
+                    g_lightingMode == c_lightingModeMis &&
+                    !directLightIsDelta
+                    ? PowerHeuristic(lightPdf, bsdfPdf)
+                    : 1.0f;
                 localDirectDiffuseLighting =
                     diffuseBrdf * radianceOverPdf * misWeight;
                 localDirectSpecularLighting =
@@ -1067,19 +1068,11 @@ void TracePath(
                 seed,
                 sampleDirection,
                 bounceWeight,
-                samplePdf))
+                samplePdf,
+                diffuseContribution,
+                specularContribution))
             {
                 break;
-            }
-            if (depth == 0u && TemporalLobeHistoryEnabled())
-            {
-                EvaluateBrdfComponents(
-                    material,
-                    payload.normal,
-                    viewDirection,
-                    sampleDirection,
-                    diffuseContribution,
-                    specularContribution);
             }
         }
         else

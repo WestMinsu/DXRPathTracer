@@ -12,31 +12,23 @@ float GgxAlpha(float roughness)
     return max(clampedRoughness * clampedRoughness, 0.001f);
 }
 
-float DistributionGGX(float3 normal, float3 halfVector, float roughness)
+float DistributionGGX(float nDotH, float alphaSquared)
 {
-    float alpha = GgxAlpha(roughness);
-    float alphaSquared = alpha * alpha;
-    float nDotH = saturate(dot(normal, halfVector));
     float nDotHSquared = nDotH * nDotH;
     float denominator = nDotHSquared * (alphaSquared - 1.0f) + 1.0f;
     return alphaSquared / (c_pi * denominator * denominator);
 }
 
 float GeometrySmithHeightCorrelatedGGX(
-    float3 normal,
-    float3 viewDirection,
-    float3 lightDirection,
-    float roughness)
+    float nDotV,
+    float nDotL,
+    float alphaSquared)
 {
-    float nDotV = saturate(dot(normal, viewDirection));
-    float nDotL = saturate(dot(normal, lightDirection));
     if (nDotV <= 0.0f || nDotL <= 0.0f)
     {
         return 0.0f;
     }
 
-    float alpha = GgxAlpha(roughness);
-    float alphaSquared = alpha * alpha;
     float smithV = nDotL * sqrt(max(
         nDotV * nDotV * (1.0f - alphaSquared) + alphaSquared,
         0.0f));
@@ -47,18 +39,14 @@ float GeometrySmithHeightCorrelatedGGX(
 }
 
 float GeometrySmithG1GGX(
-    float3 normal,
-    float3 direction,
-    float roughness)
+    float nDotDirection,
+    float alphaSquared)
 {
-    float nDotDirection = saturate(dot(normal, direction));
     if (nDotDirection <= 0.0f)
     {
         return 0.0f;
     }
 
-    float alpha = GgxAlpha(roughness);
-    float alphaSquared = alpha * alpha;
     float root = sqrt(max(
         nDotDirection * nDotDirection * (1.0f - alphaSquared) +
             alphaSquared,
@@ -72,16 +60,18 @@ float3 FresnelSchlick(float cosTheta, float3 f0)
     return f0 + (1.0f - f0) * pow(1.0f - saturate(cosTheta), 5.0f);
 }
 
-void EvaluateBrdfComponents(
+void EvaluateBrdfComponentsAndPdf(
     PbrMaterial material,
     float3 normal,
     float3 viewDirection,
     float3 lightDirection,
     out float3 diffuseContribution,
-    out float3 specularContribution)
+    out float3 specularContribution,
+    out float samplingPdf)
 {
     diffuseContribution = float3(0.0f, 0.0f, 0.0f);
     specularContribution = float3(0.0f, 0.0f, 0.0f);
+    samplingPdf = 0.0f;
     float nDotV = saturate(dot(normal, viewDirection));
     float nDotL = saturate(dot(normal, lightDirection));
     if (nDotV <= 0.0f || nDotL <= 0.0f)
@@ -91,18 +81,21 @@ void EvaluateBrdfComponents(
 
     float3 halfVectorSum = viewDirection + lightDirection;
     float halfVectorLengthSquared = dot(halfVectorSum, halfVectorSum);
-    float3 halfVector = halfVectorLengthSquared > 0.00000001f
+    bool hasValidHalfVector = halfVectorLengthSquared > 0.00000001f;
+    float3 halfVector = hasValidHalfVector
         ? halfVectorSum * rsqrt(halfVectorLengthSquared)
         : normal;
     float vDotH = saturate(dot(viewDirection, halfVector));
+    float nDotH = saturate(dot(normal, halfVector));
+    float alpha = GgxAlpha(material.roughness);
+    float alphaSquared = alpha * alpha;
 
     float3 f0 = lerp(float3(0.04f, 0.04f, 0.04f), material.baseColor, material.metallic);
-    float d = DistributionGGX(normal, halfVector, material.roughness);
+    float d = DistributionGGX(nDotH, alphaSquared);
     float g = GeometrySmithHeightCorrelatedGGX(
-        normal,
-        viewDirection,
-        lightDirection,
-        material.roughness);
+        nDotV,
+        nDotL,
+        alphaSquared);
     float3 f = FresnelSchlick(vDotH, f0);
 
     float3 specular = (d * g * f) / max(4.0f * nDotV * nDotL, 0.00000001f);
@@ -116,20 +109,29 @@ void EvaluateBrdfComponents(
     float3 diffuse = diffuseTransmission * (1.0f - material.metallic) * material.baseColor * c_invPi;
     diffuseContribution = diffuse * nDotL;
     specularContribution = specular * nDotL;
-}
 
-float3 EvaluateBrdf(PbrMaterial material, float3 normal, float3 viewDirection, float3 lightDirection)
-{
-    float3 diffuseContribution;
-    float3 specularContribution;
-    EvaluateBrdfComponents(
-        material,
-        normal,
-        viewDirection,
-        lightDirection,
-        diffuseContribution,
-        specularContribution);
-    return diffuseContribution + specularContribution;
+    // Preserve the original PDF validity rules. BRDF evaluation still uses
+    // the normal as a fallback for a degenerate half vector, while that
+    // direction has no valid sampling PDF.
+    if (!hasValidHalfVector || vDotH <= 0.0f || nDotH <= 0.0f)
+        return;
+
+    float visibleNormalPdf =
+        d *
+        GeometrySmithG1GGX(
+            nDotV,
+            alphaSquared) *
+        vDotH /
+        max(nDotV, 0.00000001f);
+    float specularPdf =
+        visibleNormalPdf /
+        max(4.0f * vDotH, 0.00000001f);
+    float diffusePdf = nDotL * c_invPi;
+    float specularProbability =
+        lerp(0.5f, 1.0f, saturate(material.metallic));
+    samplingPdf =
+        specularProbability * specularPdf +
+        (1.0f - specularProbability) * diffusePdf;
 }
 
 float3 ImportanceSampleGGXVisibleNormal(
@@ -201,56 +203,6 @@ float PbrSpecularSamplingProbability(PbrMaterial material)
     return lerp(0.5f, 1.0f, saturate(material.metallic));
 }
 
-float PbrBrdfSamplingPdf(
-    PbrMaterial material,
-    float3 normal,
-    float3 viewDirection,
-    float3 lightDirection)
-{
-    float nDotV = saturate(dot(normal, viewDirection));
-    float nDotL = saturate(dot(normal, lightDirection));
-    if (nDotV <= 0.0f || nDotL <= 0.0f)
-    {
-        return 0.0f;
-    }
-
-    float3 halfVectorSum = viewDirection + lightDirection;
-    float halfVectorLengthSquared = dot(halfVectorSum, halfVectorSum);
-    if (halfVectorLengthSquared <= 0.00000001f)
-    {
-        return 0.0f;
-    }
-
-    float3 halfVector =
-        halfVectorSum * rsqrt(halfVectorLengthSquared);
-    float vDotH = saturate(dot(viewDirection, halfVector));
-    float nDotH = saturate(dot(normal, halfVector));
-    if (vDotH <= 0.0f || nDotH <= 0.0f)
-    {
-        return 0.0f;
-    }
-
-    float visibleNormalPdf =
-        DistributionGGX(
-            normal,
-            halfVector,
-            material.roughness) *
-        GeometrySmithG1GGX(
-            normal,
-            viewDirection,
-            material.roughness) *
-        vDotH /
-        max(nDotV, 0.00000001f);
-    float specularPdf =
-        visibleNormalPdf /
-        max(4.0f * vDotH, 0.00000001f);
-    float diffusePdf = nDotL * c_invPi;
-    float specularProbability =
-        PbrSpecularSamplingProbability(material);
-    return specularProbability * specularPdf +
-        (1.0f - specularProbability) * diffusePdf;
-}
-
 bool SamplePbrBrdfWithMixtureSampling(
     PbrMaterial material,
     float3 normal,
@@ -258,11 +210,15 @@ bool SamplePbrBrdfWithMixtureSampling(
     inout uint seed,
     out float3 sampleDirection,
     out float3 weightedBrdf,
-    out float samplePdf)
+    out float samplePdf,
+    out float3 diffuseContribution,
+    out float3 specularContribution)
 {
     sampleDirection = normal;
     weightedBrdf = float3(0.0f, 0.0f, 0.0f);
     samplePdf = 0.0f;
+    diffuseContribution = float3(0.0f, 0.0f, 0.0f);
+    specularContribution = float3(0.0f, 0.0f, 0.0f);
     float specularProbability = PbrSpecularSamplingProbability(material);
     bool sampleSpecular = RandomFloat01(seed) < specularProbability;
 
@@ -293,21 +249,21 @@ bool SamplePbrBrdfWithMixtureSampling(
         return false;
     }
 
-    samplePdf = PbrBrdfSamplingPdf(
+    EvaluateBrdfComponentsAndPdf(
         material,
         normal,
         viewDirection,
-        sampleDirection);
+        sampleDirection,
+        diffuseContribution,
+        specularContribution,
+        samplePdf);
     if (samplePdf <= 0.0f)
     {
         return false;
     }
 
-    weightedBrdf = EvaluateBrdf(
-        material,
-        normal,
-        viewDirection,
-        sampleDirection) / samplePdf;
+    weightedBrdf =
+        (diffuseContribution + specularContribution) / samplePdf;
     return true;
 }
 
