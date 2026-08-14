@@ -605,18 +605,26 @@ bool SampleDirectAreaLight(
     }
 
     float lightSelectionSample = RandomFloat01(seed);
-    uint selectedIndex = g_emissiveTriangleCount - 1u;
-    for (uint lightIndex = 0u;
-         lightIndex < g_emissiveTriangleCount;
-         ++lightIndex)
+    uint lowerBound = 0u;
+    uint upperBound = g_emissiveTriangleCount;
+    [loop]
+    while (lowerBound < upperBound)
     {
+        uint middleIndex =
+            lowerBound + (upperBound - lowerBound) / 2u;
         if (lightSelectionSample <
-            g_emissiveTriangles[lightIndex].selectionCdf)
+            g_emissiveTriangles[middleIndex].selectionCdf)
         {
-            selectedIndex = lightIndex;
-            break;
+            upperBound = middleIndex;
+        }
+        else
+        {
+            lowerBound = middleIndex + 1u;
         }
     }
+    uint selectedIndex = min(
+        lowerBound,
+        g_emissiveTriangleCount - 1u);
 
     EmissiveTriangle light = g_emissiveTriangles[selectedIndex];
     if (light.area <= 0.0f || light.selectionPdf <= 0.0f)
