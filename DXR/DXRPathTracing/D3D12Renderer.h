@@ -291,6 +291,7 @@ private:
     bool InitializeImGui();
     void ShutdownImGui();
     void BuildImGuiFrame();
+    void EnforceReferenceModeSettings();
     bool SwitchPbrScenePreset(int preset);
     void RenderImGuiDrawData();
     void ReleaseRenderTargets();

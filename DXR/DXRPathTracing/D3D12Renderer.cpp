@@ -314,26 +314,27 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     m_rayTracingManager->SetDirectionalLightRuntimeSettings(
         m_enableDirectionalLight,
         m_directionalLightIntensityScale);
+    const bool referenceMode = m_enableAccumulation;
     m_rayTracingManager->SetTemporalReprojectionEnabled(
-        m_enableTemporalReprojection);
+        !referenceMode && m_enableTemporalReprojection);
     m_rayTracingManager->SetBestTapHistoryGatherEnabled(
-        m_enableBestTapHistoryGather);
+        !referenceMode && m_enableBestTapHistoryGather);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
-        m_enableDynamicObjectReprojection);
+        !referenceMode && m_enableDynamicObjectReprojection);
     m_rayTracingManager->SetStaticBackgroundHistoryFastPathEnabled(
-        m_enableStaticBackgroundHistoryFastPath);
+        !referenceMode && m_enableStaticBackgroundHistoryFastPath);
     m_rayTracingManager->SetDisocclusionRepairSettings(
-        m_enableDisocclusionRepair,
+        !referenceMode && m_enableDisocclusionRepair,
         static_cast<UINT>(m_disocclusionRepairSamplesPerPixel));
     m_rayTracingManager->SetDynamicShadowHistoryValidationEnabled(
-        m_enableDynamicShadowHistoryValidation);
+        !referenceMode && m_enableDynamicShadowHistoryValidation);
     m_rayTracingManager->SetSkinnedDeformationMotionEnabled(
-        m_enableSkinnedDeformationMotion);
+        !referenceMode && m_enableSkinnedDeformationMotion);
     m_rayTracingManager->SetCurrentFrameVisibleResidualEnabled(
-        m_useCurrentFrameVisibleResidual);
+        !referenceMode && m_useCurrentFrameVisibleResidual);
     m_rayTracingManager->SetTemporalColorClipEnabled(
-        m_enableTemporalColorClip);
-    m_rayTracingManager->SetAtrousEnabled(m_enableAtrous);
+        !referenceMode && m_enableTemporalColorClip);
+    m_rayTracingManager->SetAtrousEnabled(!referenceMode && m_enableAtrous);
     m_rayTracingManager->SetAtrousIterationCount(
         static_cast<UINT>(m_atrousIterations));
     m_rayTracingManager->SetAtrousSpecularIterationCount(
@@ -370,17 +371,17 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_enableAtrousLogLuminanceEdgeStop,
         m_atrousLogLuminanceSigma);
     m_rayTracingManager->SetTextureLodSettings(
-        m_enableTextureLod,
+        !referenceMode && m_enableTextureLod,
         m_textureLodBias,
-        m_enablePropagatedRayCone);
+        !referenceMode && m_enablePropagatedRayCone);
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
-        m_animateDynamicSphere);
+        !m_enableAccumulation && m_animateDynamicSphere);
     m_rayTracingManager->SetDynamicCubeAnimationEnabled(
-        m_animateDynamicCube);
+        !referenceMode && m_animateDynamicCube);
     m_rayTracingManager->SetBrainStemVisible(m_showBrainStem);
     m_rayTracingManager->SetMechDroneVisible(m_showMechDrone);
     m_rayTracingManager->SetSceneAnimationEnabled(
-        m_animateGltfScene);
+        !referenceMode && m_animateGltfScene);
     m_rayTracingManager->SetEnableStatistics(m_collectRayStatistics);
     if (!m_rayTracingManager->Initialize(m_hWnd, m_device.Get(), m_width, m_height))
         return false;
@@ -424,12 +425,14 @@ void D3D12Renderer::Render()
     }
     if (m_imguiVisible)
         BuildImGuiFrame();
+    EnforceReferenceModeSettings();
+    const bool referenceMode = m_enableAccumulation;
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
-        m_animateDynamicSphere);
+        !m_enableAccumulation && m_animateDynamicSphere);
     m_rayTracingManager->SetDynamicCubeAnimationEnabled(
-        m_animateDynamicCube);
+        !referenceMode && m_animateDynamicCube);
     m_rayTracingManager->SetSceneAnimationEnabled(
-        m_animateGltfScene);
+        !referenceMode && m_animateGltfScene);
     m_rayTracingManager->SetFrameDeltaSeconds(frameDeltaSeconds);
     m_rayTracingManager->SetShowNormalColor(m_showNormalColor);
     m_rayTracingManager->SetMaxBounce(static_cast<UINT>(m_maxBounce));
@@ -443,29 +446,29 @@ void D3D12Renderer::Render()
         m_enableDirectionalLight,
         m_directionalLightIntensityScale);
     m_rayTracingManager->SetTemporalReprojectionEnabled(
-        m_enableTemporalReprojection);
+        !referenceMode && m_enableTemporalReprojection);
     m_rayTracingManager->SetBestTapHistoryGatherEnabled(
-        m_enableBestTapHistoryGather);
+        !referenceMode && m_enableBestTapHistoryGather);
     m_rayTracingManager->SetDynamicObjectReprojectionEnabled(
-        m_enableDynamicObjectReprojection);
+        !referenceMode && m_enableDynamicObjectReprojection);
     m_rayTracingManager->SetStaticBackgroundHistoryFastPathEnabled(
-        m_enableStaticBackgroundHistoryFastPath);
+        !referenceMode && m_enableStaticBackgroundHistoryFastPath);
     m_rayTracingManager->SetDisocclusionRepairSettings(
-        m_enableDisocclusionRepair,
+        !referenceMode && m_enableDisocclusionRepair,
         static_cast<UINT>(m_disocclusionRepairSamplesPerPixel));
     m_rayTracingManager->SetDynamicShadowHistoryValidationEnabled(
-        m_enableDynamicShadowHistoryValidation);
+        !referenceMode && m_enableDynamicShadowHistoryValidation);
     m_rayTracingManager->SetSkinnedDeformationMotionEnabled(
-        m_enableSkinnedDeformationMotion);
+        !referenceMode && m_enableSkinnedDeformationMotion);
     m_rayTracingManager->SetCurrentFrameVisibleResidualEnabled(
-        m_useCurrentFrameVisibleResidual);
+        !referenceMode && m_useCurrentFrameVisibleResidual);
     m_rayTracingManager->SetTemporalColorClipEnabled(
-        m_enableTemporalColorClip);
+        !referenceMode && m_enableTemporalColorClip);
     m_rayTracingManager->SetTemporalDebugView(
-        m_enableTemporalReprojection
+        !referenceMode && m_enableTemporalReprojection
         ? static_cast<UINT>(m_temporalDebugView)
         : RayTracingManager::c_temporalDebugNone);
-    m_rayTracingManager->SetAtrousEnabled(m_enableAtrous);
+    m_rayTracingManager->SetAtrousEnabled(!referenceMode && m_enableAtrous);
     m_rayTracingManager->SetAtrousIterationCount(
         static_cast<UINT>(m_atrousIterations));
     m_rayTracingManager->SetAtrousSpecularIterationCount(
@@ -507,9 +510,9 @@ void D3D12Renderer::Render()
     m_rayTracingManager->SetPbrMaterial(m_pbrMetallic, m_pbrRoughness);
     m_rayTracingManager->SetPbrMaterialOverride(m_overridePbrMaterial);
     m_rayTracingManager->SetTextureLodSettings(
-        m_enableTextureLod,
+        !referenceMode && m_enableTextureLod,
         m_textureLodBias,
-        m_enablePropagatedRayCone);
+        !referenceMode && m_enablePropagatedRayCone);
     m_rayTracingManager->SetIblSettings(m_enableIbl, m_iblIntensity);
     m_rayTracingManager->SetValidationSeed(m_validationSeed);
     m_rayTracingManager->SetExposure(m_exposure);
@@ -1864,13 +1867,14 @@ bool D3D12Renderer::SwitchPbrScenePreset(int preset)
     m_pbrScenePreset = preset;
     m_dynamicSphereMaterialSelectionInitialized = false;
     m_animateGltfScene = true;
-    m_rayTracingManager->SetSceneAnimationEnabled(true);
+    m_rayTracingManager->SetSceneAnimationEnabled(
+        !m_enableAccumulation && m_animateGltfScene);
     m_rayTracingManager->SetBrainStemVisible(m_showBrainStem);
     m_rayTracingManager->SetMechDroneVisible(m_showMechDrone);
     m_rayTracingManager->SetDynamicSphereVisible(
         m_showDynamicSphere);
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
-        m_animateDynamicSphere);
+        !m_enableAccumulation && m_animateDynamicSphere);
     m_freeCameraInitialized = false;
     InitializeFreeCamera();
     m_hasLastRenderTime = false;
@@ -1887,6 +1891,35 @@ bool D3D12Renderer::SwitchPbrScenePreset(int preset)
     return true;
 }
 
+void D3D12Renderer::EnforceReferenceModeSettings()
+{
+    if (!m_enableAccumulation)
+        return;
+
+    m_animateDynamicSphere = false;
+    m_animateDynamicCube = false;
+    m_animateGltfScene = false;
+    m_enableTemporalReprojection = false;
+    m_enableBestTapHistoryGather = false;
+    m_enableDynamicObjectReprojection = false;
+    m_enableStaticBackgroundHistoryFastPath = false;
+    m_enableDisocclusionRepair = false;
+    m_enableDynamicShadowHistoryValidation = false;
+    m_enableSkinnedDeformationMotion = false;
+    m_useCurrentFrameVisibleResidual = false;
+    m_enableTemporalColorClip = false;
+    m_enableAtrous = false;
+    m_enableAtrousAdaptiveIterations = false;
+    m_enableAtrousAdaptiveEdgeWeights = false;
+    m_enableAtrousLogLuminanceEdgeStop = false;
+    m_enableTextureLod = false;
+    m_enablePropagatedRayCone = false;
+    m_temporalDebugView = static_cast<int>(
+        RayTracingManager::c_temporalDebugNone);
+    m_atrousDebugView = static_cast<int>(
+        RayTracingManager::c_atrousDebugNone);
+}
+
 void D3D12Renderer::BuildImGuiFrame()
 {
     if (!m_imguiInitialized || !m_imguiVisible)
@@ -1895,6 +1928,7 @@ void D3D12Renderer::BuildImGuiFrame()
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
+    EnforceReferenceModeSettings();
 
     ImGui::SetNextWindowPos(ImVec2(16.0f, 16.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
@@ -1966,6 +2000,7 @@ void D3D12Renderer::BuildImGuiFrame()
             m_rayTracingManager->HasSceneAnimation())
         {
             ImGui::SeparatorText("glTF node animation");
+            ImGui::BeginDisabled(m_enableAccumulation);
             if (ImGui::Checkbox(
                 "Play glTF animation",
                 &m_animateGltfScene))
@@ -1973,9 +2008,12 @@ void D3D12Renderer::BuildImGuiFrame()
                 m_rayTracingManager->SetSceneAnimationEnabled(
                     m_animateGltfScene);
             }
+            ImGui::EndDisabled();
             ImGui::SameLine();
+            ImGui::BeginDisabled(m_enableAccumulation);
             if (ImGui::Button("Restart animation"))
                 m_rayTracingManager->ResetSceneAnimation();
+            ImGui::EndDisabled();
             const UINT animationClipCount =
                 m_rayTracingManager->GetSceneAnimationClipCount();
             if (animationClipCount > 1u)
@@ -2079,7 +2117,9 @@ void D3D12Renderer::BuildImGuiFrame()
             m_rayTracingManager->SetPbrMaterial(m_pbrMetallic, m_pbrRoughness);
         }
 
+        ImGui::BeginDisabled(m_enableAccumulation);
         ImGui::Checkbox("Ray Cone Texture LOD", &m_enableTextureLod);
+        ImGui::EndDisabled();
         if (m_enableTextureLod)
         {
             ImGui::Checkbox(
@@ -2205,9 +2245,21 @@ void D3D12Renderer::BuildImGuiFrame()
     }
     ImGui::SliderFloat("Exposure (EV)", &m_exposure, -8.0f, 8.0f, "%.2f");
     ImGui::Checkbox("Show normal color", &m_showNormalColor);
-    ImGui::Checkbox(
-        "Progressive accumulation (reference)",
-        &m_enableAccumulation);
+    int renderMode = m_enableAccumulation ? 0 : 1;
+    if (ImGui::Combo("Mode", &renderMode, "Reference\0Realtime\0\0") &&
+        m_rayTracingManager)
+    {
+        m_enableAccumulation = renderMode == 0;
+        m_captureActive = false;
+        m_saveCurrentRequested = false;
+        m_captureStatus.clear();
+        m_rayTracingManager->SetEnableAccumulation(m_enableAccumulation);
+    }
+    EnforceReferenceModeSettings();
+    ImGui::TextDisabled(
+        m_enableAccumulation
+            ? "Reference: static scene; accumulation on, temporal/motion/LOD/A-Trous off."
+            : "Realtime: no cross-frame accumulation; temporal and motion settings are configurable.");
     ImGui::SliderInt("Max Bounce", &m_maxBounce, 1, 8);
     ImGui::SliderInt("Samples Per Pixel / Frame", &m_samplesPerPixel, 1, 8);
     const char* lightingModeNames[] =
@@ -2238,6 +2290,7 @@ void D3D12Renderer::BuildImGuiFrame()
             m_enableRussianRoulette);
     }
     ImGui::SeparatorText("Denoising");
+    ImGui::BeginDisabled(m_enableAccumulation);
     ImGui::Checkbox(
         "Temporal Reprojection",
         &m_enableTemporalReprojection);
@@ -2376,7 +2429,10 @@ void D3D12Renderer::BuildImGuiFrame()
             "Static reference views keep accumulating when progressive mode is enabled.");
     }
 
+    ImGui::EndDisabled();
+    ImGui::BeginDisabled(m_enableAccumulation);
     ImGui::Checkbox("A-Trous Filter", &m_enableAtrous);
+    ImGui::EndDisabled();
     if (m_enableAtrous)
     {
         ImGui::Checkbox(
@@ -2608,6 +2664,7 @@ void D3D12Renderer::BuildImGuiFrame()
             m_rayTracingManager->SetDynamicSphereVisible(
                 m_showDynamicSphere);
         }
+        ImGui::BeginDisabled(m_enableAccumulation);
         if (m_showDynamicSphere &&
             ImGui::Checkbox(
                 "Animate test sphere",
@@ -2617,6 +2674,7 @@ void D3D12Renderer::BuildImGuiFrame()
                 m_animateDynamicSphere);
             m_rayTracingManager->ResetDynamicSphereTimeline();
         }
+        ImGui::EndDisabled();
         if (ImGui::Checkbox(
             "Show test cube",
             &m_showDynamicCube))
@@ -2624,6 +2682,7 @@ void D3D12Renderer::BuildImGuiFrame()
             m_rayTracingManager->SetDynamicCubeVisible(
                 m_showDynamicCube);
         }
+        ImGui::BeginDisabled(m_enableAccumulation);
         if (m_showDynamicCube &&
             ImGui::Checkbox(
                 "Animate test cube",
@@ -2633,6 +2692,7 @@ void D3D12Renderer::BuildImGuiFrame()
                 m_animateDynamicCube);
             m_rayTracingManager->ResetDynamicSphereTimeline();
         }
+        ImGui::EndDisabled();
         ImGui::TextDisabled(
             "Sphere: translation + rolling. Cube: rotation + short orbit.");
         ImGui::TextDisabled(
@@ -2715,6 +2775,7 @@ void D3D12Renderer::BuildImGuiFrame()
         }
         if (m_showDynamicSphere)
         {
+            ImGui::BeginDisabled(m_enableAccumulation);
             if (ImGui::Checkbox(
                 "Animate rolling sphere",
                 &m_animateDynamicSphere))
@@ -2723,6 +2784,7 @@ void D3D12Renderer::BuildImGuiFrame()
                     m_animateDynamicSphere);
                 m_rayTracingManager->ResetDynamicSphereTimeline();
             }
+            ImGui::EndDisabled();
         }
     }
     ImGui::SeparatorText("Camera controls and recording");
