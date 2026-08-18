@@ -253,7 +253,10 @@ struct SceneAreaLight
 SceneData CreateCornellBoxSceneData();
 SceneData CreateIndirectBounceStressSceneData();
 SceneData CreatePbrGgxSceneData();
-SceneData CreateRollingMetalSphereSceneData(float radius);
+SceneData CreateRollingMetalSphereSceneData(
+    float radius,
+    float metallic = 1.0f,
+    float roughness = 0.25f);
 SceneData CreateDynamicTransformTestRoomSceneData();
 SceneData CreateDynamicTransformTestSphereSceneData(
     float radius,

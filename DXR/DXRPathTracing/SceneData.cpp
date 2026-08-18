@@ -1162,22 +1162,29 @@ SceneData CreatePbrGgxSceneData()
     return scene;
 }
 
-SceneData CreateRollingMetalSphereSceneData(float radius)
+SceneData CreateRollingMetalSphereSceneData(
+    float radius,
+    float metallic,
+    float roughness)
 {
     SceneData scene;
     const float safeRadius = (std::max)(radius, 0.001f);
+    const float safeMetallic =
+        metallic < 0.0f ? 0.0f : (metallic > 1.0f ? 1.0f : metallic);
+    const float safeRoughness =
+        roughness < 0.03f ? 0.03f : (roughness > 1.0f ? 1.0f : roughness);
     scene.materials =
     {
         MakeMaterial(
             MakeFloat3(1.0f, 0.766f, 0.336f),
-            1.0f,
-            0.25f,
+            safeMetallic,
+            safeRoughness,
             MakeFloat3(0.0f, 0.0f, 0.0f),
             c_pbrParameterModeFixedNoOverride),
         MakeMaterial(
             MakeFloat3(0.06f, 0.07f, 0.08f),
-            1.0f,
-            0.58f,
+            safeMetallic,
+            safeRoughness,
             MakeFloat3(0.0f, 0.0f, 0.0f),
             c_pbrParameterModeFixedNoOverride)
     };

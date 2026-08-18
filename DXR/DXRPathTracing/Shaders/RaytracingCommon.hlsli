@@ -624,31 +624,42 @@ float EvaluateAreaLightPdf(
         return 0.0f;
     }
 
-    for (uint lightIndex = 0u;
-         lightIndex < g_emissiveTriangleCount;
-         ++lightIndex)
+    uint lowerBound = 0u;
+    uint upperBound = g_emissiveTriangleCount;
+    [loop]
+    while (lowerBound < upperBound)
     {
-        EmissiveTriangle light = g_emissiveTriangles[lightIndex];
-        if (light.primitiveIndex != primitiveIndex)
+        uint middleIndex =
+            lowerBound + (upperBound - lowerBound) / 2u;
+        if (g_emissiveTriangles[middleIndex].primitiveIndex < primitiveIndex)
         {
-            continue;
+            lowerBound = middleIndex + 1u;
         }
-
-        float3 lightNormal = normalize(cross(light.edge1, light.edge2));
-        float lightCosine = saturate(dot(lightNormal, -lightDirection));
-        if (light.area <= 0.0f ||
-            light.selectionPdf <= 0.0f ||
-            lightCosine <= 0.0f)
+        else
         {
-            return 0.0f;
+            upperBound = middleIndex;
         }
-
-        float areaPdf = light.selectionPdf / light.area;
-        return areaEmitterPdf * areaPdf * distanceSquared /
-            max(lightCosine, 0.000001f);
     }
 
-    return 0.0f;
+    if (lowerBound >= g_emissiveTriangleCount)
+        return 0.0f;
+
+    EmissiveTriangle light = g_emissiveTriangles[lowerBound];
+    if (light.primitiveIndex != primitiveIndex)
+        return 0.0f;
+
+    float3 lightNormal = normalize(cross(light.edge1, light.edge2));
+    float lightCosine = saturate(dot(lightNormal, -lightDirection));
+    if (light.area <= 0.0f ||
+        light.selectionPdf <= 0.0f ||
+        lightCosine <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    float areaPdf = light.selectionPdf / light.area;
+    return areaEmitterPdf * areaPdf * distanceSquared /
+        max(lightCosine, 0.000001f);
 }
 
 bool SampleDirectAreaLight(

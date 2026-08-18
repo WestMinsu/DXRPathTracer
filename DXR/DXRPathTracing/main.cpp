@@ -57,7 +57,7 @@ namespace
         UINT lightingMode = RayTracingManager::c_lightingModeMis;
         bool enableIbl = true;
         bool enableDirectionalLight = true;
-        float iblIntensity = 1.0f;
+        float iblIntensity = 1.5f;
         UINT validationSeed = 0;
         bool headless = false;
         bool composeModelRoom = false;
@@ -683,6 +683,12 @@ namespace
                     ResolveBundledInputPath(
                         L"Config\\sponza_camera_path.json");
             }
+        }
+        if (gOptions.sponzaLightConfigPath.empty())
+        {
+            gOptions.sponzaLightConfigPath =
+                ResolveBundledInputPath(
+                    L"Config\\sponza_lights.json");
         }
         if (gOptions.benchmark && !gOptions.vsyncSpecified)
             gOptions.vsync = false;

@@ -26,6 +26,8 @@
 namespace
 {
     using Matrix4 = std::array<float, 16>;
+    constexpr wchar_t c_mechDroneScenePath[] =
+        L"Assets/NVIDIA-RTX/RTXPT-Assets/Models/mech_drone/mech_drone.gltf";
 
     struct NodeAnimationPose
     {
@@ -81,7 +83,15 @@ namespace
             a00 * (a11 * a22 - a12 * a21) -
             a01 * (a10 * a22 - a12 * a20) +
             a02 * (a10 * a21 - a11 * a20);
-        if (std::abs(determinant) <= 1.0e-12f)
+        const float maxLinearTerm = (std::max)({
+            std::abs(a00), std::abs(a01), std::abs(a02),
+            std::abs(a10), std::abs(a11), std::abs(a12),
+            std::abs(a20), std::abs(a21), std::abs(a22) });
+        const float determinantEpsilon = (std::max)(
+            1.0e-20f,
+            1.0e-12f * maxLinearTerm * maxLinearTerm * maxLinearTerm);
+        if (!std::isfinite(determinant) ||
+            std::abs(determinant) <= determinantEpsilon)
             return false;
 
         const float inverseDeterminant = 1.0f / determinant;
@@ -221,6 +231,26 @@ namespace
             pose.translation[2],
             1.0f
         };
+    }
+
+    float LoopAnimationSampleTime(
+        const SceneAnimationSampler& sampler,
+        float time)
+    {
+        if (sampler.inputTimes.size() < 2u ||
+            time <= sampler.inputTimes.front())
+        {
+            return time;
+        }
+        const float startTime = sampler.inputTimes.front();
+        const float endTime = sampler.inputTimes.back();
+        const float duration = endTime - startTime;
+        if (duration <= 1.0e-6f || !std::isfinite(duration))
+            return time;
+        float wrappedTime = std::fmod(time - startTime, duration);
+        if (wrappedTime < 0.0f)
+            wrappedTime += duration;
+        return startTime + wrappedTime;
     }
 
     bool SampleAnimationSampler(
@@ -2382,6 +2412,24 @@ void RayTracingManager::SetDynamicCubeVisible(bool visible)
     ResetAccumulation();
 }
 
+void RayTracingManager::SetBrainStemVisible(bool visible)
+{
+    if (m_brainStemVisible == visible)
+        return;
+    m_brainStemVisible = visible;
+    m_importedSceneVisibilityDirty = true;
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetMechDroneVisible(bool visible)
+{
+    if (m_mechDroneVisible == visible)
+        return;
+    m_mechDroneVisible = visible;
+    m_importedSceneVisibilityDirty = true;
+    ResetAccumulation();
+}
+
 void RayTracingManager::SetDynamicTestSphereMaterialPreset(UINT preset)
 {
     const UINT clampedPreset = preset % 4u;
@@ -2390,6 +2438,35 @@ void RayTracingManager::SetDynamicTestSphereMaterialPreset(UINT preset)
     m_dynamicTestSphereMaterialPreset = clampedPreset;
     if (m_device && m_sceneType == c_sceneDynamicTransformTest)
         CreateAccelerationStructures();
+    ResetAccumulation();
+}
+
+void RayTracingManager::SetDynamicSphereMaterial(
+    float metallic,
+    float roughness)
+{
+    const float clampedMetallic =
+        metallic < 0.0f ? 0.0f : (metallic > 1.0f ? 1.0f : metallic);
+    const float clampedRoughness =
+        roughness < 0.03f
+            ? 0.03f
+            : (roughness > 1.0f ? 1.0f : roughness);
+    if (std::abs(m_dynamicSphereMetallic - clampedMetallic) <= 1.0e-6f &&
+        std::abs(m_dynamicSphereRoughness - clampedRoughness) <= 1.0e-6f)
+    {
+        return;
+    }
+    m_dynamicSphereMetallic = clampedMetallic;
+    m_dynamicSphereRoughness = clampedRoughness;
+    for (SceneMaterial& material : m_dynamicSphereMaterialData)
+    {
+        material.metallic = clampedMetallic;
+        material.roughness = clampedRoughness;
+    }
+    // The sphere geometry and instance transform are unchanged. Patch only
+    // its two material records so changing the UI selection keeps the camera.
+    if (m_device && m_sponzaLite && m_hasDynamicSphere)
+        UpdateDynamicSphereMaterialBuffer();
     ResetAccumulation();
 }
 
@@ -2538,6 +2615,20 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
         }
         for (const ScenePrimitiveRange& primitive : source.primitives)
             instance.primitiveOffsets.push_back(primitive.primitiveOffset);
+        if (m_brainStemNodeStart != c_invalidSceneNodeIndex &&
+            source.nodeIndex >= m_brainStemNodeStart &&
+            source.nodeIndex < m_brainStemNodeEnd)
+        {
+            instance.visibilityGroup =
+                ImportedSceneVisibilityGroup::BrainStem;
+        }
+        else if (m_mechDroneNodeStart != c_invalidSceneNodeIndex &&
+                 source.nodeIndex >= m_mechDroneNodeStart &&
+                 source.nodeIndex < m_mechDroneNodeEnd)
+        {
+            instance.visibilityGroup =
+                ImportedSceneVisibilityGroup::MechDrone;
+        }
         m_importedMeshInstances.push_back(std::move(instance));
     }
     m_useImportedMeshInstances = !m_importedMeshInstances.empty();
@@ -2560,11 +2651,11 @@ bool RayTracingManager::ConfigureImportedMeshInstances(
             {
                 if (channel.targetPath == SceneAnimationPath::Weights)
                     continue;
-                if (channel.targetNodeIndex >= scene.nodes.size() ||
-                    scene.nodes[channel.targetNodeIndex].hasMatrix)
-                {
+                // EvaluateImportedSceneAnimation preserves an unanimated
+                // matrix transform and composes TRS when a channel targets
+                // the node, so matrix nodes are valid imported animation data.
+                if (channel.targetNodeIndex >= scene.nodes.size())
                     return false;
-                }
                 m_hasSceneAnimation = true;
             }
         }
@@ -2967,6 +3058,123 @@ namespace
             std::make_move_iterator(source.animations.end()));
         return destination.IsValid();
     }
+
+    bool MergeSceneAnimations(SceneData& scene)
+    {
+        if (scene.animations.size() < 2u)
+            return true;
+
+        SceneAnimation merged = std::move(scene.animations.front());
+        const std::size_t maxSamplerCount =
+            static_cast<std::size_t>(
+                (std::numeric_limits<std::uint32_t>::max)());
+        for (std::size_t clipIndex = 1u;
+             clipIndex < scene.animations.size();
+             ++clipIndex)
+        {
+            SceneAnimation& clip = scene.animations[clipIndex];
+            if (merged.samplers.size() > maxSamplerCount ||
+                clip.samplers.size() >
+                    maxSamplerCount - merged.samplers.size())
+            {
+                return false;
+            }
+            for (const SceneAnimationChannel& channel : clip.channels)
+            {
+                if (channel.samplerIndex >= clip.samplers.size())
+                    return false;
+            }
+
+            const std::uint32_t samplerOffset = static_cast<std::uint32_t>(
+                merged.samplers.size());
+            for (SceneAnimationSampler& sampler : clip.samplers)
+                merged.samplers.push_back(std::move(sampler));
+            for (SceneAnimationChannel channel : clip.channels)
+            {
+                if (channel.samplerIndex >
+                    (std::numeric_limits<std::uint32_t>::max)() -
+                        samplerOffset)
+                {
+                    return false;
+                }
+                channel.samplerIndex += samplerOffset;
+                merged.channels.push_back(channel);
+            }
+
+            merged.startTime = (std::min)(merged.startTime, clip.startTime);
+            merged.endTime = (std::max)(merged.endTime, clip.endTime);
+        }
+
+        scene.animations.clear();
+       scene.animations.push_back(std::move(merged));
+        return true;
+    }
+
+    bool AddMechDroneBodyAnimation(SceneData& scene)
+    {
+        if (scene.animations.empty())
+            return false;
+        std::uint32_t bodyNodeIndex = c_invalidSceneNodeIndex;
+        for (std::size_t nodeIndex = 0u;
+             nodeIndex < scene.nodes.size();
+             ++nodeIndex)
+        {
+            if (nodeIndex == 4u)
+            {
+                bodyNodeIndex = static_cast<std::uint32_t>(nodeIndex);
+                break;
+            }
+        }
+        if (bodyNodeIndex == c_invalidSceneNodeIndex)
+            return false;
+
+        SceneAnimation& animation = scene.animations.front();
+        if (!std::isfinite(animation.startTime) ||
+            !std::isfinite(animation.endTime) ||
+            animation.endTime <= animation.startTime)
+        {
+            return false;
+        }
+        const float startTime = animation.startTime;
+        const float endTime = animation.endTime;
+        const float middleTime = (startTime + endTime) * 0.5f;
+        SceneAnimationSampler translationSampler;
+        translationSampler.outputComponentCount = 3u;
+        translationSampler.inputTimes =
+            { startTime, middleTime, endTime };
+        translationSampler.outputValues =
+            { 0.0f, 0.0f, 0.0f,
+              0.0f, 24.0f, 0.0f,
+              0.0f, 0.0f, 0.0f };
+        const std::uint32_t translationSamplerIndex = static_cast<std::uint32_t>(
+            animation.samplers.size());
+        animation.samplers.push_back(std::move(translationSampler));
+
+        SceneAnimationChannel translationChannel;
+        translationChannel.samplerIndex = translationSamplerIndex;
+        translationChannel.targetNodeIndex = bodyNodeIndex;
+        translationChannel.targetPath = SceneAnimationPath::Translation;
+        animation.channels.push_back(translationChannel);
+
+        SceneAnimationSampler rotationSampler;
+        rotationSampler.outputComponentCount = 4u;
+        rotationSampler.inputTimes =
+            { startTime, middleTime, endTime };
+        rotationSampler.outputValues =
+            { 0.0f, -0.149438f, 0.0f, 0.988771f,
+              0.0f,  0.149438f, 0.0f, 0.988771f,
+              0.0f, -0.149438f, 0.0f, 0.988771f };
+        const std::uint32_t rotationSamplerIndex = static_cast<std::uint32_t>(
+            animation.samplers.size());
+        animation.samplers.push_back(std::move(rotationSampler));
+
+        SceneAnimationChannel rotationChannel;
+        rotationChannel.samplerIndex = rotationSamplerIndex;
+        rotationChannel.targetNodeIndex = bodyNodeIndex;
+        rotationChannel.targetPath = SceneAnimationPath::Rotation;
+        animation.channels.push_back(rotationChannel);
+        return true;
+    }
 }
 
 bool RayTracingManager::ConfigureSceneAnimation(const SceneData& scene)
@@ -3089,7 +3297,12 @@ bool RayTracingManager::EvaluateImportedSceneAnimation(double elapsedSeconds)
     float sampleTime = 0.0f;
     if (m_hasSceneAnimation)
     {
-        sampleTime = m_sceneAnimationClip.startTime;
+        // Keep the evaluation clock monotonic. Each sampler is looped
+        // independently below, so wrapping the merged clip here would
+        // restart shorter overlay animations when a longer clip ends.
+        sampleTime = m_sceneAnimationClip.startTime +
+            static_cast<float>(elapsedSeconds);
+        m_sceneAnimationCurrentTime = 0.0f;
         if (m_sceneAnimationDuration > 1.0e-6f)
         {
             double loopTime = std::fmod(
@@ -3097,10 +3310,8 @@ bool RayTracingManager::EvaluateImportedSceneAnimation(double elapsedSeconds)
                 static_cast<double>(m_sceneAnimationDuration));
             if (loopTime < 0.0)
                 loopTime += m_sceneAnimationDuration;
-            sampleTime += static_cast<float>(loopTime);
+            m_sceneAnimationCurrentTime = static_cast<float>(loopTime);
         }
-        m_sceneAnimationCurrentTime =
-            sampleTime - m_sceneAnimationClip.startTime;
     }
 
     std::vector<NodeAnimationPose> poses(m_sceneAnimationNodes.size());
@@ -3122,14 +3333,18 @@ bool RayTracingManager::EvaluateImportedSceneAnimation(double elapsedSeconds)
         {
             if (channel.targetPath == SceneAnimationPath::Weights)
                 continue;
-            if (channel.targetNodeIndex >= poses.size() ||
-                channel.samplerIndex >= m_sceneAnimationClip.samplers.size())
-                return false;
-            float value[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-            if (!SampleAnimationSampler(
-                    m_sceneAnimationClip.samplers[channel.samplerIndex],
-                    channel.targetPath, sampleTime, value))
-                return false;
+           if (channel.targetNodeIndex >= poses.size() ||
+               channel.samplerIndex >= m_sceneAnimationClip.samplers.size())
+               return false;
+           float value[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+            const SceneAnimationSampler& sampler =
+                m_sceneAnimationClip.samplers[channel.samplerIndex];
+           if (!SampleAnimationSampler(
+                    sampler,
+                    channel.targetPath,
+                    LoopAnimationSampleTime(sampler, sampleTime),
+                    value))
+               return false;
             NodeAnimationPose& pose = poses[channel.targetNodeIndex];
             pose.animatedTrs = true;
             if (channel.targetPath == SceneAnimationPath::Translation)
@@ -5267,11 +5482,19 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     m_directionalLightRadiance = { 0.0f, 0.0f, 0.0f };
     m_hasDynamicSphere = false;
     m_hasDynamicCube = false;
+    m_importedSceneVisibilityDirty = false;
+    m_brainStemNodeStart = c_invalidSceneNodeIndex;
+    m_brainStemNodeEnd = c_invalidSceneNodeIndex;
+    m_mechDroneNodeStart = c_invalidSceneNodeIndex;
+    m_mechDroneNodeEnd = c_invalidSceneNodeIndex;
     m_dynamicSceneFrameIndex = 0;
     m_staticGeometry = {};
     m_staticAlphaGeometry = {};
     m_dynamicSphereGeometry = {};
     m_dynamicCubeGeometry = {};
+    m_dynamicSphereMaterialOffset = 0u;
+    m_dynamicSphereMaterialCount = 0u;
+    m_dynamicSphereMaterialData = {};
     m_hasStaticAlphaGeometry = false;
     m_skinBindPoseVertexBuffer.Reset();
     m_skinInfluenceBuffer.Reset();
@@ -5311,6 +5534,13 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             return false;
         }
         hasModelBounds = true;
+        if (m_standaloneBrainStemSceneActive &&
+            m_overlaySceneFilePath.empty())
+        {
+            m_brainStemNodeStart = 0u;
+            m_brainStemNodeEnd = static_cast<std::uint32_t>(
+                scene.nodes.size());
+        }
         if (m_sponzaLite)
         {
             std::vector<SceneAreaLight> lights;
@@ -5337,7 +5567,7 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
                     L"Failed to append the Sponza area-light geometry.");
                 return false;
             }
-            if (!lights.empty() && !m_overlaySceneFilePath.empty())
+            if (!lights.empty())
             {
                 const auto validUintRange = [](
                     std::size_t offset,
@@ -5388,8 +5618,26 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
         }
         if (!m_overlaySceneFilePath.empty())
         {
+            float overlayGroundHeight = modelBounds.minimum[1];
+            const float modelExtentY =
+                modelBounds.maximum[1] - modelBounds.minimum[1];
+            const float maximumGroundHeight =
+                modelBounds.minimum[1] + modelExtentY * 0.20f;
+            float sampledGroundHeight = 0.0f;
+            if (FindWalkableSurfaceHeight(
+                    scene,
+                    0.0f,
+                    0.0f,
+                    maximumGroundHeight,
+                    sampledGroundHeight))
+            {
+                overlayGroundHeight = sampledGroundHeight;
+            }
             SceneData overlayScene;
+            const std::uint32_t overlayNodeStart =
+                static_cast<std::uint32_t>(scene.nodes.size());
             GltfLoadOptions overlayLoadOptions;
+            overlayLoadOptions.skipNonOpaquePrimitives = true;
             GltfLoadReport overlayLoadReport;
             if (!LoadGltfSceneData(
                     m_overlaySceneFilePath,
@@ -5404,8 +5652,18 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
                     L"\nReason: " + errorMessage);
                 return false;
             }
-            constexpr std::array<float, 3> overlayPosition =
-                { 0.0f, 1.0f, 0.0f };
+            SceneBounds overlayBounds = {};
+            if (!ComputeSceneBounds(overlayScene, overlayBounds))
+            {
+                ReportMessage(L"Overlay scene bounds are invalid.");
+                return false;
+            }
+            const std::array<float, 3> overlayPosition =
+            {
+                0.0f,
+                overlayGroundHeight - overlayBounds.minimum[1],
+                0.0f
+            };
             constexpr float overlayScale = 1.0f;
             if (!ApplyUniformScenePlacement(
                     overlayScene,
@@ -5417,6 +5675,66 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
                     L"Failed to place and merge the animated overlay "
                     L"scene into Sponza.");
                 return false;
+            }
+
+            if (m_sponzaLite &&
+                m_overlaySceneFilePath.find(L"BrainStem") !=
+                    std::wstring::npos)
+            {
+                m_brainStemNodeStart = overlayNodeStart;
+                m_brainStemNodeEnd = static_cast<std::uint32_t>(
+                    scene.nodes.size());
+                const std::uint32_t mechDroneNodeStart =
+                    static_cast<std::uint32_t>(scene.nodes.size());
+                SceneData mechDroneScene;
+                GltfLoadOptions mechDroneLoadOptions;
+                mechDroneLoadOptions.skipNonOpaquePrimitives = true;
+                GltfLoadReport mechDroneLoadReport;
+                if (!LoadGltfSceneData(
+                        c_mechDroneScenePath,
+                        mechDroneScene,
+                        errorMessage,
+                        mechDroneLoadOptions,
+                        &mechDroneLoadReport))
+                {
+                    ReportMessage(
+                        L"Mech drone glTF scene load failed: " +
+                        errorMessage);
+                    return false;
+                }
+                if (!AddMechDroneBodyAnimation(mechDroneScene))
+                    return false;
+                SceneBounds mechDroneBounds = {};
+                if (!ComputeSceneBounds(mechDroneScene, mechDroneBounds))
+                {
+                    ReportMessage(L"Mech drone scene bounds are invalid.");
+                    return false;
+                }
+                // Preserve the asset clip so it can play alongside BrainStem.
+                constexpr float mechDroneScale = 3.0f;
+                constexpr float mechDroneHoverHeight = 0.75f;
+                // Keep the drone beside BrainStem while sharing its Z plane.
+                const std::array<float, 3> mechDronePosition =
+                {
+                    2.5f,
+                    overlayGroundHeight + mechDroneHoverHeight -
+                        mechDroneBounds.minimum[1] * mechDroneScale,
+                    0.0f
+                };
+                if (!ApplyUniformScenePlacement(
+                        mechDroneScene,
+                        mechDronePosition,
+                        mechDroneScale) ||
+                    !AppendSceneData(scene, std::move(mechDroneScene)) ||
+                    !MergeSceneAnimations(scene))
+                {
+                    ReportMessage(
+                        L"Failed to place and merge the mech drone into Sponza.");
+                    return false;
+                }
+                m_mechDroneNodeStart = mechDroneNodeStart;
+                m_mechDroneNodeEnd = static_cast<std::uint32_t>(
+                    scene.nodes.size());
             }
         }
         if ((!m_composeModelRoom && !m_sponzaLite) ||
@@ -5580,8 +5898,10 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             m_dynamicSphereTrackCenterX -
             m_dynamicSphereMotionAmplitude;
         m_dynamicSphereRollRadians = 0.0f;
-        SceneData sphere =
-            CreateRollingMetalSphereSceneData(m_dynamicSphereRadius);
+        SceneData sphere = CreateRollingMetalSphereSceneData(
+            m_dynamicSphereRadius,
+            m_dynamicSphereMetallic,
+            m_dynamicSphereRoughness);
         if (!sphere.IsValid())
         {
             ReportMessage(L"Generated rolling metal sphere data is invalid.");
@@ -5600,6 +5920,15 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             static_cast<UINT>(scene.primitiveMaterialIndices.size());
         const std::uint32_t materialOffset =
             static_cast<std::uint32_t>(scene.materials.size());
+        if (sphere.materials.size() < m_dynamicSphereMaterialData.size())
+            return false;
+        m_dynamicSphereMaterialOffset = materialOffset;
+        m_dynamicSphereMaterialCount =
+            static_cast<UINT>(m_dynamicSphereMaterialData.size());
+        std::copy_n(
+            sphere.materials.begin(),
+            m_dynamicSphereMaterialData.size(),
+            m_dynamicSphereMaterialData.begin());
 
         scene.vertices.insert(
             scene.vertices.end(),
@@ -6562,11 +6891,20 @@ UINT RayTracingManager::PopulateStaticInstanceDescriptors(
         if (!blas.accelerationStructure)
             return 0u;
         std::memcpy(
-            instanceDescs[instanceIndex].Transform,
-            instance.transform.data(),
-            sizeof(instanceDescs[instanceIndex].Transform));
+           instanceDescs[instanceIndex].Transform,
+           instance.transform.data(),
+           sizeof(instanceDescs[instanceIndex].Transform));
         instanceDescs[instanceIndex].InstanceID = instanceIndex;
-        instanceDescs[instanceIndex].InstanceMask = 0xFF;
+        const bool visible =
+            instance.visibilityGroup ==
+                ImportedSceneVisibilityGroup::BrainStem
+                ? m_brainStemVisible
+                : instance.visibilityGroup ==
+                    ImportedSceneVisibilityGroup::MechDrone
+                    ? m_mechDroneVisible
+                    : true;
+        instanceDescs[instanceIndex].InstanceMask =
+            visible ? 0xFF : 0x00;
         instanceDescs[instanceIndex].AccelerationStructure =
             blas.accelerationStructure->GetGPUVirtualAddress();
     }
@@ -6709,6 +7047,7 @@ bool RayTracingManager::BuildTopLevelAccelerationStructure()
     m_buildCommandList->BuildRaytracingAccelerationStructure(&buildDesc, 0, nullptr);
     m_dynamicSphereVisibilityDirty = false;
     m_dynamicCubeVisibilityDirty = false;
+    m_importedSceneVisibilityDirty = false;
     return true;
 }
 
@@ -7184,14 +7523,16 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
     if (!updateSceneAnimation &&
         !updateSkinning &&
         !m_hasDynamicSphere &&
-        !m_hasDynamicCube)
+        !m_hasDynamicCube &&
+        !m_importedSceneVisibilityDirty)
         return true;
     if (!commandList || !m_topLevelAS || !m_tlasScratchBuffer)
         return false;
 
     const bool visibilityChanged =
         m_dynamicSphereVisibilityDirty ||
-        m_dynamicCubeVisibilityDirty;
+        m_dynamicCubeVisibilityDirty ||
+        m_importedSceneVisibilityDirty;
     const float previousSpherePosition = m_dynamicSpherePositionX;
     const float previousSphereRoll = m_dynamicSphereRollRadians;
     const float previousCubePositionX = m_dynamicCubePositionX;
@@ -7314,8 +7655,67 @@ bool RayTracingManager::UpdateTopLevelAccelerationStructure(
     commandList->ResourceBarrier(1, &barrier);
     m_dynamicSphereVisibilityDirty = false;
     m_dynamicCubeVisibilityDirty = false;
+    m_importedSceneVisibilityDirty = false;
     m_dynamicObjectMovedThisFrame = true;
     return true;
+}
+
+bool RayTracingManager::UpdateDynamicSphereMaterialBuffer()
+{
+    if (!m_sceneMaterialBuffer ||
+        !m_buildCommandAllocator ||
+        !m_buildCommandList ||
+        !m_buildCommandQueue ||
+        !m_buildFence ||
+        !m_buildFenceEvent ||
+        m_dynamicSphereMaterialCount == 0u ||
+        m_dynamicSphereMaterialCount > m_dynamicSphereMaterialData.size())
+    {
+        return false;
+    }
+
+    HRESULT hr = m_buildCommandAllocator->Reset();
+    if (FAILED(hr))
+        return false;
+    hr = m_buildCommandList->Reset(m_buildCommandAllocator.Get(), nullptr);
+    if (FAILED(hr))
+        return false;
+
+    const UINT64 materialBytes =
+        sizeof(SceneMaterial) * m_dynamicSphereMaterialCount;
+    Microsoft::WRL::ComPtr<ID3D12Resource> uploadBuffer;
+    if (!CreateUploadBuffer(
+        m_dynamicSphereMaterialData.data(),
+        materialBytes,
+        nullptr,
+        uploadBuffer))
+    {
+        m_buildCommandList->Close();
+        return false;
+    }
+
+    D3D12_RESOURCE_BARRIER barrier = {};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = m_sceneMaterialBuffer.Get();
+    barrier.Transition.StateBefore =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.Subresource =
+        D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    m_buildCommandList->ResourceBarrier(1, &barrier);
+    m_buildCommandList->CopyBufferRegion(
+        m_sceneMaterialBuffer.Get(),
+        static_cast<UINT64>(m_dynamicSphereMaterialOffset) *
+            sizeof(SceneMaterial),
+        uploadBuffer.Get(),
+        0,
+        materialBytes);
+
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_DEST;
+    barrier.Transition.StateAfter =
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+    m_buildCommandList->ResourceBarrier(1, &barrier);
+    return ExecuteBuildCommandListAndWait();
 }
 
 bool RayTracingManager::ExecuteBuildCommandListAndWait()
@@ -7363,7 +7763,8 @@ bool RayTracingManager::CreateUploadBuffer(
     if (ReportFailure(hr, L"Upload buffer creation failed."))
         return false;
 
-    resource->SetName(debugName);
+    if (debugName)
+        resource->SetName(debugName);
 
     void* mappedData = nullptr;
     D3D12_RANGE readRange = { 0, 0 };

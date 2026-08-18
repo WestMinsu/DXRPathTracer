@@ -286,6 +286,16 @@ public:
     }
     bool HasDynamicSphere() const { return m_hasDynamicSphere; }
     bool HasDynamicCube() const { return m_hasDynamicCube; }
+    bool HasBrainStemScene() const
+    {
+        return m_brainStemNodeStart != c_invalidSceneNodeIndex &&
+            m_brainStemNodeEnd > m_brainStemNodeStart;
+    }
+    bool HasMechDroneScene() const
+    {
+        return m_mechDroneNodeStart != c_invalidSceneNodeIndex &&
+            m_mechDroneNodeEnd > m_mechDroneNodeStart;
+    }
     bool IsDynamicSphereVisible() const
     {
         return m_dynamicSphereVisible;
@@ -294,6 +304,14 @@ public:
     void SetDynamicSphereAnimationEnabled(bool enabled);
     void SetDynamicCubeVisible(bool visible);
     void SetDynamicCubeAnimationEnabled(bool enabled);
+    bool IsBrainStemVisible() const { return m_brainStemVisible; }
+    bool IsMechDroneVisible() const { return m_mechDroneVisible; }
+    void SetBrainStemVisible(bool visible);
+    void SetMechDroneVisible(bool visible);
+    void SetStandaloneBrainStemSceneActive(bool active)
+    {
+        m_standaloneBrainStemSceneActive = active;
+    }
     bool HasSceneAnimation() const { return m_hasSceneAnimation; }
     bool IsSceneAnimationEnabled() const
     {
@@ -363,6 +381,15 @@ public:
     }
     void SetDynamicTestSphereMaterialPreset(UINT preset);
     void SetDynamicTestCubeMaterialPreset(UINT preset);
+    void SetDynamicSphereMaterial(float metallic, float roughness);
+    float GetDynamicSphereMetallic() const
+    {
+        return m_dynamicSphereMetallic;
+    }
+    float GetDynamicSphereRoughness() const
+    {
+        return m_dynamicSphereRoughness;
+    }
     void SetDynamicSphereDeterministicTimeline(bool enabled);
     void ResetDynamicSphereTimeline();
     void SetEnableStatistics(bool enabled) { m_enableStatistics = enabled; }
@@ -412,6 +439,12 @@ private:
         Microsoft::WRL::ComPtr<ID3D12Resource> accelerationStructure;
         Microsoft::WRL::ComPtr<ID3D12Resource> scratchBuffer;
     };
+    enum class ImportedSceneVisibilityGroup : std::uint8_t
+    {
+        Always,
+        BrainStem,
+        MechDrone
+    };
     struct ImportedMeshInstance
     {
         std::uint32_t nodeIndex = c_invalidSceneNodeIndex;
@@ -425,6 +458,8 @@ private:
               0.0f, 1.0f, 0.0f, 0.0f,
               0.0f, 0.0f, 1.0f, 0.0f };
         bool animated = false;
+        ImportedSceneVisibilityGroup visibilityGroup =
+            ImportedSceneVisibilityGroup::Always;
     };
     bool CreateOutputTexture();
     bool CreateStatisticsResources();
@@ -470,6 +505,7 @@ private:
     bool DispatchSkinningAndUpdateBlases(
         ID3D12GraphicsCommandList4* commandList,
         UINT frameIndex);
+    bool UpdateDynamicSphereMaterialBuffer();
     bool ExecuteBuildCommandListAndWait();
     bool CreateUploadBuffer(const void* data,
         UINT64 sizeInBytes,
@@ -581,6 +617,9 @@ private:
     bool m_dynamicCubeVisible = true;
     bool m_dynamicSphereVisibilityDirty = false;
     bool m_dynamicCubeVisibilityDirty = false;
+    bool m_brainStemVisible = true;
+    bool m_mechDroneVisible = true;
+    bool m_importedSceneVisibilityDirty = false;
     bool m_dynamicSphereAnimationEnabled = true;
     bool m_dynamicCubeAnimationEnabled = true;
     bool m_dynamicSphereDeterministicTimeline = false;
@@ -600,6 +639,11 @@ private:
     float m_dynamicCubeRotationY = 0.0f;
     UINT m_dynamicTestSphereMaterialPreset = 0u;
     UINT m_dynamicTestCubeMaterialPreset = 3u;
+    float m_dynamicSphereMetallic = 1.0f;
+    float m_dynamicSphereRoughness = 0.25f;
+    UINT m_dynamicSphereMaterialOffset = 0u;
+    UINT m_dynamicSphereMaterialCount = 0u;
+    std::array<SceneMaterial, 2> m_dynamicSphereMaterialData = {};
     double m_dynamicObjectLinearSpeed = 0.0;
     double m_dynamicObjectAngularSpeed = 0.0;
     bool m_dynamicObjectMovedThisFrame = false;
@@ -637,6 +681,11 @@ private:
     UINT m_skinJointMatrixCount = 0u;
     bool m_gpuSkinningActive = false;
     bool m_skinningUpdatePending = false;
+    std::uint32_t m_brainStemNodeStart = c_invalidSceneNodeIndex;
+    std::uint32_t m_brainStemNodeEnd = c_invalidSceneNodeIndex;
+    std::uint32_t m_mechDroneNodeStart = c_invalidSceneNodeIndex;
+    std::uint32_t m_mechDroneNodeEnd = c_invalidSceneNodeIndex;
+    bool m_standaloneBrainStemSceneActive = false;
     GeometryRange m_staticGeometry;
     GeometryRange m_staticAlphaGeometry;
     GeometryRange m_dynamicSphereGeometry;

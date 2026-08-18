@@ -350,7 +350,17 @@ namespace
         }
 
         if (!ReadBinaryFile(imagePath, bytes))
-            return Fail(errorMessage, L"Failed to read texture image: " + imagePath);
+        {
+            // RTXPT asset bundles may replace source JPEG/PNG files with
+            // DDS payloads while keeping the original glTF URI.
+            std::wstring ddsPath = imagePath;
+            const std::size_t extension = ddsPath.find_last_of(L'.');
+            if (extension != std::wstring::npos)
+                ddsPath.resize(extension);
+            ddsPath += L".dds";
+            if (!ReadBinaryFile(ddsPath, bytes))
+                return Fail(errorMessage, L"Failed to read texture image: " + imagePath);
+        }
         return true;
     }
 
@@ -720,8 +730,7 @@ namespace
 
     bool HasUnsupportedMaterialFeature(const cgltf_material& material)
     {
-        if (material.has_pbr_specular_glossiness ||
-            material.has_clearcoat ||
+        if (material.has_clearcoat ||
             material.has_transmission ||
             material.has_volume ||
             material.has_ior ||
@@ -736,8 +745,8 @@ namespace
             return true;
         }
 
-        return material.emissive_texture.texture ||
-            material.extensions_count > 0;
+        return material.extensions_count > 0 &&
+            !material.has_pbr_specular_glossiness;
     }
 
     bool ConvertMaterials(
@@ -822,6 +831,40 @@ namespace
                     return false;
                 }
             }
+            else if (source.has_pbr_specular_glossiness)
+            {
+                material.baseColor[0] =
+                    Clamp01(source.pbr_specular_glossiness.diffuse_factor[0]);
+                material.baseColor[1] =
+                    Clamp01(source.pbr_specular_glossiness.diffuse_factor[1]);
+                material.baseColor[2] =
+                    Clamp01(source.pbr_specular_glossiness.diffuse_factor[2]);
+                material.baseColorAlpha =
+                    Clamp01(source.pbr_specular_glossiness.diffuse_factor[3]);
+                material.metallic = 0.0f;
+                material.roughness = Clamp01(
+                    1.0f - source.pbr_specular_glossiness.glossiness_factor);
+
+                float alphaCoverageCutoff = -1.0f;
+                if (material.alphaCutoff >= 0.0f &&
+                    material.baseColorAlpha > 0.0f)
+                {
+                    alphaCoverageCutoff =
+                        material.alphaCutoff / material.baseColorAlpha;
+                }
+                if (!FindOrLoadTexture(
+                    source.pbr_specular_glossiness.diffuse_texture,
+                    true,
+                    alphaCoverageCutoff,
+                    gltfPath,
+                    scene,
+                    loadedTextures,
+                    material.baseColorTextureIndex,
+                    errorMessage))
+                {
+                    return false;
+                }
+            }
 
             if (!FindOrLoadTexture(
                 source.normal_texture,
@@ -856,9 +899,17 @@ namespace
             const float emissiveStrength = source.has_emissive_strength
                 ? std::max(source.emissive_strength.emissive_strength, 0.0f)
                 : 1.0f;
-            material.emission[0] = std::max(source.emissive_factor[0], 0.0f) * emissiveStrength;
-            material.emission[1] = std::max(source.emissive_factor[1], 0.0f) * emissiveStrength;
-            material.emission[2] = std::max(source.emissive_factor[2], 0.0f) * emissiveStrength;
+            // SceneMaterial has no emissive texture slot. Ignore textured
+            // emission rather than turning the entire material emissive.
+            material.emission[0] = source.emissive_texture.texture
+                ? 0.0f
+                : std::max(source.emissive_factor[0], 0.0f) * emissiveStrength;
+            material.emission[1] = source.emissive_texture.texture
+                ? 0.0f
+                : std::max(source.emissive_factor[1], 0.0f) * emissiveStrength;
+            material.emission[2] = source.emissive_texture.texture
+                ? 0.0f
+                : std::max(source.emissive_factor[2], 0.0f) * emissiveStrength;
             material.pbrParameterMode = c_pbrParameterModeFixed;
             scene.materials.push_back(material);
             if (report)

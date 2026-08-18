@@ -355,8 +355,13 @@ private:
     bool m_animateDynamicCube = false;
     bool m_animateGltfScene = true;
     bool m_showDynamicSphere = true;
+    bool m_showBrainStem = true;
+    bool m_showMechDrone = true;
     bool m_showDynamicCube = true;
     int m_dynamicTestSphereMaterialPreset = 0;
+    int m_dynamicSphereMetallicIndex = 1;
+    int m_dynamicSphereRoughnessIndex = 1;
+    bool m_dynamicSphereMaterialSelectionInitialized = false;
     int m_dynamicTestCubeMaterialPreset = 3;
     bool m_hasPreviousCameraPose = false;
     bool m_freeCameraInitialized = false;

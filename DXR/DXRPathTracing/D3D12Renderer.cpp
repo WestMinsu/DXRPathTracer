@@ -27,6 +27,28 @@
 namespace
 {
     constexpr std::size_t c_timingHistoryLength = 600;
+    constexpr float c_sphereMetallicValues[] =
+    {
+        0.0f,
+        1.0f
+    };
+    constexpr float c_sphereRoughnessValues[] =
+    {
+        0.05f,
+        0.2f,
+        0.4f,
+        0.7f,
+        1.0f
+    };
+    const char c_sphereMetallicLabel[] =
+        { 83,112,104,101,114,32,109,101,116,97,108,108,105,99,0 };
+    const char c_sphereRoughnessLabel[] =
+        { 83,112,104,101,114,32,114,111,117,103,104,110,101,115,115,0 };
+    const char c_sphereMetallicItems[] =
+        { 48,46,48,0,49,46,48,0,0 };
+    const char c_sphereRoughnessItems[] =
+        { 48,46,48,53,0,48,46,50,0,48,46,52,0,
+          48,46,55,0,49,46,48,0,0 };
     constexpr wchar_t c_sponzaScenePath[] =
         L"Assets/KhronosGlTFSampleAssets/Models/Sponza/glTF/Sponza.gltf";
     constexpr wchar_t c_simpleSkinScenePath[] =
@@ -278,6 +300,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_overlaySceneFilePath);
     m_rayTracingManager->SetComposeModelRoom(m_composeModelRoom);
     m_rayTracingManager->SetSponzaLite(m_sponzaLite);
+    m_rayTracingManager->SetStandaloneBrainStemSceneActive(
+        m_pbrScenePreset == 2);
     m_rayTracingManager->SetSponzaLightConfigPath(
         m_sponzaLightConfigPath);
     m_rayTracingManager->SetSceneManifestPath(m_sceneManifestPath);
@@ -353,6 +377,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_animateDynamicSphere);
     m_rayTracingManager->SetDynamicCubeAnimationEnabled(
         m_animateDynamicCube);
+    m_rayTracingManager->SetBrainStemVisible(m_showBrainStem);
+    m_rayTracingManager->SetMechDroneVisible(m_showMechDrone);
     m_rayTracingManager->SetSceneAnimationEnabled(
         m_animateGltfScene);
     m_rayTracingManager->SetEnableStatistics(m_collectRayStatistics);
@@ -1798,18 +1824,28 @@ bool D3D12Renderer::SwitchPbrScenePreset(int preset)
     m_saveCurrentRequested = false;
     m_captureStatus.clear();
 
+    // Scene presets can be switched after startup. Keep the manager in sync
+    // with the renderer-owned light configuration before rebuilding.
+    m_rayTracingManager->SetSponzaLightConfigPath(
+        m_sponzaLightConfigPath);
+
     WaitForGpu();
     const std::wstring previousSceneFilePath = m_sceneFilePath;
     const std::wstring previousOverlaySceneFilePath =
         m_overlaySceneFilePath;
     const bool previousComposeModelRoom = m_composeModelRoom;
     const bool previousSponzaLite = m_sponzaLite;
+    const bool previousBrainStemSceneActive = m_pbrScenePreset == 2;
+    m_rayTracingManager->SetStandaloneBrainStemSceneActive(
+        preset == 2);
     if (!m_rayTracingManager->ReloadPbrScene(
             sceneFilePath,
             composeModelRoom,
             sponzaLite,
             overlaySceneFilePath))
     {
+        m_rayTracingManager->SetStandaloneBrainStemSceneActive(
+            previousBrainStemSceneActive);
         m_rayTracingManager->ReloadPbrScene(
             previousSceneFilePath,
             previousComposeModelRoom,
@@ -1826,8 +1862,11 @@ bool D3D12Renderer::SwitchPbrScenePreset(int preset)
     m_composeModelRoom = composeModelRoom;
     m_sponzaLite = sponzaLite;
     m_pbrScenePreset = preset;
+    m_dynamicSphereMaterialSelectionInitialized = false;
     m_animateGltfScene = true;
     m_rayTracingManager->SetSceneAnimationEnabled(true);
+    m_rayTracingManager->SetBrainStemVisible(m_showBrainStem);
+    m_rayTracingManager->SetMechDroneVisible(m_showMechDrone);
     m_rayTracingManager->SetDynamicSphereVisible(
         m_showDynamicSphere);
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
@@ -2601,6 +2640,69 @@ void D3D12Renderer::BuildImGuiFrame()
     }
     else if (m_rayTracingManager && m_rayTracingManager->HasDynamicSphere())
     {
+        if (!m_dynamicSphereMaterialSelectionInitialized)
+        {
+            const float currentMetallic =
+                m_rayTracingManager->GetDynamicSphereMetallic();
+            const float currentRoughness =
+                m_rayTracingManager->GetDynamicSphereRoughness();
+            m_dynamicSphereMetallicIndex = 0;
+            m_dynamicSphereRoughnessIndex = 0;
+            for (int index = 1;
+                 index < static_cast<int>(_countof(c_sphereMetallicValues));
+                 ++index)
+            {
+                if (std::abs(
+                    c_sphereMetallicValues[index] - currentMetallic) <
+                    std::abs(
+                        c_sphereMetallicValues[m_dynamicSphereMetallicIndex] -
+                        currentMetallic))
+                {
+                    m_dynamicSphereMetallicIndex = index;
+                }
+            }
+            for (int index = 1;
+                 index < static_cast<int>(_countof(c_sphereRoughnessValues));
+                 ++index)
+            {
+                if (std::abs(
+                    c_sphereRoughnessValues[index] - currentRoughness) <
+                    std::abs(
+                        c_sphereRoughnessValues[m_dynamicSphereRoughnessIndex] -
+                        currentRoughness))
+                {
+                    m_dynamicSphereRoughnessIndex = index;
+                }
+            }
+            m_dynamicSphereMaterialSelectionInitialized = true;
+        }
+
+        bool sphereMaterialChanged = false;
+        sphereMaterialChanged |= ImGui::Combo(
+            c_sphereMetallicLabel,
+            &m_dynamicSphereMetallicIndex,
+            c_sphereMetallicItems);
+        sphereMaterialChanged |= ImGui::Combo(
+            c_sphereRoughnessLabel,
+            &m_dynamicSphereRoughnessIndex,
+            c_sphereRoughnessItems);
+        if (sphereMaterialChanged)
+        {
+            m_captureActive = false;
+            m_saveCurrentRequested = false;
+            m_captureStatus.clear();
+            m_rayTracingManager->SetDynamicSphereMaterial(
+                c_sphereMetallicValues[m_dynamicSphereMetallicIndex],
+                c_sphereRoughnessValues[m_dynamicSphereRoughnessIndex]);
+        }
+        const char sphereMaterialStatusFormat[] =
+            { 83,112,104,101,114,101,32,109,97,116,101,114,105,97,108,58,32,
+              109,101,116,97,108,108,105,99,32,37,46,50,102,44,32,
+              114,111,117,103,104,110,101,115,115,32,37,46,50,102,0 };
+        ImGui::TextDisabled(
+            sphereMaterialStatusFormat,
+            m_rayTracingManager->GetDynamicSphereMetallic(),
+            m_rayTracingManager->GetDynamicSphereRoughness());
         if (ImGui::Checkbox(
             "Show metal sphere",
             &m_showDynamicSphere))
@@ -2624,6 +2726,34 @@ void D3D12Renderer::BuildImGuiFrame()
         }
     }
     ImGui::SeparatorText("Camera controls and recording");
+    if (m_rayTracingManager &&
+        (m_rayTracingManager->HasBrainStemScene() ||
+         m_rayTracingManager->HasMechDroneScene()))
+    {
+        const char composedObjectsLabel[] =
+            { 67,111,109,112,111,115,101,100,32,115,99,101,110,101,32,111,98,106,101,99,116,115,0 };
+        const char brainStemLabel[] =
+            { 83,104,111,119,32,66,114,97,105,110,83,116,101,109,0 };
+        const char mechDroneLabel[] =
+            { 83,104,111,119,32,109,101,99,104,32,100,114,111,110,101,0 };
+        ImGui::SeparatorText(composedObjectsLabel);
+        if (m_rayTracingManager->HasBrainStemScene() &&
+            ImGui::Checkbox(brainStemLabel, &m_showBrainStem))
+        {
+            m_captureActive = false;
+            m_saveCurrentRequested = false;
+            m_captureStatus.clear();
+            m_rayTracingManager->SetBrainStemVisible(m_showBrainStem);
+        }
+        if (m_rayTracingManager->HasMechDroneScene() &&
+            ImGui::Checkbox(mechDroneLabel, &m_showMechDrone))
+        {
+            m_captureActive = false;
+            m_saveCurrentRequested = false;
+            m_captureStatus.clear();
+            m_rayTracingManager->SetMechDroneVisible(m_showMechDrone);
+        }
+    }
     ImGui::SliderFloat(
         "Arrow-key turn speed",
         &m_keyboardTurnSpeedDegrees,
