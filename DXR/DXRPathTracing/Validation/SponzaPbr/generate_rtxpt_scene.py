@@ -267,7 +267,7 @@ def walkable_height(
 def sanitize_sponza(document: dict) -> tuple[dict, int, int]:
     sanitized = copy.deepcopy(document)
     source_count = 0
-    skipped_count = 0
+    alpha_count = 0
     materials = sanitized.get("materials", [])
     for mesh in sanitized["meshes"]:
         kept = []
@@ -276,15 +276,20 @@ def sanitize_sponza(document: dict) -> tuple[dict, int, int]:
             material_index = primitive.get("material", 0)
             material = materials[material_index] if materials else {}
             if material.get("alphaMode", "OPAQUE") != "OPAQUE":
-                skipped_count += 1
-                continue
+                # RTXPT expects a secondary UV stream for alpha-tested materials.
+                # Sponza stores the same UVs as TEXCOORD_0, so alias that accessor
+                # while preserving the leaf primitives in the exported scene.
+                alpha_count += 1
+                attributes = primitive.setdefault("attributes", {})
+                if "TEXCOORD_1" not in attributes and "TEXCOORD_0" in attributes:
+                    attributes["TEXCOORD_1"] = attributes["TEXCOORD_0"]
             kept.append(primitive)
         mesh["primitives"] = kept
     sanitized["asset"]["generator"] = (
         sanitized["asset"].get("generator", "")
-        + " | DXRPathTracing Sponza-lite opaque filter"
+        + " | DXRPathTracing Sponza alpha-tested export"
     ).strip()
-    return sanitized, source_count, skipped_count
+    return sanitized, source_count, alpha_count
 
 
 def make_sphere(
@@ -641,7 +646,7 @@ def main() -> None:
     document = json.loads(SOURCE_GLTF.read_text(encoding="utf-8"))
     buffers = load_buffers(document, SOURCE_DIR)
     minimum, maximum, triangles = scene_geometry(document, buffers)
-    sanitized, source_count, skipped_count = sanitize_sponza(document)
+    sanitized, source_count, alpha_count = sanitize_sponza(document)
 
     if RTXPT.exists():
         shutil.rmtree(RTXPT)
@@ -703,8 +708,9 @@ def main() -> None:
         },
         "sponza": {
             "source_primitive_count": source_count,
-            "skipped_non_opaque_primitive_count": skipped_count,
-            "loaded_opaque_primitive_count": source_count - skipped_count,
+            "skipped_non_opaque_primitive_count": 0,
+            "preserved_alpha_tested_primitive_count": alpha_count,
+            "loaded_primitive_count": source_count,
             "bounds_rtxpt": {
                 "minimum": minimum.tolist(),
                 "maximum": maximum.tolist(),
@@ -727,8 +733,8 @@ def main() -> None:
     (ROOT / "Results").mkdir(parents=True, exist_ok=True)
     print(
         f"Generated RTXPT Sponza PBR scene: "
-        f"{source_count - skipped_count} opaque primitives, "
-        f"{skipped_count} skipped."
+        f"{source_count} primitives exported, "
+        f"{alpha_count} alpha-tested leaf primitives preserved."
     )
 
 
