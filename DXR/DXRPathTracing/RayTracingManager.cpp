@@ -1330,6 +1330,7 @@ void RayTracingManager::DispatchRays(
         (m_useCurrentFrameVisibleResidual ? 2u : 0u) |
         (m_enableSkinnedDeformationMotion ? 4u : 0u) |
         (directionalLightActive ? 8u : 0u) |
+        (m_enablePropagatedRayCone ? 0x1000u : 0u) |
         (m_enableDynamicShadowHistoryValidation ? 32u : 0u) |
         (m_enableStaticBackgroundHistoryFastPath ? 64u : 0u) |
         (m_enableBestTapHistoryGather ? 128u : 0u);
@@ -2285,19 +2286,24 @@ void RayTracingManager::SetPbrMaterialOverride(bool enabled)
     ResetAccumulation();
 }
 
-void RayTracingManager::SetTextureLodSettings(bool enabled, float bias)
+void RayTracingManager::SetTextureLodSettings(
+    bool enabled,
+    float bias,
+    bool propagatedRayConeEnabled)
 {
     const float clampedBias = bias < -4.0f
         ? -4.0f
         : (bias > 4.0f ? 4.0f : bias);
     if (m_enableTextureLod == enabled &&
-        m_textureLodBias == clampedBias)
+        m_textureLodBias == clampedBias &&
+        m_enablePropagatedRayCone == propagatedRayConeEnabled)
     {
         return;
     }
 
     m_enableTextureLod = enabled;
     m_textureLodBias = clampedBias;
+    m_enablePropagatedRayCone = propagatedRayConeEnabled;
     ResetAccumulation();
 }
 

@@ -347,7 +347,8 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         m_atrousLogLuminanceSigma);
     m_rayTracingManager->SetTextureLodSettings(
         m_enableTextureLod,
-        m_textureLodBias);
+        m_textureLodBias,
+        m_enablePropagatedRayCone);
     m_rayTracingManager->SetDynamicSphereAnimationEnabled(
         m_animateDynamicSphere);
     m_rayTracingManager->SetDynamicCubeAnimationEnabled(
@@ -481,7 +482,8 @@ void D3D12Renderer::Render()
     m_rayTracingManager->SetPbrMaterialOverride(m_overridePbrMaterial);
     m_rayTracingManager->SetTextureLodSettings(
         m_enableTextureLod,
-        m_textureLodBias);
+        m_textureLodBias,
+        m_enablePropagatedRayCone);
     m_rayTracingManager->SetIblSettings(m_enableIbl, m_iblIntensity);
     m_rayTracingManager->SetValidationSeed(m_validationSeed);
     m_rayTracingManager->SetExposure(m_exposure);
@@ -2041,6 +2043,13 @@ void D3D12Renderer::BuildImGuiFrame()
         ImGui::Checkbox("Ray Cone Texture LOD", &m_enableTextureLod);
         if (m_enableTextureLod)
         {
+            ImGui::Checkbox(
+                "Propagate Ray Cone Through Bounces",
+                &m_enablePropagatedRayCone);
+            ImGui::TextDisabled(
+                m_enablePropagatedRayCone
+                    ? "LOD mode: propagated path distance + BSDF lobe spread"
+                    : "LOD mode: legacy camera-to-hit distance");
             ImGui::SliderFloat(
                 "Texture LOD Bias",
                 &m_textureLodBias,

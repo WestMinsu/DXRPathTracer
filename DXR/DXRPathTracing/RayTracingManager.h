@@ -259,7 +259,10 @@ public:
     void SetPbrDebugView(UINT pbrDebugView);
     void SetPbrMaterial(float metallic, float roughness);
     void SetPbrMaterialOverride(bool enabled);
-    void SetTextureLodSettings(bool enabled, float bias);
+    void SetTextureLodSettings(
+        bool enabled,
+        float bias,
+        bool propagatedRayConeEnabled);
     void SetIblSettings(bool enableIbl, float intensity);
     bool SetCamera(
         const std::array<float, 3>& position,
@@ -558,6 +561,7 @@ private:
     float m_pbrRoughness = 0.35f;
     bool m_overridePbrMaterial = false;
     bool m_enableTextureLod = true;
+    bool m_enablePropagatedRayCone = true;
     float m_textureLodBias = 0.0f;
     bool m_enableIbl = true;
     bool m_enableStatistics = false;

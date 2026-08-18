@@ -714,6 +714,7 @@ float3 EvaluateGpuBrdfValidationSample(uint2 launchIndex, uint2 launchDim)
     float samplePdf;
     float3 ignoredDiffuseContribution;
     float3 ignoredSpecularContribution;
+    bool ignoredSampledSpecular;
     if (!SamplePbrBrdfWithMixtureSampling(
         material,
         normal,
@@ -723,7 +724,8 @@ float3 EvaluateGpuBrdfValidationSample(uint2 launchIndex, uint2 launchDim)
         weightedBrdf,
         samplePdf,
         ignoredDiffuseContribution,
-        ignoredSpecularContribution))
+        ignoredSpecularContribution,
+        ignoredSampledSpecular))
     {
         return float3(0.0f, 0.0f, 0.0f);
     }
@@ -848,6 +850,22 @@ void TracePrimaryGuide(
         EvaluateDirectionalShadowGuide(
             payload.normal,
             hitPosition);
+}
+
+float PbrLobeRayConeSpread(
+    PbrMaterial material,
+    bool sampledSpecular)
+{
+    // Cone spread is width growth per unit ray distance. Diffuse scattering
+    // is broad; GGX reflection grows with twice the microfacet slope alpha.
+    // Cap both to avoid immediately forcing every secondary texture to its
+    // coarsest mip.
+    const float maxLobeSpread = 0.5f;
+    if (!sampledSpecular)
+        return maxLobeSpread;
+
+    float alpha = material.roughness * material.roughness;
+    return min(2.0f * alpha, maxLobeSpread);
 }
 
 void TracePath(
@@ -1069,6 +1087,7 @@ void TracePath(
         float samplePdf;
         float3 diffuseContribution = float3(0.0f, 0.0f, 0.0f);
         float3 specularContribution = float3(0.0f, 0.0f, 0.0f);
+        bool sampledSpecular = false;
         if (IsPbrRenderingScene())
         {
             float3 viewDirection = normalize(-ray.Direction);
@@ -1081,7 +1100,8 @@ void TracePath(
                 bounceWeight,
                 samplePdf,
                 diffuseContribution,
-                specularContribution))
+                specularContribution,
+                sampledSpecular))
             {
                 break;
             }
@@ -1129,6 +1149,10 @@ void TracePath(
         pathThroughput = nextThroughput * inverseSurvivalProbability;
         previousBsdfPdf = samplePdf;
         previousWasDelta = 0u;
+        float lobeConeSpread = IsPbrRenderingScene()
+            ? PbrLobeRayConeSpread(material, sampledSpecular)
+            : 0.5f;
+        rayConeSpread = max(rayConeSpread, lobeConeSpread);
         ray.Origin = hitPosition + payload.normal * c_rayOriginBias;
         ray.Direction = sampleDirection;
         ray.TMin = c_rayTMin;

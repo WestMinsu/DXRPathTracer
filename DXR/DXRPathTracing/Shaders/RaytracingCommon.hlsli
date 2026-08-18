@@ -265,6 +265,11 @@ bool DirectionalLightEnabled()
     return (g_enableDynamicObjectReprojection & 8u) != 0u;
 }
 
+bool PropagatedRayConeEnabled()
+{
+    return (g_enableDynamicObjectReprojection & 0x1000u) != 0u;
+}
+
 bool DynamicShadowHistoryValidationEnabled()
 {
     return (g_enableDynamicObjectReprojection & 32u) != 0u;

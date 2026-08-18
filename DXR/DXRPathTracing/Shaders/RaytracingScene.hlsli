@@ -91,15 +91,29 @@ float EstimateTriangleUvFootprint(
                 texCoord1,
                 texCoord2)));
 
-    float rayConeWidth =
-        rayConeWidthAtOrigin + rayConeSpread * RayTCurrent();
+    float footprintWidth;
+    if (PropagatedRayConeEnabled())
+    {
+        footprintWidth =
+            rayConeWidthAtOrigin + rayConeSpread * RayTCurrent();
+    }
+    else
+    {
+        float3 hitPosition =
+            WorldRayOrigin() + WorldRayDirection() * RayTCurrent();
+        float cameraDistance = length(hitPosition - g_cameraPosition);
+        float pixelConeDiameter =
+            2.0f * tan(c_verticalFovRadians * 0.5f) /
+            max(float(DispatchRaysDimensions().y), 1.0f);
+        footprintWidth = cameraDistance * pixelConeDiameter;
+    }
     float viewAgreement = abs(dot(
         normalize(worldNormal),
         normalize(-WorldRayDirection())));
     float grazingScale = min(
         1.0f / max(viewAgreement, 0.25f),
         4.0f);
-    return max(rayConeWidth, 0.0f) *
+    return max(footprintWidth, 0.0f) *
         uvPerWorld * grazingScale;
 }
 

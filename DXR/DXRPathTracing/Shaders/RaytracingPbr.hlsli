@@ -212,17 +212,19 @@ bool SamplePbrBrdfWithMixtureSampling(
     out float3 weightedBrdf,
     out float samplePdf,
     out float3 diffuseContribution,
-    out float3 specularContribution)
+    out float3 specularContribution,
+    out bool sampledSpecular)
 {
     sampleDirection = normal;
     weightedBrdf = float3(0.0f, 0.0f, 0.0f);
     samplePdf = 0.0f;
     diffuseContribution = float3(0.0f, 0.0f, 0.0f);
     specularContribution = float3(0.0f, 0.0f, 0.0f);
+    sampledSpecular = false;
     float specularProbability = PbrSpecularSamplingProbability(material);
-    bool sampleSpecular = RandomFloat01(seed) < specularProbability;
+    sampledSpecular = RandomFloat01(seed) < specularProbability;
 
-    if (sampleSpecular)
+    if (sampledSpecular)
     {
         float2 sampleValue = float2(RandomFloat01(seed), RandomFloat01(seed));
         float3 sampledHalfVector = ImportanceSampleGGXVisibleNormal(

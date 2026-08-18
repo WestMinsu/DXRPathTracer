@@ -415,6 +415,7 @@ private:
     float m_pbrRoughness = 0.35f;
     bool m_overridePbrMaterial = false;
     bool m_enableTextureLod = true;
+    bool m_enablePropagatedRayCone = true;
     float m_textureLodBias = 0.0f;
     bool m_enableIbl = true;
     float m_iblIntensity = 1.0f;
