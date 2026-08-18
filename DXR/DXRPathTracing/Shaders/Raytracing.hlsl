@@ -1426,13 +1426,8 @@ void RunRaygen()
                 g_enableTemporalReprojection != 0u ||
                 samplesPerPixel > 1u)
             {
-                uint cameraSeed = CreateRandomSeed(
-                    0u,
-                    0x9E3779B9u,
-                    subSampleIndex);
-                pixelOffset = float2(
-                    RandomFloat01(cameraSeed),
-                    RandomFloat01(cameraSeed));
+                pixelOffset =
+                    LowDiscrepancyCameraSample(subSampleIndex);
             }
 
             float2 uv =

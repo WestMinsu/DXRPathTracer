@@ -377,6 +377,16 @@ void RecordRadianceMiss()
     }
 }
 
+uint HashUint(uint value)
+{
+    value ^= value >> 16;
+    value *= 2246822519u;
+    value ^= value >> 13;
+    value *= 3266489917u;
+    value ^= value >> 16;
+    return value;
+}
+
 uint CreateRandomSeed(
     uint depth,
     uint primitiveIndex,
@@ -393,12 +403,7 @@ uint CreateRandomSeed(
         primitiveIndex * 911u +
         1u;
     seed ^= g_validationSeed * 0x85EBCA6Bu;
-    seed ^= seed >> 16;
-    seed *= 2246822519u;
-    seed ^= seed >> 13;
-    seed *= 3266489917u;
-    seed ^= seed >> 16;
-    return seed;
+    return HashUint(seed);
 }
 
 uint NextRandom(inout uint seed)
@@ -412,6 +417,30 @@ uint NextRandom(inout uint seed)
 float RandomFloat01(inout uint seed)
 {
     return float(NextRandom(seed) >> 8u) / 16777216.0f;
+}
+
+float2 LowDiscrepancyCameraSample(uint subSampleIndex)
+{
+    uint2 launchIndex = DispatchRaysIndex().xy;
+    uint2 launchDim = DispatchRaysDimensions().xy;
+    uint samplesPerPixel = clamp(g_samplesPerPixel, 1u, 8u);
+    uint sequenceBase = g_enableAccumulation != 0u
+        ? g_sampleIndex
+        : (g_enableTemporalReprojection != 0u
+            ? g_sampleIndex * samplesPerPixel
+            : g_frameIndex * samplesPerPixel);
+    uint sequenceIndex = sequenceBase + subSampleIndex;
+
+    uint pixelIndex = launchIndex.x + launchIndex.y * launchDim.x;
+    uint scrambleBase = pixelIndex ^
+        (g_validationSeed * 0x85EBCA6Bu) ^ 0xA511E9B3u;
+    uint2 scramble = uint2(
+        HashUint(scrambleBase),
+        HashUint(scrambleBase ^ 0x63D83595u));
+    uint2 sampleBits = scramble + sequenceIndex * uint2(
+        0xC13FA9A9u,
+        0x91E10DA5u);
+    return float2(sampleBits >> 8u) / 16777216.0f;
 }
 
 bool SurvivesRussianRoulette(
