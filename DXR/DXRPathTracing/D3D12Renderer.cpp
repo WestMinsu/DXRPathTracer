@@ -2267,6 +2267,21 @@ void D3D12Renderer::BuildImGuiFrame()
         m_rayTracingManager)
     {
         m_enableAccumulation = renderMode == 0;
+        if (!m_enableAccumulation)
+        {
+            // Realtime starts with the main denoising and texture-quality aids enabled.
+            m_enableTextureLod = true;
+            m_enableTemporalReprojection = true;
+            m_enableBestTapHistoryGather = true;
+            m_enableDynamicObjectReprojection = true;
+            m_enableStaticBackgroundHistoryFastPath = true;
+            m_enableDisocclusionRepair = true;
+            m_enableDynamicShadowHistoryValidation = true;
+            m_enableSkinnedDeformationMotion = true;
+            m_useCurrentFrameVisibleResidual = true;
+            m_enableTemporalColorClip = true;
+            m_enableAtrous = true;
+        }
         m_captureActive = false;
         m_saveCurrentRequested = false;
         m_captureStatus.clear();
