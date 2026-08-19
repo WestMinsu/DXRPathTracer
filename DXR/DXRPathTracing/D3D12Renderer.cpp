@@ -385,6 +385,9 @@ bool D3D12Renderer::Initialize(HWND hWnd)
     m_rayTracingManager->SetEnableStatistics(m_collectRayStatistics);
     if (!m_rayTracingManager->Initialize(m_hWnd, m_device.Get(), m_width, m_height))
         return false;
+    m_directionalLightAngularRadiusDegrees =
+        m_rayTracingManager->GetDirectionalLightAngularRadius() *
+        57.29577951308232f;
 
     if (!LoadCameraPath())
         return false;
@@ -1858,6 +1861,9 @@ bool D3D12Renderer::SwitchPbrScenePreset(int preset)
         return false;
     }
 
+    m_directionalLightAngularRadiusDegrees =
+        m_rayTracingManager->GetDirectionalLightAngularRadius() *
+        57.29577951308232f;
     m_sceneType =
         static_cast<int>(RayTracingManager::c_scenePbrGgx);
     m_sceneFilePath = sceneFilePath;
@@ -2163,6 +2169,12 @@ void D3D12Renderer::BuildImGuiFrame()
                 0.0f,
                 4.0f,
                 "%.2f");
+            directionalChanged |= ImGui::SliderFloat(
+                "Directional Sun Angular Radius",
+                &m_directionalLightAngularRadiusDegrees,
+                0.0f,
+                15.0f,
+                "%.2f deg");
             const std::array<float, 3>& propagationDirection =
                 m_rayTracingManager->GetDirectionalLightDirection();
             float directionLengthSquared = 0.0f;
@@ -2229,6 +2241,8 @@ void D3D12Renderer::BuildImGuiFrame()
                 }
             }
             ImGui::TextDisabled(
+                "0 deg = hard directional shadow; larger values soften the sun disk.");
+            ImGui::TextDisabled(
                 "Shares one NEE shadow-ray sample with area lights and IBL.");
             ImGui::TextDisabled(
                 "Directional lights have no finite position; azimuth/elevation rotate the source at infinity.");
@@ -2240,6 +2254,9 @@ void D3D12Renderer::BuildImGuiFrame()
                 m_rayTracingManager->SetDirectionalLightRuntimeSettings(
                     m_enableDirectionalLight,
                     m_directionalLightIntensityScale);
+                m_rayTracingManager->SetDirectionalLightAngularRadius(
+                    m_directionalLightAngularRadiusDegrees *
+                    0.01745329251994329577f);
             }
         }
     }

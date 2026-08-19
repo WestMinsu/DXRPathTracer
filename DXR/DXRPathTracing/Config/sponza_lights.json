@@ -3,7 +3,8 @@
   "directional_light": {
   "direction": [-0.330366, -0.939693, -0.088521],
     "radiance": [8.0, 7.5, 6.8],
-    "sampling_probability": 0.5
+    "sampling_probability": 0.5,
+    "angular_radius_degrees": 0.5
   },
    "lights": [
     { "position": [-6.0, 6.8, -3.3], "right": [1, 0, 0], "up": [0, 0, 1], "width": 1.4, "height": 0.8, "radiance": [18, 16, 13] },

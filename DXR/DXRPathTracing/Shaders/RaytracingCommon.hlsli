@@ -99,6 +99,7 @@ struct DirectionalLight
     uint enabled;
     float3 radiance;
     float samplingProbability;
+    float angularRadius;
 };
 
 // A row-major object-to-world transform, mirrored by std::array<float, 12>
@@ -777,6 +778,7 @@ bool SampleDirectionalLight(
     float3 normal,
     float3 hitPosition,
     float directionalEmitterPdf,
+    inout uint seed,
     out float3 lightDirection,
     out float3 radianceOverPdf,
     out float lightPdf)
@@ -801,7 +803,34 @@ bool SampleDirectionalLight(
 
     // The config stores the propagation direction. Shadow rays travel in the
     // opposite direction, from the surface toward the source at infinity.
-    lightDirection = normalize(-light.direction);
+    // For a finite angular radius, sample a uniform distant sun disk. This
+    // keeps the existing delta-light behavior when the radius is zero while
+    // matching RTXPT's physically softer distant-light shadows otherwise.
+    float3 sourceDirection = normalize(-light.direction);
+    float angularRadius = clamp(light.angularRadius, 0.0f, 1.5707963f);
+    float solidAngle = 1.0f;
+    if (angularRadius > 1.0e-5f)
+    {
+        float cosMax = cos(angularRadius);
+        float cosTheta = lerp(1.0f, cosMax, RandomFloat01(seed));
+        float phi = c_twoPi * RandomFloat01(seed);
+        float sinTheta = sqrt(max(0.0f, 1.0f - cosTheta * cosTheta));
+        float sinPhi;
+        float cosPhi;
+        sincos(phi, sinPhi, cosPhi);
+        float3 tangent = abs(sourceDirection.z) < 0.999f
+            ? normalize(cross(float3(0.0f, 0.0f, 1.0f), sourceDirection))
+            : normalize(cross(float3(0.0f, 1.0f, 0.0f), sourceDirection));
+        float3 bitangent = cross(sourceDirection, tangent);
+        lightDirection = normalize(
+            tangent * (sinTheta * cosPhi) +
+            bitangent * (sinTheta * sinPhi) +
+            sourceDirection * cosTheta);
+    }
+    else
+    {
+        lightDirection = sourceDirection;
+    }
     if (dot(normal, lightDirection) <= 0.0f)
         return false;
 
@@ -833,7 +862,11 @@ bool SampleDirectionalLight(
     if (!any(lightRadiance > 0.0f))
         return false;
 
-    lightPdf = directionalEmitterPdf;
+    // The config radiance is kept in the old delta-light scale. Dividing both
+    // radiance and PDF by the sampled solid angle preserves its brightness
+    // while giving the finite sun a physically meaningful angular footprint.
+    lightRadiance /= solidAngle;
+    lightPdf = directionalEmitterPdf / solidAngle;
     radianceOverPdf = lightRadiance / lightPdf;
     return true;
 }
@@ -1102,6 +1135,7 @@ bool SampleDirectLight(
             normal,
             hitPosition,
             directionalEmitterPdf,
+            seed,
             lightDirection,
             radianceOverPdf,
             lightPdf);

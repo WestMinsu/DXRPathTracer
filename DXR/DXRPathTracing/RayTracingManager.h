@@ -111,6 +111,11 @@ public:
     void SetDirectionalLightRuntimeSettings(
         bool enabled,
         float intensityScale);
+    void SetDirectionalLightAngularRadius(float angularRadiusRadians);
+    float GetDirectionalLightAngularRadius() const
+    {
+        return m_directionalLightAngularRadius;
+    }
     void SetDirectionalLightDirection(
         const std::array<float, 3>& propagationDirection);
     bool HasDirectionalLight() const
@@ -747,6 +752,7 @@ private:
     bool m_directionalLightEnabled = true;
     float m_directionalLightIntensityScale = 1.0f;
     float m_directionalLightSamplingProbability = 0.5f;
+    float m_directionalLightAngularRadius = 0.0f;
     std::array<float, 3> m_directionalLightDirection =
         { 0.0f, -1.0f, 0.0f };
     std::array<float, 3> m_directionalLightRadiance =

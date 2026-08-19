@@ -165,7 +165,9 @@ namespace
             light.radiance[1] >= 0.0f &&
             light.radiance[2] >= 0.0f &&
             light.samplingProbability > 0.0f &&
-            light.samplingProbability < 1.0f;
+            light.samplingProbability < 1.0f &&
+            light.angularRadius >= 0.0f &&
+            light.angularRadius < 1.5707964f;
     }
 }
 
@@ -268,6 +270,24 @@ bool LoadSponzaLightConfig(
         {
             errorMessage =
                 L"directional_light needs valid direction, radiance, and sampling_probability.";
+            return false;
+        }
+
+        // RTXPT's distant-light model can represent a finite sun disk. Keep
+        // the field optional so existing configs remain ideal delta lights.
+        float angularRadiusDegrees = 0.0f;
+        if (ExtractFloat(
+                object,
+                "angular_radius_degrees",
+                angularRadiusDegrees))
+        {
+            directionalLight.angularRadius =
+                angularRadiusDegrees * 0.01745329251994329577f;
+        }
+        if (!ValidateDirectionalLight(directionalLight))
+        {
+            errorMessage =
+                L"directional_light angular_radius_degrees must be in [0, 90).";
             return false;
         }
         directionalLight.enabled = true;

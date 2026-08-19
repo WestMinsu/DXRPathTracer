@@ -12,6 +12,9 @@ struct SponzaDirectionalLight
     float direction[3] = { 0.0f, -1.0f, 0.0f };
     float radiance[3] = { 0.0f, 0.0f, 0.0f };
     float samplingProbability = 0.5f;
+    // Angular radius of the distant emitter in radians. Zero preserves the
+    // ideal delta-direction light used by older configurations.
+    float angularRadius = 0.0f;
 };
 
 bool LoadSponzaLightConfig(

@@ -427,6 +427,7 @@ private:
     float m_iblIntensity = 1.0f;
     bool m_enableDirectionalLight = true;
     float m_directionalLightIntensityScale = 1.0f;
+    float m_directionalLightAngularRadiusDegrees = 0.0f;
     UINT m_validationSeed = 0;
     float m_exposure = 0.0f;
     std::string m_captureStatus;

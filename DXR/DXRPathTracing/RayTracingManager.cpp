@@ -615,8 +615,9 @@ namespace
         UINT enabled;
         float radiance[3];
         float samplingProbability;
+        float angularRadius;
     };
-    static_assert(sizeof(GpuDirectionalLight) == 8 * sizeof(std::uint32_t));
+    static_assert(sizeof(GpuDirectionalLight) == 9 * sizeof(std::uint32_t));
 
     struct AtrousSettingsConstants
     {
@@ -892,6 +893,15 @@ namespace
         return true;
     }
 
+    void DisableSceneEmission(SceneData& scene)
+    {
+        for (SceneMaterial& material : scene.materials)
+        {
+            material.emission[0] = 0.0f;
+            material.emission[1] = 0.0f;
+            material.emission[2] = 0.0f;
+        }
+    }
     std::vector<GpuEmissiveTriangle> BuildEmissiveTriangles(
         const SceneData& scene,
         UINT staticIndexCount,
@@ -2245,6 +2255,20 @@ void RayTracingManager::SetDirectionalLightRuntimeSettings(
     ResetAccumulation();
 }
 
+void RayTracingManager::SetDirectionalLightAngularRadius(
+    float angularRadiusRadians)
+{
+    const float clampedRadius =
+        (std::max)(0.0f, (std::min)(angularRadiusRadians, 1.5707963f));
+    if (std::abs(m_directionalLightAngularRadius - clampedRadius) <=
+        1.0e-6f)
+    {
+        return;
+    }
+
+    m_directionalLightAngularRadius = clampedRadius;
+    ResetAccumulation();
+}
 void RayTracingManager::SetDirectionalLightDirection(
     const std::array<float, 3>& propagationDirection)
 {
@@ -4239,6 +4263,7 @@ bool RayTracingManager::UpdateDirectionalLightBuffer(UINT frameIndex)
     }
     light.samplingProbability =
         m_directionalLightSamplingProbability;
+    light.angularRadius = m_directionalLightAngularRadius;
 
     void* destination = nullptr;
     const D3D12_RANGE noReadRange = { 0, 0 };
@@ -5478,6 +5503,7 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     std::size_t areaLightCount = 0;
     m_directionalLightAvailable = false;
     m_directionalLightSamplingProbability = 0.5f;
+    m_directionalLightAngularRadius = 0.0f;
     m_directionalLightDirection = { 0.0f, -1.0f, 0.0f };
     m_directionalLightRadiance = { 0.0f, 0.0f, 0.0f };
     m_hasDynamicSphere = false;
@@ -5528,6 +5554,8 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             return false;
         }
         hasLoadReport = true;
+        if (m_standaloneBrainStemSceneActive)
+            DisableSceneEmission(scene);
         if (!scene.IsValid() || !ComputeSceneBounds(scene, modelBounds))
         {
             ReportMessage(L"Loaded glTF scene data or bounds are invalid.");
@@ -5607,6 +5635,8 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
             m_directionalLightAvailable = directionalLight.enabled;
             m_directionalLightSamplingProbability =
                 directionalLight.samplingProbability;
+            m_directionalLightAngularRadius =
+                directionalLight.angularRadius;
             std::copy(
                 std::begin(directionalLight.direction),
                 std::end(directionalLight.direction),
@@ -5652,6 +5682,7 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
                     L"\nReason: " + errorMessage);
                 return false;
             }
+            DisableSceneEmission(overlayScene);
             SceneBounds overlayBounds = {};
             if (!ComputeSceneBounds(overlayScene, overlayBounds))
             {
@@ -5702,6 +5733,7 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
                         errorMessage);
                     return false;
                 }
+                DisableSceneEmission(mechDroneScene);
                 if (!AddMechDroneBodyAnimation(mechDroneScene))
                     return false;
                 SceneBounds mechDroneBounds = {};
@@ -6072,6 +6104,8 @@ bool RayTracingManager::CreateStaticGeometryBuffers()
     }
     gpuDirectionalLight.samplingProbability =
         m_directionalLightSamplingProbability;
+    gpuDirectionalLight.angularRadius =
+        m_directionalLightAngularRadius;
     for (UINT frameIndex = 0; frameIndex < c_tlasFrameCount; ++frameIndex)
     {
         if (!CreateUploadBuffer(
