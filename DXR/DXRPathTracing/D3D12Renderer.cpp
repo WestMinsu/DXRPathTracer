@@ -378,6 +378,7 @@ bool D3D12Renderer::Initialize(HWND hWnd)
         !m_enableAccumulation && m_animateDynamicSphere);
     m_rayTracingManager->SetDynamicCubeAnimationEnabled(
         !referenceMode && m_animateDynamicCube);
+    m_rayTracingManager->SetDynamicSphereVisible(m_showDynamicSphere);
     m_rayTracingManager->SetBrainStemVisible(m_showBrainStem);
     m_rayTracingManager->SetMechDroneVisible(m_showMechDrone);
     m_rayTracingManager->SetSceneAnimationEnabled(
@@ -1948,39 +1949,27 @@ void D3D12Renderer::BuildImGuiFrame()
     const char* sceneNames[] =
     {
         "Cornell Box",
-        "PBR",
-        "PBR GPU Validation",
-        "Indirect Bounce Stress",
-        "Dynamic Transform Test"
+        "PBR"
     };
     if (ImGui::Combo("Scene", &m_sceneType, sceneNames, _countof(sceneNames)) && m_rayTracingManager)
     {
-        m_captureActive = false;
-        m_saveCurrentRequested = false;
-        m_captureStatus.clear();
-        WaitForGpu();
-        m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
-        m_freeCameraInitialized = false;
-        InitializeFreeCamera();
+        if (m_sceneType == static_cast<int>(RayTracingManager::c_scenePbrGgx))
+        {
+            SwitchPbrScenePreset(3);
+        }
+        else
+        {
+            m_captureActive = false;
+            m_saveCurrentRequested = false;
+            m_captureStatus.clear();
+            WaitForGpu();
+            m_rayTracingManager->SetSceneType(static_cast<UINT>(m_sceneType));
+            m_freeCameraInitialized = false;
+            InitializeFreeCamera();
+        }
     }
     if (m_sceneType == static_cast<int>(RayTracingManager::c_scenePbrGgx))
     {
-        const char* pbrSceneNames[] =
-        {
-            "Sponza",
-            "SimpleSkin GPU Test",
-            "BrainStem GPU Skinning Test",
-            "Sponza + Animated BrainStem"
-        };
-        int requestedPbrScene = m_pbrScenePreset;
-        if (ImGui::Combo(
-                "PBR Test Scene",
-                &requestedPbrScene,
-                pbrSceneNames,
-                _countof(pbrSceneNames)))
-        {
-            SwitchPbrScenePreset(requestedPbrScene);
-        }
         if (!m_sceneSwitchStatus.empty())
             ImGui::TextDisabled("%s", m_sceneSwitchStatus.c_str());
 

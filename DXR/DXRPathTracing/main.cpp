@@ -13,6 +13,8 @@ namespace
 {
     constexpr wchar_t c_windowTitle[] = L"DXRPathTracing";
     constexpr wchar_t c_windowClassName[] = L"DXRPathTracingWindow";
+    constexpr wchar_t c_brainStemScenePath[] =
+        L"Assets\\NVIDIA-RTX\\RTXPT-Assets\\Models\\glTF-Sample-Models\\2.0\\BrainStem\\glTF-Binary\\BrainStem.glb";
 
     D3D12Renderer gRenderer;
     bool gRendererReady = false;
@@ -468,6 +470,7 @@ namespace
                 const std::wstring scene = arguments[++index];
                 if (scene == L"pbr")
                 {
+                    gOptions.sponzaLite = true;
                     gOptions.sceneType = RayTracingManager::c_scenePbrGgx;
                 }
                 else if (scene == L"pbr-validation")
@@ -665,6 +668,11 @@ namespace
                 gOptions.sceneFilePath =
                     ResolveBundledInputPath(
                         L"Assets\\KhronosGlTFSampleAssets\\Models\\Sponza\\glTF\\Sponza.gltf");
+            }
+            if (gOptions.overlaySceneFilePath.empty())
+            {
+                gOptions.overlaySceneFilePath =
+                    ResolveBundledInputPath(c_brainStemScenePath);
             }
             if (gOptions.sceneManifestPath.empty())
             {

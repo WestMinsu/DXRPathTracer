@@ -355,7 +355,7 @@ private:
     bool m_animateDynamicSphere = false;
     bool m_animateDynamicCube = false;
     bool m_animateGltfScene = true;
-    bool m_showDynamicSphere = true;
+    bool m_showDynamicSphere = false;
     bool m_showBrainStem = true;
     bool m_showMechDrone = true;
     bool m_showDynamicCube = true;
@@ -369,9 +369,9 @@ private:
     bool m_rightMouseDragging = false;
     bool m_hasLastRenderTime = false;
     bool m_showNormalColor = false;
-    bool m_enableAccumulation = true;
+    bool m_enableAccumulation = false;
     bool m_enableRussianRoulette = false;
-    bool m_enableTemporalReprojection = false;
+    bool m_enableTemporalReprojection = true;
     bool m_enableBestTapHistoryGather = true;
     bool m_enableDynamicObjectReprojection = true;
     bool m_enableStaticBackgroundHistoryFastPath = true;
@@ -381,7 +381,7 @@ private:
     bool m_enableSkinnedDeformationMotion = true;
     bool m_useCurrentFrameVisibleResidual = true;
     bool m_enableTemporalColorClip = true;
-    bool m_enableAtrous = false;
+    bool m_enableAtrous = true;
     int m_temporalDebugView = static_cast<int>(
         RayTracingManager::c_temporalDebugNone);
     int m_atrousIterations = 4;
